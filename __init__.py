@@ -19,18 +19,35 @@ bl_info = {
     "author": "Tawan Sunflower, @blastframe",
     "description": "",
     "blender": (4, 2, 0),
-    "version": (2, 1, 10),
+    "version": (3, 0, 0),
     "location": "View3D > Sidebar > Paint System",
     "warning": "",
     "category": "Paint",
-    'support': 'COMMUNITY',
+    "support": "COMMUNITY",
     "tracker_url": "https://github.com/natapol2547/paintsystem"
 }
 
 bl_info_copy = bl_info.copy()
 
 
-def register(): ...
+submodules = (
+    "props",
+    "nodes",
+    "ui",
+    "context",
+    "preferences",
+)
+
+_register, _unregister = register_submodule_factory(__name__, submodules)
 
 
-def unregister(): ...
+def register():
+    load_icons()
+    _register()
+    print("Paint System: Registered")
+
+
+def unregister():
+    unload_icons()
+    _unregister()
+    print("Paint System: Unregistered")
