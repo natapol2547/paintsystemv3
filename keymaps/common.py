@@ -4,8 +4,6 @@ import bpy
 
 addon_keymaps = []
 
-ENABLE_RMB_OVERRIDE_IN_TEXPAINT = True
-
 
 def add_keymap_entry(
     kc: bpy.types.KeyConfig,
@@ -56,3 +54,12 @@ def find_keymap_by_name(keymap_name) -> list[bpy.types.KeyMapItem]:
                     if kmi.name == keymap_name:
                         return kmi
     return None
+
+
+def unregister_keymap_entries():
+    for km, kmi in addon_keymaps:
+        try:
+            km.keymap_items.remove(kmi)
+        except Exception:
+            pass
+    addon_keymaps.clear()

@@ -12,7 +12,6 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 from bpy.utils import register_submodule_factory
-from .custom_icons import load_icons, unload_icons
 
 bl_info = {
     "name": "Paint System",
@@ -42,12 +41,10 @@ _register, _unregister = register_submodule_factory(__name__, submodules)
 
 
 def register():
-    load_icons()
     _register()
     print("Paint System: Registered")
 
 
 def unregister():
-    unload_icons()
     _unregister()
     print("Paint System: Unregistered")

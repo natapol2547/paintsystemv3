@@ -1,9 +1,17 @@
-from . import channel
+import bpy
+
+from bpy.utils import register_submodule_factory
+
+submodules = (
+    "channel",
+)
+
+_register, _unregister = register_submodule_factory(__name__, submodules)
 
 
 def register():
-    channel.register()
+    _register()
 
 
 def unregister():
-    channel.unregister()
+    _unregister()

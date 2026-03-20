@@ -1,39 +1,10 @@
 import bpy
 from bpy.types import Operator
 from bpy.props import EnumProperty, StringProperty
+from bpy.utils import register_classes_factory
 
-from .group_nodes import sync_group_node_sockets
+from ..nodes.group_nodes import sync_group_node_sockets
 from ..props.channel import CHANNEL_SOCKET_TYPES
-
-
-class PAINTSYSTEM_OT_create_tree(Operator):
-    bl_idname = "paint_system.create_tree"
-    bl_label = "New Paint System"
-    bl_description = "Create a new Paint System node tree with a companion shader node group"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        ps_tree = bpy.data.node_groups.new("Paint System", 'PaintSystemNodeTree')
-
-        shader_group = bpy.data.node_groups.new("PS_" + ps_tree.name, 'ShaderNodeTree')
-        ps_tree.shader_node_group = shader_group
-
-        group_in = ps_tree.nodes.new('PaintSystemGroupInputNode')
-        group_in.location = (-200, 0)
-
-        group_out = ps_tree.nodes.new('PaintSystemGroupOutputNode')
-        group_out.location = (200, 0)
-
-        ch = ps_tree.channels.add()
-        ch.name = "Color"
-        ch.socket_type = 'NodeSocketColor'
-        ps_tree.active_channel_index = 0
-
-        sync_group_node_sockets(ps_tree)
-
-        context.scene.paint_system.active_node_tree = ps_tree
-
-        return {'FINISHED'}
 
 
 def _get_active_tree(context):
@@ -134,18 +105,10 @@ class PAINTSYSTEM_OT_move_channel(Operator):
 
 
 classes = (
-    PAINTSYSTEM_OT_create_tree,
     PAINTSYSTEM_OT_add_channel,
     PAINTSYSTEM_OT_remove_channel,
     PAINTSYSTEM_OT_move_channel,
 )
 
 
-def register():
-    for cls in classes:
-        bpy.utils.register_class(cls)
-
-
-def unregister():
-    for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+register, unregister = register_classes_factory(classes)

@@ -15,7 +15,6 @@ class PaintSystemGroupInputNode(PaintSystemBaseNode):
         return ntree.bl_idname == 'PaintSystemNodeTree'
 
     def init(self, context):
-        self.color_tag = 'INPUT'
         sync_group_node_sockets(self.id_data)
 
     def draw_buttons(self, context, layout):

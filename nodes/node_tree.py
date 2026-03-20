@@ -2,6 +2,7 @@ import bpy
 from bpy.types import NodeTree
 from bpy.props import CollectionProperty, IntProperty, PointerProperty
 
+from .group_nodes import sync_group_node_sockets
 from ..props.channel import PaintSystemChannel
 
 
@@ -20,9 +21,24 @@ class PaintSystemNodeTree(NodeTree):
     )
 
     def update(self):
-        """Called when the node tree topology changes (links/nodes added/removed).
-        Will eventually rebuild the corresponding ShaderNodeGroup."""
-        pass
+        print("PaintSystemNodeTree updated")
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        print("PaintSystemNodeTree initialized")
+
+        group_in = self.nodes.new('PaintSystemGroupInputNode')
+        group_in.location = (-200, 0)
+
+        group_out = self.nodes.new('PaintSystemGroupOutputNode')
+        group_out.location = (200, 0)
+
+        # ch = self.channels.add()
+        # ch.name = "Color"
+        # ch.socket_type = 'NodeSocketColor'
+        # self.active_channel_index = 0
+
+        # sync_group_node_sockets(self)
 
 
 classes = (

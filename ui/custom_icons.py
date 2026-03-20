@@ -6,7 +6,8 @@ ICON_FOLDER = 'icons'
 custom_icons = None
 
 
-def load_icons():
+def register():
+    from ..common import get_project_root_path
     import bpy.utils.previews
     # Custom Icon
     if not hasattr(bpy.utils, 'previews'):
@@ -14,8 +15,7 @@ def load_icons():
     global custom_icons
     custom_icons = bpy.utils.previews.new()
 
-    folder = os.path.dirname(bpy.path.abspath(
-        __file__)) + os.sep + ICON_FOLDER + os.sep
+    folder = get_project_root_path() + os.sep + ICON_FOLDER + os.sep
 
     for f in os.listdir(folder):
         # Remove file extension
@@ -23,7 +23,7 @@ def load_icons():
         custom_icons.load(icon_name, folder + f, 'IMAGE')
 
 
-def unload_icons():
+def unregister():
     global custom_icons
     if hasattr(bpy.utils, 'previews'):
         bpy.utils.previews.remove(custom_icons)

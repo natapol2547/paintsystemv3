@@ -25,7 +25,6 @@ submodules = (
     "node_tree",
     "group_nodes",
     "image_layer_node",
-    "operators",
 )
 
 

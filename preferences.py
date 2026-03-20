@@ -5,7 +5,7 @@ from bpy.props import BoolProperty, FloatProperty, IntProperty, EnumProperty
 from bpy.utils import register_classes_factory
 
 from .common import ADDON_ID
-from .keymaps import find_keymap
+from .keymaps.common import find_keymap
 
 
 class PaintSystemPreferences(AddonPreferences):
