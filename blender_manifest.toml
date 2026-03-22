@@ -71,8 +71,10 @@ network = "Update donation information"
 paths_exclude_pattern = [
   "__pycache__/",
   "/.git/",
-  "/*.zip",
   "/.github/",
+  "/dist/",
+  "/*.zip",
+  ".gitignore",
   "README.md",
   "*.blend1",
   "run_tests.py",

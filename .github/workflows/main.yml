@@ -135,29 +135,30 @@ jobs:
               id: blender-build-cache
               uses: actions/cache@v4
               with:
-                  path: blender-${{ env.BLENDER_BUILD_VERSION }}
+                  path: ${{ runner.temp }}/blender-${{ env.BLENDER_BUILD_VERSION }}
                   key: blender-${{ runner.os }}-${{ env.BLENDER_BUILD_VERSION }}-build
 
             - name: Download and extract Blender (build)
               if: steps.blender-build-cache.outputs.cache-hit != 'true'
               run: |
                   echo "Downloading Blender from ${{ env.BLENDER_DOWNLOAD_URL }}"
-                  curl -SL --fail -o blender.tar.xz "${{ env.BLENDER_DOWNLOAD_URL }}"
-                  mkdir -p "blender-${{ env.BLENDER_BUILD_VERSION }}"
-                  tar -xf blender.tar.xz -C "blender-${{ env.BLENDER_BUILD_VERSION }}" --strip-components=1
+                  curl -SL --fail -o "$RUNNER_TEMP/blender.tar.xz" "${{ env.BLENDER_DOWNLOAD_URL }}"
+                  mkdir -p "$RUNNER_TEMP/blender-${{ env.BLENDER_BUILD_VERSION }}"
+                  tar -xf "$RUNNER_TEMP/blender.tar.xz" -C "$RUNNER_TEMP/blender-${{ env.BLENDER_BUILD_VERSION }}" --strip-components=1
+                  rm -f "$RUNNER_TEMP/blender.tar.xz"
 
             - name: Validate extension package
               run: |
-                  BLENDER="./blender-${{ env.BLENDER_BUILD_VERSION }}/blender"
+                  BLENDER="$RUNNER_TEMP/blender-${{ env.BLENDER_BUILD_VERSION }}/blender"
                   "$BLENDER" --background --command extension validate "$GITHUB_WORKSPACE"
 
             - name: Build extension package
               run: |
-                  BLENDER="./blender-${{ env.BLENDER_BUILD_VERSION }}/blender"
+                  BLENDER="$RUNNER_TEMP/blender-${{ env.BLENDER_BUILD_VERSION }}/blender"
                   mkdir -p dist
                   "$BLENDER" --background --command extension build \
                     --source-dir "$GITHUB_WORKSPACE" \
-                    --output-dir dist \
+                    --output-dir "$GITHUB_WORKSPACE/dist" \
                     --verbose
 
             - name: Create draft GitHub release
