@@ -23,7 +23,6 @@ class PaintSystemImageLayerNode(PaintSystemBaseLayerNode):
 
     def init(self, context):
         super().init(context)
-        self.inputs.new('NodeSocketPanel', "Image")
         self.create_panel("image_settings", "Image Settings", True)
 
     def draw_buttons(self, context, layout):

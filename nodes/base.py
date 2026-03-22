@@ -1,7 +1,7 @@
 import bpy
 import uuid
 
-from bpy.props import BoolProperty, CollectionProperty, EnumProperty, FloatProperty, StringProperty
+from bpy.props import BoolProperty, CollectionProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 from bpy.types import Node, PropertyGroup
 
 
@@ -21,6 +21,14 @@ class PaintSystemNodePanel(PropertyGroup):
 
 class PaintSystemBaseNode(Node):
     panels: CollectionProperty(type=PaintSystemNodePanel)
+    version: IntProperty(name="Version", default=1)
+    uuid: StringProperty(name="UUID")
+
+    def init(self, context):
+        self.uuid = str(uuid.uuid4())
+
+    def copy(self, node):
+        self.uuid = str(uuid.uuid4())
 
     @classmethod
     def poll(cls, ntree):
@@ -59,6 +67,7 @@ class PaintSystemBaseLayerNode(PaintSystemBaseNode):
         name="Blend Mode", items=BLEND_MODE_ITEMS, default='MIX')
 
     def init(self, context):
+        super().init(context)
         self.inputs.new('NodeSocketColor',
                         "Color").default_value = (0, 0, 0, 0)
         mask_socket = self.inputs.new('NodeSocketFloat', "Mask")

@@ -15,6 +15,7 @@ class PaintSystemGroupInputNode(PaintSystemBaseNode):
         return ntree.bl_idname == 'PaintSystemNodeTree'
 
     def init(self, context):
+        super().init(context)
         sync_group_node_sockets(self.id_data)
 
     def draw_buttons(self, context, layout):
@@ -32,6 +33,7 @@ class PaintSystemGroupOutputNode(PaintSystemBaseNode):
     is_active_output: BoolProperty(name="Is Active Output", default=False)
 
     def init(self, context):
+        super().init(context)
         sync_group_node_sockets(self.id_data)
 
     def draw_buttons(self, context, layout):
@@ -66,6 +68,15 @@ def _detect_change(old_names, new_names):
     return (None, None)
 
 
+def _get_socket_type(type: str) -> str:
+    type_to_socket_type = {
+        'COLOR': 'NodeSocketColor',
+        'FLOAT': 'NodeSocketFloat',
+        'VECTOR': 'NodeSocketVector',
+    }
+    return type_to_socket_type.get(type, 'NodeSocketColor')
+
+
 def _sync_sockets(sockets, channels):
     """Apply minimal add/remove/move/rename ops so *sockets* matches *channels*."""
     while True:
@@ -78,8 +89,8 @@ def _sync_sockets(sockets, channels):
 
         if change == 'ADD':
             ch = channels[idx]
-            sock = sockets.new(ch.socket_type, ch.name)
-            if ch.socket_type == 'NodeSocketColor':
+            sock = sockets.new(_get_socket_type(ch.type), ch.name)
+            if ch.type == 'COLOR':
                 sock.default_value = (0, 0, 0, 0)
             sockets.move(len(sockets) - 1, idx)
 
@@ -96,10 +107,11 @@ def _sync_sockets(sockets, channels):
     for idx, ch in enumerate(channels):
         sock = sockets[idx]
         sock.hide_value = True
-        if sock.bl_idname != ch.socket_type:
+        socket_type = _get_socket_type(ch.type)
+        if sock.bl_idname != socket_type:
             sockets.remove(sock)
-            new_sock = sockets.new(ch.socket_type, ch.name)
-            if ch.socket_type == 'NodeSocketColor':
+            new_sock = sockets.new(socket_type, ch.name)
+            if ch.type == 'COLOR':
                 new_sock.default_value = (0, 0, 0, 0)
             sockets.move(len(sockets) - 1, idx)
 
