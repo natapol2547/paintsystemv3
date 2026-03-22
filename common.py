@@ -2,7 +2,7 @@ import bpy
 import pathlib
 import os
 
-from .ui.custom_icons import custom_icons
+from .custom_icons import get_icon
 
 
 ADDON_ID = "paint_system"
@@ -23,14 +23,6 @@ def is_online() -> bool:
     return bpy.app.online_access
 
 # UI
-
-
-def get_icon(custom_icon_name: str) -> int:
-    if custom_icons is None:
-        return None
-    if custom_icon_name not in custom_icons:
-        return None
-    return custom_icons[custom_icon_name].icon_id
 
 
 def get_icon_from_socket_type(socket_type: str) -> int:

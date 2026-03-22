@@ -13,6 +13,9 @@
 
 from bpy.utils import register_submodule_factory
 
+from .custom_icons import load_icons, unload_icons
+from .handlers import register as register_handlers, unregister as unregister_handlers
+
 bl_info = {
     "name": "Paint System",
     "author": "Tawan Sunflower, @blastframe",
@@ -30,21 +33,25 @@ bl_info_copy = bl_info.copy()
 
 
 submodules = (
-    "props",
-    "nodes",
     "ui",
+    "props",
     "context",
+    "handlers",
     "preferences",
+    "nodes",
+    "ops",
 )
 
 _register, _unregister = register_submodule_factory(__name__, submodules)
 
 
 def register():
+    load_icons()
     _register()
     print("Paint System: Registered")
 
 
 def unregister():
+    unload_icons()
     _unregister()
     print("Paint System: Unregistered")
