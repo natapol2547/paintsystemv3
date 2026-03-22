@@ -23,11 +23,13 @@ class PaintSystemImageLayerNode(PaintSystemBaseLayerNode):
 
     def init(self, context):
         super().init(context)
-        self.create_panel("image_settings", "Image Settings", True)
+        # self.create_panel("image_settings", "Image Settings", True)
 
     def draw_buttons(self, context, layout):
         self.draw_layer_settings(context, layout)
-        self.draw_panel(layout, "image_settings")
+        # header, panel = self.draw_panel(layout, "image_settings")
+        # if panel:
+        #     panel.template_ID(self, "image", new="image.new")
 
     def draw_label(self):
         if self.image:

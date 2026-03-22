@@ -6,6 +6,7 @@ from bpy.utils import register_classes_factory
 from ..nodes.node_tree import PaintSystemNodeTree
 from ..nodes.group_nodes import sync_group_node_sockets
 from ..props.channel import CHANNEL_SOCKET_TYPES
+from ..common import get_next_unique_name
 
 
 def _get_active_tree(context) -> PaintSystemNodeTree | None:
@@ -41,6 +42,9 @@ class PAINTSYSTEM_OT_add_channel(Operator):
         return {'FINISHED'}
 
     def invoke(self, context, event):
+        tree = _get_active_tree(context)
+        self.name = get_next_unique_name(
+            self.name, [channel.name for channel in tree.channels])
         return context.window_manager.invoke_props_dialog(self)
 
     def draw(self, context):

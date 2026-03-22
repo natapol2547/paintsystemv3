@@ -4,61 +4,68 @@ from typing import Literal
 
 class CollectionManager:
     def __init__(self, dataptr, propname, active_dataptr, active_propname):
-        self._collection = getattr(dataptr, propname)
-        self._active_index = getattr(active_dataptr, active_propname)
-        if self._collection is None:
+        self._dataptr = dataptr
+        self._propname = propname
+        self._active_dataptr = active_dataptr
+        self._active_propname = active_propname
+        if self.collection is None:
             raise ValueError(
                 f"Collection {propname} is not found in {dataptr}")
-        if self._active_index is None:
+        if self.active_index is None:
             raise ValueError(
                 f"Active index {active_propname} is not found in {active_dataptr}")
 
-    def add(self, properties: dict = None, position: Literal['TOP', 'BOTTOM', 'ABOVE', 'BELOW'] = 'BOTTOM'):
-        item = self._collection.add()
+    def add(self, properties: dict = None, position: Literal['TOP', 'BOTTOM', 'ABOVE', 'BELOW'] = 'BELOW'):
+        item = self.collection.add()
         if properties:
             for key, value in properties.items():
                 setattr(item, key, value)
-        current_index = len(self._collection) - 1
+        current_index = len(self.collection) - 1
         if position == 'TOP':
-            self._collection.move(current_index, 0)
+            self.move(current_index, 0)
         elif position == 'BOTTOM':
             pass  # already at bottom
-            # self.collection.move(current_index, len(self.collection) - 1)
+            # self.move(current_index, len(self.collection) - 1)s
         elif position == 'ABOVE':
-            self._collection.move(current_index, self._active_index)
+            self.move(current_index, self.active_index)
         elif position == 'BELOW':
-            self._collection.move(current_index, self._active_index + 1)
+            self.move(current_index, self.active_index + 1)
         return item
 
     def remove(self, index: int):
-        self._collection.remove(index)
-        self._active_index = min(self._active_index, len(self._collection) - 1)
+        self.collection.remove(index)
+        self.active_index = min(self.active_index, len(self.collection) - 1)
 
     def remove_active(self):
-        self.remove(self._active_index)
+        self.remove(self.active_index)
 
     def move(self, index: int, new_index: int):
-        self._collection.move(index, new_index)
-        self._active_index = min(new_index, len(self._collection) - 1)
+        self.collection.move(index, new_index)
+        self.active_index = min(new_index, len(self.collection) - 1)
 
     def is_valid_move(self, direction: Literal['UP', 'DOWN']) -> bool:
-        if direction == 'UP' and self._active_index > 0:
+        if direction == 'UP' and self.active_index > 0:
             return True
-        elif direction == 'DOWN' and self._active_index < len(self._collection) - 1:
+        elif direction == 'DOWN' and self.active_index < len(self.collection) - 1:
             return True
         return False
 
     def get(self, index: int):
-        return self._collection[index]
+        return self.collection[index]
 
     @property
     def collection(self):
-        return self._collection
+        return getattr(self._dataptr, self._propname)
 
     @property
     def active_index(self):
-        return self._active_index
+        return getattr(self._active_dataptr, self._active_propname)
+
+    @active_index.setter
+    def active_index(self, value: int):
+        setattr(self._active_dataptr, self._active_propname,
+                min(value, len(self.collection) - 1))
 
     @property
     def active_item(self):
-        return self._collection[self._active_index]
+        return self.collection[self.active_index]

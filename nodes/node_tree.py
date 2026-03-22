@@ -43,7 +43,7 @@ class PaintSystemNodeTree(NodeTree):
         # if self.uuid is None:
         #     self.uuid = str(uuid.uuid4())
 
-    def create_channel(self, name: str, type: str):
+    def create_channel(self, name: str = "Channel", type: str = 'COLOR'):
         self.channels_manager.add(
             properties={'name': name, 'type': type})
         sync_group_node_sockets(self)

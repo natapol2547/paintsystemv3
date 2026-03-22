@@ -2,7 +2,7 @@ import bpy
 import uuid
 
 from bpy.props import BoolProperty, CollectionProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
-from bpy.types import Node, PropertyGroup
+from bpy.types import Node, PropertyGroup, UILayout
 
 
 BLEND_MODE_ITEMS = []
@@ -41,7 +41,7 @@ class PaintSystemBaseNode(Node):
         panel.label = label
         return panel
 
-    def draw_panel(self, layout, idname):
+    def draw_panel(self, layout: UILayout, idname):
         panel_data = next(
             (panel for panel in self.panels if panel.idname == idname), None)
         if not panel_data:
@@ -50,9 +50,8 @@ class PaintSystemBaseNode(Node):
         col = layout.column()
         header = col.row(align=True)
         header.alignment = 'LEFT'
-        header.prop(panel_data, "expanded", text="", emboss=False,
-                    icon='DOWNARROW_HLT' if panel_data.expanded else 'RIGHTARROW')
-        header.prop(panel_data, "label", text="", emboss=False)
+        header.prop(panel_data, "expanded",
+                    text=panel_data.label, emboss=False, icon='DOWNARROW_HLT' if panel_data.expanded else 'RIGHTARROW')
         if panel_data.expanded:
             panel = col
         return header, panel
