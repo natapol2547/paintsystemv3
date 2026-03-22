@@ -3,9 +3,9 @@ from bpy.props import StringProperty, EnumProperty
 
 
 CHANNEL_SOCKET_TYPES = [
-    ('NodeSocketColor', "Color", "Color (RGBA) channel"),
-    ('NodeSocketFloat', "Float", "Float (scalar) channel"),
-    ('NodeSocketVector', "Vector", "Vector (XYZ) channel"),
+    ('COLOR', "Color", "Color (RGBA) channel"),
+    ('FLOAT', "Float", "Float (scalar) channel"),
+    ('VECTOR', "Vector", "Vector (XYZ) channel"),
 ]
 
 
@@ -22,10 +22,10 @@ class PaintSystemChannel(bpy.types.PropertyGroup):
         default="Channel",
         update=update_node_tree,
     )
-    socket_type: EnumProperty(
+    type: EnumProperty(
         name="Type",
         items=CHANNEL_SOCKET_TYPES,
-        default='NodeSocketColor',
+        default='COLOR',
         update=update_node_tree,
     )
 

@@ -1,23 +1,25 @@
 import bpy
 from bpy.types import Panel, UIList
 
+from .common import get_icon
+
 
 class PAINTSYSTEM_UL_channels(UIList):
     bl_idname = "PAINTSYSTEM_UL_channels"
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         socket_icons = {
-            'NodeSocketColor': 'COLOR',
-            'NodeSocketFloat': 'NONE',
-            'NodeSocketVector': 'ORIENTATION_GIMBAL',
+            'COLOR': get_icon('color_socket'),
+            'FLOAT': get_icon('float_socket'),
+            'VECTOR': get_icon('vector_socket'),
         }
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
             row = layout.row(align=True)
             row.prop(item, "name", text="", emboss=False,
-                     icon=socket_icons.get(item.socket_type, 'NONE'))
+                     icon_value=socket_icons.get(item.type, 'NONE'))
         elif self.layout_type == 'GRID':
             layout.alignment = 'CENTER'
-            layout.label(text="", icon=socket_icons.get(item.socket_type, 'NONE'))
+            layout.label(text="", icon=socket_icons.get(item.type, 'NONE'))
 
 
 def _draw_channel_list(layout, node_tree):
@@ -34,10 +36,9 @@ def _draw_channel_list(layout, node_tree):
     col.operator("paint_system.add_channel", icon='ADD', text="")
     col.operator("paint_system.remove_channel", icon='REMOVE', text="")
     col.separator()
-    op = col.operator("paint_system.move_channel", icon='TRIA_UP', text="")
-    op.direction = 'UP'
-    op = col.operator("paint_system.move_channel", icon='TRIA_DOWN', text="")
-    op.direction = 'DOWN'
+    op = col.operator("paint_system.move_channel_up", icon='TRIA_UP', text="")
+    op = col.operator("paint_system.move_channel_down",
+                      icon='TRIA_DOWN', text="")
 
 
 class PAINTSYSTEM_PT_main_3dview(Panel):

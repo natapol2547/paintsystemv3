@@ -3,11 +3,12 @@ from bpy.types import Operator
 from bpy.props import EnumProperty, StringProperty
 from bpy.utils import register_classes_factory
 
+from ..nodes.node_tree import PaintSystemNodeTree
 from ..nodes.group_nodes import sync_group_node_sockets
 from ..props.channel import CHANNEL_SOCKET_TYPES
 
 
-def _get_active_tree(context):
+def _get_active_tree(context) -> PaintSystemNodeTree | None:
     """Return the active PaintSystemNodeTree depending on the current editor."""
     space = context.space_data
     if space and space.type == 'NODE_EDITOR' and hasattr(space, 'edit_tree'):
@@ -24,10 +25,10 @@ class PAINTSYSTEM_OT_add_channel(Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     name: StringProperty(name="Name", default="Channel")
-    socket_type: EnumProperty(
+    type: EnumProperty(
         name="Type",
         items=CHANNEL_SOCKET_TYPES,
-        default='NodeSocketColor',
+        default='COLOR',
     )
 
     @classmethod
@@ -36,11 +37,7 @@ class PAINTSYSTEM_OT_add_channel(Operator):
 
     def execute(self, context):
         tree = _get_active_tree(context)
-        ch = tree.channels.add()
-        ch.name = self.name
-        ch.socket_type = self.socket_type
-        tree.active_channel_index = len(tree.channels) - 1
-        sync_group_node_sockets(tree)
+        tree.create_channel(self.name, self.type)
         return {'FINISHED'}
 
     def invoke(self, context, event):
@@ -49,7 +46,7 @@ class PAINTSYSTEM_OT_add_channel(Operator):
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "name")
-        layout.prop(self, "socket_type")
+        layout.prop(self, "type")
 
 
 class PAINTSYSTEM_OT_remove_channel(Operator):
@@ -65,41 +62,46 @@ class PAINTSYSTEM_OT_remove_channel(Operator):
 
     def execute(self, context):
         tree = _get_active_tree(context)
-        idx = tree.active_channel_index
-        tree.channels.remove(idx)
-        tree.active_channel_index = min(idx, len(tree.channels) - 1)
-        sync_group_node_sockets(tree)
+        tree.delete_active_channel()
         return {'FINISHED'}
 
 
-class PAINTSYSTEM_OT_move_channel(Operator):
-    bl_idname = "paint_system.move_channel"
-    bl_label = "Move Channel"
-    bl_description = "Move the active channel up or down"
+class PAINTSYSTEM_OT_move_channel_up(Operator):
+    bl_idname = "paint_system.move_channel_up"
+    bl_label = "Move Channel Up"
+    bl_description = "Move the active channel up"
     bl_options = {'REGISTER', 'UNDO'}
-
-    direction: EnumProperty(
-        name="Direction",
-        items=[
-            ('UP', "Up", ""),
-            ('DOWN', "Down", ""),
-        ],
-    )
 
     @classmethod
     def poll(cls, context):
         tree = _get_active_tree(context)
-        return tree is not None and len(tree.channels) > 1
+        return tree is not None and len(tree.channels) > 1 and tree.channels_manager.is_valid_move("UP")
 
     def execute(self, context):
         tree = _get_active_tree(context)
-        idx = tree.active_channel_index
-        if self.direction == 'UP' and idx > 0:
-            tree.channels.move(idx, idx - 1)
-            tree.active_channel_index -= 1
-        elif self.direction == 'DOWN' and idx < len(tree.channels) - 1:
-            tree.channels.move(idx, idx + 1)
-            tree.active_channel_index += 1
+        channel_manager = tree.channels_manager
+        channel_manager.move(channel_manager.active_index,
+                             channel_manager.active_index - 1)
+        sync_group_node_sockets(tree)
+        return {'FINISHED'}
+
+
+class PAINTSYSTEM_OT_move_channel_down(Operator):
+    bl_idname = "paint_system.move_channel_down"
+    bl_label = "Move Channel Down"
+    bl_description = "Move the active channel down"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        tree = _get_active_tree(context)
+        return tree is not None and len(tree.channels) > 1 and tree.channels_manager.is_valid_move("DOWN")
+
+    def execute(self, context):
+        tree = _get_active_tree(context)
+        channel_manager = tree.channels_manager
+        channel_manager.move(channel_manager.active_index,
+                             channel_manager.active_index + 1)
         sync_group_node_sockets(tree)
         return {'FINISHED'}
 
@@ -107,7 +109,8 @@ class PAINTSYSTEM_OT_move_channel(Operator):
 classes = (
     PAINTSYSTEM_OT_add_channel,
     PAINTSYSTEM_OT_remove_channel,
-    PAINTSYSTEM_OT_move_channel,
+    PAINTSYSTEM_OT_move_channel_up,
+    PAINTSYSTEM_OT_move_channel_down,
 )
 
 
