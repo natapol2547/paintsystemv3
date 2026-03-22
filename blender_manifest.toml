@@ -67,9 +67,16 @@ network = "Update donation information"
 
 # Optional: build settings.
 # https://docs.blender.org/manual/en/dev/advanced/extensions/command_line_arguments.html#command-line-args-extension-build
-# [build]
-# paths_exclude_pattern = [
-#   "__pycache__/",
-#   "/.git/",
-#   "/*.zip",
-# ]
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "/*.zip",
+  "/.github/",
+  "README.md",
+  "*.blend1",
+  "run_tests.py",
+  ".python-version",
+  "pyproject.toml",
+  "uv.lock",
+]
