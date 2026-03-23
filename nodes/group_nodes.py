@@ -2,10 +2,10 @@ import bpy
 
 from bpy.props import BoolProperty
 from bpy.utils import register_classes_factory
-from .base import PaintSystemBaseNode
+from .base import PaintSystemNode
 
 
-class PaintSystemGroupInputNode(PaintSystemBaseNode):
+class PaintSystemGroupInputNode(PaintSystemNode):
     bl_idname = 'PaintSystemGroupInputNode'
     bl_label = 'Group Input'
     bl_icon = 'GROUP_UVS'
@@ -25,7 +25,7 @@ class PaintSystemGroupInputNode(PaintSystemBaseNode):
         return "Group Input"
 
 
-class PaintSystemGroupOutputNode(PaintSystemBaseNode):
+class PaintSystemGroupOutputNode(PaintSystemNode):
     bl_idname = 'PaintSystemGroupOutputNode'
     bl_label = 'Group Output'
     bl_icon = 'GROUP_UVS'
@@ -36,8 +36,14 @@ class PaintSystemGroupOutputNode(PaintSystemBaseNode):
         super().init(context)
         sync_group_node_sockets(self.id_data)
 
+    def copy(self, node):
+        super().copy(node)
+        self.is_active_output = False
+
     def draw_buttons(self, context, layout):
-        pass
+        if not self.is_active_output:
+            warning_box = layout.box()
+            warning_box.label(text="Inactive Output", icon='ERROR')
 
     def draw_label(self):
         return "Group Output"

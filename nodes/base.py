@@ -19,7 +19,7 @@ class PaintSystemNodePanel(PropertyGroup):
     expanded: BoolProperty(name="Expanded", default=True)
 
 
-class PaintSystemBaseNode(Node):
+class PaintSystemNode(Node):
     panels: CollectionProperty(type=PaintSystemNodePanel)
     version: IntProperty(name="Version", default=1)
     uuid: StringProperty(name="UUID")
@@ -57,7 +57,7 @@ class PaintSystemBaseNode(Node):
         return header, panel
 
 
-class PaintSystemBaseLayerNode(PaintSystemBaseNode):
+class PaintSystemLayerNode(PaintSystemNode):
     bl_width_default = 200
 
     opacity: FloatProperty(name="Opacity", default=1.0,

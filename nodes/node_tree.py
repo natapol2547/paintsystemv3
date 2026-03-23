@@ -39,14 +39,24 @@ class PaintSystemNodeTree(NodeTree):
         self.is_new_status = False
 
     def update(self):
-        pass
-        # if self.uuid is None:
-        #     self.uuid = str(uuid.uuid4())
+        output_node = self.get_output_node()
+        # Set the first output node as the active output node
+        if not output_node:
+            for node in self.nodes:
+                if node.bl_idname == 'PaintSystemGroupOutputNode':
+                    print(f"Setting {node.name} as active output node")
+                    node.is_active_output = True
+                    break
 
     def create_channel(self, name: str = "Channel", type: str = 'COLOR'):
         self.channels_manager.add(
             properties={'name': name, 'type': type})
         sync_group_node_sockets(self)
+        # Connect group input to group output
+        input_node = self.get_input_node()
+        output_node = self.get_output_node()
+        if input_node and output_node:
+            connect_sockets(input_node.outputs[name], output_node.inputs[name])
 
     def delete_channel(self, index: int):
         self.channels_manager.remove(index)
@@ -54,6 +64,18 @@ class PaintSystemNodeTree(NodeTree):
 
     def delete_active_channel(self):
         self.delete_channel(self.channels_manager.active_index)
+
+    def get_output_node(self) -> bpy.types.Node | None:
+        for node in self.nodes:
+            if node.bl_idname == 'PaintSystemGroupOutputNode' and node.is_active_output:
+                return node
+        return None
+
+    def get_input_node(self) -> bpy.types.Node | None:
+        for node in self.nodes:
+            if node.bl_idname == 'PaintSystemGroupInputNode':
+                return node
+        return None
 
     @property
     def is_new(self):
