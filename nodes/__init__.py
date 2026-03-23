@@ -22,9 +22,9 @@ node_categories = [
 
 submodules = (
     "base",
-    "node_tree",
     "group_nodes",
     "image_layer_node",
+    "node_tree",
 )
 
 
