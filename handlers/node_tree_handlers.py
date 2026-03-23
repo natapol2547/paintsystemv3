@@ -20,12 +20,11 @@ def initialize_ps_node_tree(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgra
         return
     for node_tree in bpy.data.node_groups:
         if node_tree.bl_idname == 'PaintSystemNodeTree':
-            if not hasattr(node_tree, 'is_new_status') or (node_tree.uuid, node_tree.session_uid) in seen_node_trees:
+            if not hasattr(node_tree, 'is_new_status') or len(node_tree.nodes) != 0 or len(node_tree.channels) != 0:
                 continue
             if node_tree.session_uid not in seen_node_trees:
                 node_tree.init(bpy.context)
                 node_tree.is_new_status = False
-            seen_node_trees.add((node_tree.uuid, node_tree.session_uid))
 
 
 def on_addon_enable():
