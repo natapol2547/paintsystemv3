@@ -33,7 +33,7 @@ bl_info_copy = bl_info.copy()
 
 
 submodules = (
-    "ui",
+    "panels",
     "props",
     "context",
     "handlers",

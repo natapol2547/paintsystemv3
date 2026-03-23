@@ -3,7 +3,7 @@ import bpy
 from bpy.utils import register_submodule_factory
 
 submodules = (
-    "main",
+    "main_panels",
 )
 
 _register, _unregister = register_submodule_factory(__name__, submodules)

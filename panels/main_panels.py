@@ -1,7 +1,7 @@
 import bpy
 from bpy.types import Panel, UIList
 
-from .common import get_icon
+from .common import get_icon, PaintSystemPanel
 
 
 class PAINTSYSTEM_UL_channels(UIList):
@@ -41,12 +41,38 @@ def _draw_channel_list(layout, node_tree):
                       icon='TRIA_DOWN', text="")
 
 
-class PAINTSYSTEM_PT_main_3dview(Panel):
+class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
     bl_label = "Paint System"
     bl_idname = "PAINTSYSTEM_PT_main_3dview"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "Paint System"
+
+    def draw_header_preset(self, context):
+        layout = self.layout
+        # ps_ctx = self.parse_context(context)
+        # row = layout.row(align=True)
+        # if ps_ctx.ps_mat_data is None:
+        #     return
+        # groups = ps_ctx.ps_mat_data.groups
+        # if ps_ctx.ps_mat_data and groups:
+        #     if len(groups) > 1:
+        #         row.popover("MAT_PT_PaintSystemGroups",
+        #                     text="", icon="NODETREE")
+        #     row.operator("paint_system.new_group", icon='ADD', text="")
+        #     row.operator("wm.call_menu", text="",
+        #                  icon="REMOVE").name = "MAT_MT_DeleteGroupMenu"
+        # else:
+        #     row.popover("MAT_PT_Support", icon="FUND", text="Wah!")
+
+    # @classmethod
+    # def poll(cls, context):
+    #     ps_ctx = cls.parse_context(context)
+    #     return ps_ctx.ps_object is not None
+
+    def draw_header(self, context):
+        layout = self.layout
+        layout.label(icon_value=get_icon("sunflower"))
 
     def draw(self, context):
         layout = self.layout
