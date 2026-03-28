@@ -1,5 +1,5 @@
 import bpy
-from bpy.types import Panel, UIList
+from bpy.types import UIList
 
 from .common import get_icon, PaintSystemPanel
 
@@ -93,7 +93,7 @@ class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
         _draw_channel_list(layout, tree)
 
 
-class PAINTSYSTEM_PT_main_node_editor(Panel):
+class PAINTSYSTEM_PT_main_node_editor(PaintSystemPanel):
     bl_label = "Paint System"
     bl_idname = "PAINTSYSTEM_PT_main_node_editor"
     bl_space_type = 'NODE_EDITOR'

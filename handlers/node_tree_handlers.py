@@ -4,7 +4,6 @@ import bpy
 @bpy.app.handlers.persistent
 def initialize_ps_node_tree(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph = None):
     """Initialize Paint System node tree"""
-    print("initialize_ps_node_tree")
     for node_tree in bpy.data.node_groups:
         if node_tree.bl_idname == 'PaintSystemNodeTree':
             if not hasattr(node_tree, 'is_new_status') or len(node_tree.nodes) != 0 or len(node_tree.channels) != 0:

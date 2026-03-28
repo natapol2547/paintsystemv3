@@ -2,6 +2,7 @@ import bpy
 import uuid
 from bpy.types import NodeTree
 from bpy.props import BoolProperty, CollectionProperty, IntProperty, PointerProperty, StringProperty
+from bpy.utils import register_classes_factory
 
 from bpy_extras.node_utils import connect_sockets
 from .group_nodes import sync_group_node_sockets
@@ -18,7 +19,7 @@ class PaintSystemNodeTree(NodeTree):
     version: IntProperty(name="Version", default=1)
     channels: CollectionProperty(type=PaintSystemChannel)
     active_channel_index: IntProperty(name="Active Channel", default=0)
-    shader_node_group: PointerProperty(
+    shader_node_tree: PointerProperty(
         type=bpy.types.NodeTree,
         name="Shader Node Group",
         description="Companion ShaderNodeGroup built from this tree",
@@ -28,6 +29,8 @@ class PaintSystemNodeTree(NodeTree):
 
     def init(self, context):
         self.uuid = str(uuid.uuid4())
+        self.shader_node_tree = bpy.data.node_groups.new(
+            "PS_" + self.name, 'ShaderNodeTree')
         group_in = self.nodes.new('PaintSystemGroupInputNode')
         group_in.location = (-200, 0)
         group_out = self.nodes.new('PaintSystemGroupOutputNode')
@@ -44,9 +47,14 @@ class PaintSystemNodeTree(NodeTree):
         if not output_node:
             for node in self.nodes:
                 if node.bl_idname == 'PaintSystemGroupOutputNode':
-                    print(f"Setting {node.name} as active output node")
+                    # print(f"Setting {node.name} as active output node")
                     node.is_active_output = True
                     break
+
+    def update_shader_node_tree(self):
+        if not self.shader_node_tree:
+            self.shader_node_tree = bpy.data.node_groups.new(
+                "PS_" + self.name, 'ShaderNodeTree')
 
     def create_channel(self, name: str = "Channel", type: str = 'COLOR'):
         self.channels_manager.add(
@@ -90,12 +98,4 @@ classes = (
     PaintSystemNodeTree,
 )
 
-
-def register():
-    for cls in classes:
-        bpy.utils.register_class(cls)
-
-
-def unregister():
-    for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+register, unregister = register_classes_factory(classes)

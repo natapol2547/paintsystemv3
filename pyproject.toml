@@ -6,4 +6,5 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fake-bpy-module>=20260314",
+    "numpy>=2.4.3",
 ]
