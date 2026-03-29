@@ -2,7 +2,7 @@ import bpy
 from bpy.types import Operator
 from bpy.utils import register_classes_factory
 
-from ..nodes.builder import NodeTreeBuilder
+from ..nodes.builder import Flexible, NodeTreeBuilder
 
 
 class PAINTSYSTEM_OT_create_tree(Operator):
@@ -34,17 +34,18 @@ class PAINTSYSTEM_OT_test_build_shader_tree(Operator):
 
     def execute(self, context):
         ps_tree = context.space_data.edit_tree
-        ps_tree.update_shader_node_tree()
+        ps_tree.update_shader_node_tree(context)
         shader_tree = ps_tree.shader_node_tree
 
-        builder = NodeTreeBuilder(shader_tree, version=2)
+        builder = NodeTreeBuilder(shader_tree)
 
         # Nodes
         builder.add_node("principled", "ShaderNodeBsdfPrincipled")
         builder.add_node("rgb", "ShaderNodeRGB")
         builder.add_node("color_ramp", "ShaderNodeValToRGB")
         builder.add_node("mix", "ShaderNodeMix",
-                         properties={"data_type": "RGBA"})
+                         properties={"data_type": "RGBA"},
+                         inputs={0: {"default_value": Flexible(0.1)}})
 
         # Socket values
         builder.set_node_input(
@@ -53,7 +54,7 @@ class PAINTSYSTEM_OT_test_build_shader_tree(Operator):
         )
         builder.set_node_output(
             "rgb", 0,
-            default_value=[0.1, 0.5, 0.8, 1.0],
+            default_value=Flexible([0.1, 0.5, 0.8, 1.0]),
         )
 
         # Sub-object properties (color_ramp)

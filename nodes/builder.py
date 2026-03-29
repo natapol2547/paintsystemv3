@@ -7,6 +7,12 @@ from bpy.props import IntProperty, StringProperty
 
 
 @dataclass
+class Flexible:
+    """Wrap a value to apply it only when the node/socket is first created."""
+    value: Any
+
+
+@dataclass
 class NodeInstruction:
     bl_idname: str
     properties: dict[str, Any] = field(default_factory=dict)
@@ -133,18 +139,18 @@ class NodeTreeBuilder:
     # ── Build ────────────────────────────────────────────────────────
 
     def build(self) -> None:
-        # Phase 0: Sync node tree interface sockets
+        # Sync node tree interface sockets
         self._sync_interface_sockets()
 
         desired_ids = set(self._node_instructions.keys())
 
-        # Phase 1: Remove excess nodes (auto-removes their links)
+        # Remove excess nodes (auto-removes their links)
         for identifier in list(self._existing_nodes.keys()):
             if identifier not in desired_ids:
                 self.node_tree.nodes.remove(
                     self._existing_nodes.pop(identifier))
 
-        # Phase 2: Upsert nodes and apply properties / socket values
+        # Upsert nodes and apply properties / socket values
         for identifier, instr in self._node_instructions.items():
             node = self._existing_nodes.get(identifier)
 
@@ -152,30 +158,31 @@ class NodeTreeBuilder:
                 self.node_tree.nodes.remove(node)
                 node = None
 
-            if node is None:
+            is_new = node is None
+            if is_new:
                 node = self.node_tree.nodes.new(instr.bl_idname)
                 node.ps_identifier = identifier
                 self._existing_nodes[identifier] = node
 
-            self._apply_node_properties(node, instr.properties)
-            self._apply_socket_properties(node.inputs, instr.inputs)
-            self._apply_socket_properties(node.outputs, instr.outputs)
+            self._apply_node_properties(node, instr.properties, is_new)
+            self._apply_socket_properties(node.inputs, instr.inputs, is_new)
+            self._apply_socket_properties(node.outputs, instr.outputs, is_new)
 
             for attr_name, props in instr.specials.items():
                 print(f"Applying special {attr_name} to node {node.name}")
                 sub_obj = getattr(node, attr_name, None)
                 if sub_obj is not None:
-                    self._apply_props_recursive(sub_obj, props)
+                    self._apply_props_recursive(sub_obj, props, is_new)
                 else:
                     print(f"Special {attr_name} not found on node {node.name}")
 
-        # Phase 3: Remove excess links
+        # Remove excess links
         desired_link_keys = self._build_desired_link_keys()
         for link in list(self.node_tree.links):
             if self._link_to_key(link) not in desired_link_keys:
                 self.node_tree.links.remove(link)
 
-        # Phase 4: Create missing links
+        # Create missing links
         for from_id, from_sock_id, to_id, to_sock_id in self._link_instructions:
             from_node = self._existing_nodes[from_id]
             to_node = self._existing_nodes[to_id]
@@ -219,6 +226,7 @@ class NodeTreeBuilder:
         existing: dict[SocketKey, bpy.types.NodeTreeInterfaceSocket] = {
             (s.name, s.in_out): s for s in _flat_sockets()
         }
+        existing_before_creation: set[SocketKey] = set(existing.keys())
 
         # Create any still-missing sockets
         for instr in self._socket_instructions:
@@ -238,12 +246,16 @@ class NodeTreeBuilder:
             if current_idx != idx:
                 interface.move(sock, idx)
 
-        # Force-apply declared properties on every build
+        # Apply declared properties (Flexible values only on first creation)
         for instr in self._socket_instructions:
             key = (instr.name, instr.in_out)
             sock = existing[key]
+            sock_is_new = key not in existing_before_creation
             for prop, value in instr.properties.items():
-                setattr(sock, prop, value)
+                is_flexible = isinstance(value, Flexible)
+                if is_flexible and not sock_is_new:
+                    continue
+                setattr(sock, prop, value.value if is_flexible else value)
 
     # ── Hydration ────────────────────────────────────────────────────
 
@@ -274,50 +286,68 @@ class NodeTreeBuilder:
 
     @staticmethod
     def _apply_node_properties(
-        node: bpy.types.Node, properties: dict[str, Any]
+        node: bpy.types.Node, properties: dict[str, Any],
+        is_new: bool = True,
     ) -> None:
         for prop, value in properties.items():
+            is_flexible = isinstance(value, Flexible)
+            if is_flexible and not is_new:
+                continue
+            actual_value = value.value if is_flexible else value
+
             prop_rna = node.bl_rna.properties.get(prop)
             if prop_rna is None:
                 continue
-            if prop_rna.type == "POINTER" and isinstance(value, str):
+            if prop_rna.type == "POINTER" and isinstance(actual_value, str):
                 collection = _get_data_collection(prop_rna.fixed_type)
                 if collection:
-                    ptr = collection.get(value)
+                    ptr = collection.get(actual_value)
                     if ptr is not None:
                         setattr(node, prop, ptr)
             else:
-                setattr(node, prop, value)
+                setattr(node, prop, actual_value)
 
     @staticmethod
     def _apply_socket_properties(
         sockets: bpy.types.NodeInputs | bpy.types.NodeOutputs,
         socket_specs: dict[int | str, dict[str, Any]],
+        is_new: bool = True,
     ) -> None:
         for socket_id, props in socket_specs.items():
             socket = NodeTreeBuilder._resolve_socket(sockets, socket_id)
             for prop, value in props.items():
-                setattr(socket, prop, value)
+                is_flexible = isinstance(value, Flexible)
+                if is_flexible and not is_new:
+                    continue
+                setattr(socket, prop, value.value if is_flexible else value)
 
     @staticmethod
-    def _apply_props_recursive(idblock: Any, prop_dict: dict[str, Any]) -> None:
+    def _apply_props_recursive(
+        idblock: Any, prop_dict: dict[str, Any],
+        is_new: bool = True,
+    ) -> None:
         for key, value in prop_dict.items():
+            is_flexible = isinstance(value, Flexible)
+            if is_flexible and not is_new:
+                continue
+            actual_value = value.value if is_flexible else value
+
             prop = idblock.bl_rna.properties.get(key)
             if prop is None:
                 continue
 
             if not prop.is_readonly:
-                if prop.type == "POINTER" and isinstance(value, str):
+                if prop.type == "POINTER" and isinstance(actual_value, str):
                     collection = _get_data_collection(prop.fixed_type)
                     if collection:
-                        ptr = collection.get(value)
+                        ptr = collection.get(actual_value)
                         if ptr is not None:
                             setattr(idblock, key, ptr)
                 else:
-                    setattr(idblock, key, value)
+                    setattr(idblock, key, actual_value)
 
             elif prop.type == "COLLECTION":
-                if not isinstance(value, list):
+                if not isinstance(actual_value, list):
                     continue
                 collection = getattr(idblock, key)
 
@@ -327,7 +357,7 @@ class NodeTreeBuilder:
                     if hasattr(collection, "clear"):
                         collection.clear()
 
-                    for i, item in enumerate(value):
+                    for i, item in enumerate(actual_value):
                         used_keys: set[str] = set()
                         if i >= len(collection):
                             params = []
@@ -345,10 +375,10 @@ class NodeTreeBuilder:
                             if k not in used_keys:
                                 setattr(obj, k, v)
                 else:
-                    for i, item in enumerate(value):
+                    for i, item in enumerate(actual_value):
                         if i < len(collection):
                             NodeTreeBuilder._apply_props_recursive(
-                                collection[i], item
+                                collection[i], item, is_new
                             )
 
     def _link_to_key(self, link: bpy.types.NodeLink) -> LinkKey:

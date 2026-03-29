@@ -36,7 +36,6 @@ class PAINTSYSTEM_PT_test(PaintSystemPanel):
             box.label(text=f"Shader Tree: {shader_tree.name}")
             box.label(text=f"Nodes: {len(shader_tree.nodes)}")
             box.label(text=f"Links: {len(shader_tree.links)}")
-            box.label(text=f"Version: {shader_tree.ps_version}")
 
 
 classes = (
