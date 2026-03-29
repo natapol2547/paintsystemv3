@@ -2,7 +2,7 @@ import bpy
 from bpy.types import Operator
 from bpy.utils import register_classes_factory
 
-from ..nodes.node_tree_builder import NodeTreeBuilder
+from ..nodes.builder import NodeTreeBuilder
 
 
 class PAINTSYSTEM_OT_create_tree(Operator):

@@ -1,7 +1,7 @@
 import bpy
 
 from bpy.types import Node
-from bpy.props import PointerProperty, FloatProperty, EnumProperty
+from bpy.props import PointerProperty
 
 from .base import PaintSystemLayerNode
 
@@ -23,7 +23,8 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode):
 
     def init(self, context):
         super().init(context)
-        # self.create_panel("image_settings", "Image Settings", True)
+        self.use_custom_color = True
+        self.color = (0.235291, 0.215529, 0.170224)
 
     def draw_buttons(self, context, layout):
         self.draw_layer_settings(context, layout)

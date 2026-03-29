@@ -15,22 +15,29 @@ class NodeInstruction:
     specials: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
+@dataclass
+class SocketInstruction:
+    in_out: str  # 'INPUT' or 'OUTPUT'
+    socket_type: str
+    name: str
+    properties: dict[str, Any] = field(default_factory=dict)
+
+
 LinkKey = tuple[str, int, str, int]
 
 
 class NodeTreeBuilder:
-    def __init__(self, node_tree: bpy.types.NodeTree, version: int):
+    def __init__(self, node_tree: bpy.types.NodeTree):
         """Initialize the NodeTreeBuilder.
 
         Args:
             node_tree (bpy.types.NodeTree): The node tree to build.
-            version (int): The version of the node tree.
         """
         self.node_tree = node_tree
-        self.version = version
         self._node_instructions: dict[str, NodeInstruction] = {}
         self._link_instructions: set[tuple[str,
                                            int | str, str, int | str]] = set()
+        self._socket_instructions: list[SocketInstruction] = []
         self._existing_nodes: dict[str, bpy.types.Node] = {}
         self._hydrate_existing_nodes()
 
@@ -84,6 +91,33 @@ class NodeTreeBuilder:
         self._node_instructions[identifier].specials[attr_name] = dict(props)
         return self
 
+    def add_socket(
+        self,
+        in_out: str,
+        socket_type: str,
+        name: str,
+        **kwargs: Any,
+    ) -> NodeTreeBuilder:
+        """Declare an interface socket on the node tree.
+
+        Args:
+            in_out: 'INPUT' or 'OUTPUT'.
+            socket_type: Blender socket bl_idname (e.g. 'NodeSocketFloat').
+            name: Display name of the socket.
+            **kwargs: Properties to force-apply to the socket on every build.
+        """
+        if not self.node_tree.bl_use_group_interface:
+            raise ValueError("Node tree does not use group interface")
+        self._socket_instructions.append(
+            SocketInstruction(
+                in_out=in_out,
+                socket_type=socket_type,
+                name=name,
+                properties=dict(kwargs),
+            )
+        )
+        return self
+
     def link_nodes(
         self,
         from_identifier: str,
@@ -99,8 +133,8 @@ class NodeTreeBuilder:
     # ── Build ────────────────────────────────────────────────────────
 
     def build(self) -> None:
-        # if self.node_tree.ps_version == self.version:
-        #     return
+        # Phase 0: Sync node tree interface sockets
+        self._sync_interface_sockets()
 
         desired_ids = set(self._node_instructions.keys())
 
@@ -150,7 +184,66 @@ class NodeTreeBuilder:
             if not self._link_exists(from_socket, to_socket):
                 self.node_tree.links.new(to_socket, from_socket)
 
-        self.node_tree.ps_version = self.version
+    # ── Interface socket sync ────────────────────────────────────────
+
+    def _sync_interface_sockets(self) -> None:
+        """Ensure the node tree interface matches _socket_instructions in order."""
+        if not self._socket_instructions:
+            return
+
+        # Sory socket instructions by in_out, Output first
+        self._socket_instructions.sort(
+            key=lambda x: x.in_out == 'OUTPUT', reverse=True)
+
+        interface = self.node_tree.interface
+
+        def _flat_sockets() -> list[bpy.types.NodeTreeInterfaceSocket]:
+            return [item for item in interface.items_tree
+                    if item.item_type == 'SOCKET']
+
+        # Key: (name, in_out) — must be unique per declared socket
+        SocketKey = tuple[str, str]
+        desired_keys: dict[SocketKey, SocketInstruction] = {
+            (instr.name, instr.in_out): instr
+            for instr in self._socket_instructions
+        }
+
+        # Remove sockets that are no longer desired or have a changed type
+        for sock in _flat_sockets():
+            key: SocketKey = (sock.name, sock.in_out)
+            instr = desired_keys.get(key)
+            if instr is None or sock.bl_socket_idname != instr.socket_type:
+                interface.remove(sock)
+
+        # Rebuild lookup after removals
+        existing: dict[SocketKey, bpy.types.NodeTreeInterfaceSocket] = {
+            (s.name, s.in_out): s for s in _flat_sockets()
+        }
+
+        # Create any still-missing sockets
+        for instr in self._socket_instructions:
+            key = (instr.name, instr.in_out)
+            if key not in existing:
+                sock = interface.new_socket(
+                    instr.name, in_out=instr.in_out, socket_type=instr.socket_type
+                )
+                existing[key] = sock
+
+        # Reorder sockets to match declaration order
+        for idx, instr in enumerate(self._socket_instructions):
+            key = (instr.name, instr.in_out)
+            sock = existing[key]
+            current = _flat_sockets()
+            current_idx = next(i for i, s in enumerate(current) if s == sock)
+            if current_idx != idx:
+                interface.move(sock, idx)
+
+        # Force-apply declared properties on every build
+        for instr in self._socket_instructions:
+            key = (instr.name, instr.in_out)
+            sock = existing[key]
+            for prop, value in instr.properties.items():
+                setattr(sock, prop, value)
 
     # ── Hydration ────────────────────────────────────────────────────
 
@@ -351,11 +444,9 @@ def _resolve_socket_index(
 
 
 def register():
-    bpy.types.NodeTree.ps_version = IntProperty(name="Version", default=1)
     bpy.types.Node.ps_identifier = StringProperty(
         name="Identifier", default="")
 
 
 def unregister():
-    del bpy.types.NodeTree.ps_version
     del bpy.types.Node.ps_identifier

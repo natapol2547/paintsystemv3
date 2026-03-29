@@ -3,8 +3,7 @@ from bpy.types import Operator
 from bpy.props import EnumProperty, StringProperty
 from bpy.utils import register_classes_factory
 
-from ..nodes.node_tree import PaintSystemNodeTree
-from ..nodes.group_nodes import sync_group_node_sockets
+from ..nodes.tree import PaintSystemNodeTree
 from ..props.channel import CHANNEL_SOCKET_TYPES
 from ..common import get_next_unique_name
 
@@ -86,7 +85,7 @@ class PAINTSYSTEM_OT_move_channel_up(Operator):
         channel_manager = tree.channels_manager
         channel_manager.move(channel_manager.active_index,
                              channel_manager.active_index - 1)
-        sync_group_node_sockets(tree)
+        tree.sync_group_node_sockets()
         return {'FINISHED'}
 
 
@@ -106,7 +105,7 @@ class PAINTSYSTEM_OT_move_channel_down(Operator):
         channel_manager = tree.channels_manager
         channel_manager.move(channel_manager.active_index,
                              channel_manager.active_index + 1)
-        sync_group_node_sockets(tree)
+        tree.sync_group_node_sockets()
         return {'FINISHED'}
 
 
