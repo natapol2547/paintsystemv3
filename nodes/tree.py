@@ -7,7 +7,6 @@ from bpy.utils import register_classes_factory
 from bpy_extras.node_utils import connect_sockets
 from ..props.channel import PaintSystemChannel
 from ..props.collection_manager import CollectionManager
-from .builder import NodeTreeBuilder
 
 
 def _detect_change(old_names, new_names):
