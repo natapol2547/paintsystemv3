@@ -22,6 +22,9 @@ class PaintSystemBaseNode:
         self.name = node.name
         self.uuid = str(uuid.uuid4())
 
+    def free(self):
+        pass
+
     @classmethod
     def poll(cls, ntree):
         return ntree.bl_idname == 'PaintSystemNodeTree'

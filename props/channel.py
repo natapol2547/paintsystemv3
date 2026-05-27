@@ -19,7 +19,7 @@ def _set_name_transform(self, new_value, curr_value, is_set):
 
 
 def _update_group_node_tree(self, context):
-    self.update_shader_node_tree(context)
+    self.update_group_node_tree(context)
 
 
 class PaintSystemChannel(bpy.types.PropertyGroup):
@@ -74,6 +74,8 @@ class PaintSystemChannel(bpy.types.PropertyGroup):
         node_tree = self.id_data
         if node_tree and node_tree.bl_idname == 'PaintSystemNodeTree':
             node_tree.sync_group_node_sockets()
+            from ..nodetree.tree import sync_group_nodes_referencing
+            sync_group_nodes_referencing(node_tree)
 
     def _get_shader_node_tree_name(self):
         return f".PS {self.name} Channel ({self.uuid[:4]})"

@@ -16,6 +16,7 @@ node_categories = [
         NodeItem('PaintSystemGroupInputNode'),
         NodeItem('PaintSystemGroupOutputNode'),
         NodeItem('PaintSystemImageLayerNode'),
+        NodeItem('PaintSystemGroupLayerNode'),
     ]),
 ]
 

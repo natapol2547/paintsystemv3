@@ -43,7 +43,7 @@ def _get_socket_type(type: str) -> str:
     return type_to_socket_type.get(type, 'NodeSocketColor')
 
 
-def _sync_sockets(sockets, channels):
+def sync_sockets_to_channels(sockets, channels):
     """Apply minimal add/remove/move/rename ops so *sockets* matches *channels*."""
     while True:
         current_names = [s.name for s in sockets]
@@ -82,6 +82,20 @@ def _sync_sockets(sockets, channels):
             sockets.move(len(sockets) - 1, idx)
 
 
+def sync_group_nodes_referencing(tree):
+    """Re-sync every PaintSystemGroupLayerNode whose node_tree is *tree*.
+
+    Channels of a nested tree can change while parent group nodes reference it;
+    those parents won't get a callback, so push the update to them here.
+    """
+    for ng in bpy.data.node_groups:
+        if ng.bl_idname != 'PaintSystemNodeTree':
+            continue
+        for node in ng.nodes:
+            if node.bl_idname == 'PaintSystemGroupLayerNode' and node.node_tree is tree:
+                node.sync_sockets()
+
+
 class PaintSystemNodeTree(NodeTree):
     bl_idname = 'PaintSystemNodeTree'
     bl_label = 'Paint System'
@@ -98,6 +112,11 @@ class PaintSystemNodeTree(NodeTree):
     )
     uuid: StringProperty(name="UUID")
     is_new_status: BoolProperty(name="Is Newly Created", default=True)
+    group_node_name: StringProperty(
+        name="Group Node Name",
+        description="Name of the group node that opened this tree for editing",
+        options={'SKIP_SAVE'},
+    )
 
     def init(self, context):
         self.uuid = str(uuid.uuid4())
@@ -128,22 +147,23 @@ class PaintSystemNodeTree(NodeTree):
         if not self.shader_node_tree:
             self.shader_node_tree = bpy.data.node_groups.new(
                 target_name, 'ShaderNodeTree')
-        elif self.shader_node_tree.name != target_name:
+        elif getattr(self.shader_node_tree.bl_rna.properties['name'], 'is_readonly', True) and self.shader_node_tree.name != target_name:
+            print(
+                f"Renaming shader node tree from {self.shader_node_tree.name} to {target_name}")
             self.shader_node_tree.name = target_name
 
     def sync_group_node_sockets(self):
         """Sync Group Input outputs and Group Output inputs to match self.channels."""
         for node in self.nodes:
             if node.bl_idname == 'PaintSystemGroupInputNode':
-                _sync_sockets(node.outputs, self.channels)
+                sync_sockets_to_channels(node.outputs, self.channels)
             elif node.bl_idname == 'PaintSystemGroupOutputNode':
-                _sync_sockets(node.inputs, self.channels)
+                sync_sockets_to_channels(node.inputs, self.channels)
 
     def create_channel(self, name: str = "Channel", type: str = 'COLOR'):
         channel = self.channels_manager.add(
             properties={'name': name, 'type': type})
         channel.update_shader_node_tree(bpy.context)
-        self.sync_group_node_sockets()
         # Connect group input to group output
         input_node = self.get_input_node()
         output_node = self.get_output_node()
@@ -152,7 +172,6 @@ class PaintSystemNodeTree(NodeTree):
 
     def delete_channel(self, index: int):
         self.channels_manager.remove(index)
-        self.sync_group_node_sockets()
 
     def delete_active_channel(self):
         self.delete_channel(self.channels_manager.active_index)
@@ -178,7 +197,7 @@ class PaintSystemNodeTree(NodeTree):
 
     @property
     def channels_manager(self):
-        return CollectionManager(self, 'channels', self, 'active_channel_index')
+        return CollectionManager(self, 'channels', self, 'active_channel_index', callback=lambda: sync_group_nodes_referencing(self))
 
 
 classes = (

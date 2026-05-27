@@ -3,11 +3,12 @@ from typing import Literal
 
 
 class CollectionManager:
-    def __init__(self, dataptr, propname, active_dataptr, active_propname):
+    def __init__(self, dataptr, propname, active_dataptr, active_propname, callback=None):
         self._dataptr = dataptr
         self._propname = propname
         self._active_dataptr = active_dataptr
         self._active_propname = active_propname
+        self._callback = callback
         if self.collection is None:
             raise ValueError(
                 f"Collection {propname} is not found in {dataptr}")
@@ -30,11 +31,15 @@ class CollectionManager:
             self.move(current_index, self.active_index)
         elif position == 'BELOW':
             self.move(current_index, self.active_index + 1)
+        if self._callback:
+            self._callback()
         return item
 
     def remove(self, index: int):
         self.collection.remove(index)
         self.active_index = min(self.active_index, len(self.collection) - 1)
+        if self._callback:
+            self._callback()
 
     def remove_active(self):
         self.remove(self.active_index)
@@ -42,6 +47,8 @@ class CollectionManager:
     def move(self, index: int, new_index: int):
         self.collection.move(index, new_index)
         self.active_index = min(new_index, len(self.collection) - 1)
+        if self._callback:
+            self._callback()
 
     def is_valid_move(self, direction: Literal['UP', 'DOWN']) -> bool:
         if direction == 'UP' and self.active_index > 0:

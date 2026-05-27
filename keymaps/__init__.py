@@ -40,6 +40,15 @@ def register() -> None:
             idname='paint_system.toggle_brush_erase_alpha',
             key='E',
         )
+
+        # Node editor: enter/exit group (TAB) and group-from-selected (Ctrl+G).
+        add_keymap_entry(
+            kc,
+            name='Node Editor',
+            space_type='NODE_EDITOR',
+            idname='paint_system.enter_exit_node_group',
+            key='TAB',
+        )
     except Exception:
         # Keymap setup is best-effort; failures shouldn't block add-on load
         pass

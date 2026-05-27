@@ -41,6 +41,7 @@ submodules = (
     "nodes",
     "nodetree",
     "ops",
+    "keymaps",
 )
 
 _register, _unregister = register_submodule_factory(__name__, submodules)
