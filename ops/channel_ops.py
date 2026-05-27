@@ -3,7 +3,7 @@ from bpy.types import Operator
 from bpy.props import EnumProperty, StringProperty
 from bpy.utils import register_classes_factory
 
-from ..nodes.tree import PaintSystemNodeTree
+from ..nodetree.tree import PaintSystemNodeTree
 from ..props.channel import CHANNEL_SOCKET_TYPES
 from ..common import get_next_unique_name
 

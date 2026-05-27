@@ -33,3 +33,30 @@ def register():
 def unregister():
     del bpy.types.Scene.paint_system
     _unregister()
+
+
+# import bpy
+
+# # 1. Define the function that fetches the name safely
+# def get_active_material_name(self):
+#     # 'self' here refers to the context object
+#     mat = self.active_object.active_material if self.active_object else None
+#     return mat.name if mat else ""
+
+
+# # 2. Register it to Blender's Context type
+# def register():
+#     bpy.types.Context.active_material_name = bpy.props.StringProperty(
+#         get=get_active_material_name
+#     )
+
+
+# def unregister():
+#     del bpy.types.Context.active_material_name
+
+
+# if __name__ == "__main__":
+#     register()
+    
+#     # How you use it anywhere in your addon:
+#     # print(bpy.context.active_material_name)

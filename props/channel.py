@@ -4,7 +4,7 @@ from bpy.props import StringProperty, EnumProperty, PointerProperty
 
 from ..nodes.builder import NodeTreeBuilder
 
-from ..common import get_next_unique_name
+from ..common import transform_unique_name
 
 
 CHANNEL_SOCKET_TYPES = [
@@ -14,33 +14,26 @@ CHANNEL_SOCKET_TYPES = [
 ]
 
 
-def set_name_transform(self, new_value, curr_value, is_set):
-    node_tree = self.id_data
-    if node_tree and node_tree.bl_idname == 'PaintSystemNodeTree':
-        return get_next_unique_name(
-            new_value, [channel.name for channel in node_tree.channels if channel != self])
-    return new_value
+def _set_name_transform(self, new_value, curr_value, is_set):
+    return transform_unique_name(self, new_value, curr_value, is_set, 'channels')
 
 
-def update_group_node_tree(self, context):
+def _update_group_node_tree(self, context):
     self.update_shader_node_tree(context)
-    node_tree = self.id_data
-    if node_tree and node_tree.bl_idname == 'PaintSystemNodeTree':
-        node_tree.sync_group_node_sockets()
 
 
 class PaintSystemChannel(bpy.types.PropertyGroup):
     name: StringProperty(
         name="Name",
         default="Channel",
-        update=update_group_node_tree,
-        set_transform=set_name_transform,
+        update=_update_group_node_tree,
+        set_transform=_set_name_transform,
     )
     type: EnumProperty(
         name="Type",
         items=CHANNEL_SOCKET_TYPES,
         default='COLOR',
-        update=update_group_node_tree,
+        update=_update_group_node_tree,
     )
     uuid: StringProperty(name="UUID")
     shader_node_tree: PointerProperty(
@@ -59,13 +52,28 @@ class PaintSystemChannel(bpy.types.PropertyGroup):
             self.shader_node_tree.name = target_name
 
         builder = NodeTreeBuilder(self.shader_node_tree)
+
+        # Prepare sockets
         builder.add_socket('INPUT', 'NodeSocketColor', 'Color')
         builder.add_socket('INPUT', 'NodeSocketFloat', 'Alpha', subtype='FACTOR',
                            min_value=0.0, max_value=1.0, default_value=1.0)
         builder.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
         builder.add_socket('OUTPUT', 'NodeSocketFloat', 'Alpha', subtype='FACTOR',
                            min_value=0.0, max_value=1.0, default_value=1.0)
+
+        # Add input/outputs
+        builder.add_node('group_input', 'NodeGroupInput')
+        builder.add_node('group_output', 'NodeGroupOutput')
+
+        # Add layers
+
         builder.build()
+
+    def update_group_node_tree(self, context):
+        self.update_shader_node_tree(context)
+        node_tree = self.id_data
+        if node_tree and node_tree.bl_idname == 'PaintSystemNodeTree':
+            node_tree.sync_group_node_sockets()
 
     def _get_shader_node_tree_name(self):
         return f".PS {self.name} Channel ({self.uuid[:4]})"

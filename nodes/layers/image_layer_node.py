@@ -3,10 +3,10 @@ import bpy
 from bpy.types import Node
 from bpy.props import PointerProperty
 
-from .base import PaintSystemLayerNode
+from .base_layer_node import PaintSystemLayerNode
 
 
-class PaintSystemImageLayerNode(PaintSystemLayerNode):
+class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
     bl_idname = 'PaintSystemImageLayerNode'
     bl_label = 'Image Layer'
     bl_icon = 'IMAGE_DATA'

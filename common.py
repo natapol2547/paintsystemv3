@@ -97,3 +97,23 @@ def get_next_unique_name(name: str, list_of_names: list[str]) -> str:
     next_number = max(numbers_found) + 1
 
     return f"{base_name} {next_number}"
+
+
+def transform_unique_name(self, new_value, curr_value, is_set, collection_attr):
+    """Shared `set_transform` for name properties on PaintSystemNodeTree members.
+
+    Resolves *new_value* to a name unique within ``node_tree.<collection_attr>``,
+    and—when the resolved name differs from *curr_value*—invokes
+    ``self.on_name_update(new_name, curr_value, is_set)`` if that hook is defined.
+    """
+    node_tree = self.id_data
+    new_name = new_value
+    if node_tree and node_tree.bl_idname == 'PaintSystemNodeTree':
+        siblings = [item.name for item in getattr(node_tree, collection_attr)
+                    if item != self]
+        new_name = get_next_unique_name(new_value, siblings)
+    if curr_value != new_name:
+        on_name_update = getattr(self, 'on_name_update', None)
+        if on_name_update:
+            on_name_update(new_name, curr_value, is_set)
+    return new_name

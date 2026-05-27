@@ -120,6 +120,7 @@ class PaintSystemNodeTree(NodeTree):
                     # print(f"Setting {node.name} as active output node")
                     node.is_active_output = True
                     break
+        # Update group nodetree
         self.update_shader_node_tree(bpy.context)
 
     def update_shader_node_tree(self, context):
@@ -169,7 +170,7 @@ class PaintSystemNodeTree(NodeTree):
         return None
 
     def _get_shader_node_tree_name(self):
-        return f"{self.name} Group"
+        return f"{self.name} Group ({self.uuid[:4]})"
 
     @property
     def is_new(self):

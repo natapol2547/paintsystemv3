@@ -39,6 +39,7 @@ submodules = (
     "handlers",
     "preferences",
     "nodes",
+    "nodetree",
     "ops",
 )
 
