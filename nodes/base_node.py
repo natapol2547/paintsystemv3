@@ -6,7 +6,7 @@ from ..common import transform_unique_name
 
 
 def _set_name_transform(self, new_value, curr_value, is_set):
-    return transform_unique_name(self, new_value, curr_value, is_set, 'nodes')
+    return transform_unique_name(self, self.id_data, 'nodes', new_value, curr_value, is_set)
 
 
 class PaintSystemBaseNode:

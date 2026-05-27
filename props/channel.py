@@ -4,7 +4,7 @@ from bpy.props import StringProperty, EnumProperty, PointerProperty
 
 from ..nodes.builder import NodeTreeBuilder
 
-from ..common import transform_unique_name
+from ..common import ensure_shader_node_tree, transform_unique_name
 
 
 CHANNEL_SOCKET_TYPES = [
@@ -15,7 +15,7 @@ CHANNEL_SOCKET_TYPES = [
 
 
 def _set_name_transform(self, new_value, curr_value, is_set):
-    return transform_unique_name(self, new_value, curr_value, is_set, 'channels')
+    return transform_unique_name(self, self.id_data, 'channels', new_value, curr_value, is_set)
 
 
 def _update_group_node_tree(self, context):
@@ -40,16 +40,10 @@ class PaintSystemChannel(bpy.types.PropertyGroup):
         type=bpy.types.NodeTree, name="Shader Node Tree", description="Shader Node Tree for this channel")
 
     def update_shader_node_tree(self, context):
-        # Check if uuid is valid
         if not self.uuid:
             self.uuid = str(uuid.uuid4())
-
-        target_name = self._get_shader_node_tree_name()
-        if not self.shader_node_tree:
-            self.shader_node_tree = bpy.data.node_groups.new(
-                target_name, 'ShaderNodeTree')
-        elif self.shader_node_tree.name != target_name:
-            self.shader_node_tree.name = target_name
+        self.shader_node_tree = ensure_shader_node_tree(
+            self.shader_node_tree, self._get_shader_node_tree_name())
 
         builder = NodeTreeBuilder(self.shader_node_tree)
 

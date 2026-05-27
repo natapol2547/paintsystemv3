@@ -99,17 +99,16 @@ def get_next_unique_name(name: str, list_of_names: list[str]) -> str:
     return f"{base_name} {next_number}"
 
 
-def transform_unique_name(self, new_value, curr_value, is_set, collection_attr):
+def transform_unique_name(self, dataptr, propname, new_value, curr_value, is_set):
     """Shared `set_transform` for name properties on PaintSystemNodeTree members.
 
     Resolves *new_value* to a name unique within ``node_tree.<collection_attr>``,
     and—when the resolved name differs from *curr_value*—invokes
     ``self.on_name_update(new_name, curr_value, is_set)`` if that hook is defined.
     """
-    node_tree = self.id_data
     new_name = new_value
-    if node_tree and node_tree.bl_idname == 'PaintSystemNodeTree':
-        siblings = [item.name for item in getattr(node_tree, collection_attr)
+    if dataptr and propname:
+        siblings = [item.name for item in getattr(dataptr, propname)
                     if item != self]
         new_name = get_next_unique_name(new_value, siblings)
     if curr_value != new_name:
@@ -117,3 +116,14 @@ def transform_unique_name(self, new_value, curr_value, is_set, collection_attr):
         if on_name_update:
             on_name_update(new_name, curr_value, is_set)
     return new_name
+
+
+def ensure_shader_node_tree(node_tree, target_name) -> bpy.types.NodeTree | None:
+    if target_name.startswith("Copy Tree Group"):
+        # This is a workaround for a Blender bug where copied node groups get the name "Copy Tree Group" instead of the original name.
+        return node_tree
+    if not node_tree:
+        return bpy.data.node_groups.new(target_name, 'ShaderNodeTree')
+    elif node_tree.name != target_name:
+        node_tree.name = target_name
+    return node_tree

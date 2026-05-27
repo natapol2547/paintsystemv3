@@ -5,8 +5,10 @@ from bpy.props import BoolProperty, CollectionProperty, IntProperty, PointerProp
 from bpy.utils import register_classes_factory
 
 from bpy_extras.node_utils import connect_sockets
+
 from ..props.channel import PaintSystemChannel
 from ..props.collection_manager import CollectionManager
+from ..common import ensure_shader_node_tree
 
 
 def _detect_change(old_names, new_names):
@@ -96,6 +98,10 @@ def sync_group_nodes_referencing(tree):
                 node.sync_sockets()
 
 
+def _update_shader_node_tree(self, context):
+    self.update_shader_node_tree(context)
+
+
 class PaintSystemNodeTree(NodeTree):
     bl_idname = 'PaintSystemNodeTree'
     bl_label = 'Paint System'
@@ -142,15 +148,25 @@ class PaintSystemNodeTree(NodeTree):
         # Update group nodetree
         self.update_shader_node_tree(bpy.context)
 
+    def copy(self):
+        nodetree = super().copy(self)
+        # Create a copy of channels and layers shader node tree
+        self.shader_node_tree = nodetree.shader_node_tree.copy(
+        ) if nodetree.shader_node_tree else None
+        self.update_shader_node_tree(bpy.context)
+        for n in nodetree.nodes:
+            if hasattr(n, 'shader_node_tree') and n.shader_node_tree:
+                n.shader_node_tree = n.shader_node_tree.copy()
+                n.update_shader_node_tree(bpy.context)
+        for ch in nodetree.channels:
+            ch.shader_node_tree = ch.shader_node_tree.copy() if ch.shader_node_tree else None
+            ch.update_shader_node_tree(bpy.context)
+
     def update_shader_node_tree(self, context):
-        target_name = self._get_shader_node_tree_name()
-        if not self.shader_node_tree:
-            self.shader_node_tree = bpy.data.node_groups.new(
-                target_name, 'ShaderNodeTree')
-        elif getattr(self.shader_node_tree.bl_rna.properties['name'], 'is_readonly', True) and self.shader_node_tree.name != target_name:
-            print(
-                f"Renaming shader node tree from {self.shader_node_tree.name} to {target_name}")
-            self.shader_node_tree.name = target_name
+        if not self.uuid:
+            self.uuid = str(uuid.uuid4())
+        self.shader_node_tree = ensure_shader_node_tree(
+            self.shader_node_tree, self._get_shader_node_tree_name())
 
     def sync_group_node_sockets(self):
         """Sync Group Input outputs and Group Output inputs to match self.channels."""
@@ -204,4 +220,31 @@ classes = (
     PaintSystemNodeTree,
 )
 
-register, unregister = register_classes_factory(classes)
+owner = object()
+subscribe_to = (PaintSystemNodeTree, "name")
+
+
+def on_ps_nodetree_name_change():
+    for ng in bpy.data.node_groups:
+        if ng.bl_idname == 'PaintSystemNodeTree':
+            print(
+                f"Updating shader node tree for {ng.name} due to name change")
+            ng.update_shader_node_tree(bpy.context)
+
+
+_register, _unregister = register_classes_factory(classes)
+
+
+def register():
+    _register()
+    bpy.msgbus.subscribe_rna(
+        key=subscribe_to,
+        owner=owner,
+        args=(),
+        notify=on_ps_nodetree_name_change,
+    )
+
+
+def unregister():
+    _unregister()
+    bpy.msgbus.clear_by_owner(owner)
