@@ -51,5 +51,6 @@ so the data is readable; they are never written.
   nested folders, clipped stack, linked layers across two materials,
   vector channel, baked channel, actions. After load in v3 the sidebar
   shows the same stack and a render of each fixture matches the v2
-  render within 1/255.
+  render within 1/255, except in texels where a non-MIX layer sits over
+  a transparent backdrop (expected difference, see PS-001).
 - Migration is idempotent and never runs twice on the same material.

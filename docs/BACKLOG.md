@@ -30,7 +30,7 @@ Guiding constraints for every ticket:
 
 | ID | Title | Size | Depends on |
 |---|---|---|---|
-| [PS-001](tickets/PS-001-blend-math-parity.md) | Match v2 blend math in the layer blend library groups | M | – |
+| [PS-001](tickets/PS-001-blend-math.md) | Layer blend math: W3C compositing in generated library groups | M | – |
 | [PS-002](tickets/PS-002-library-blend-import.md) | Append groups from `library2.blend` through `compiler/library.py` | S | – |
 | [PS-003](tickets/PS-003-artifact-owned-parameter-nodes.md) | Artifact-owned parameter nodes (curves, ramps, texture parameters) | M | – |
 | [PS-004](tickets/PS-004-ir-drivers.md) | IR support for drivers | S | – |
