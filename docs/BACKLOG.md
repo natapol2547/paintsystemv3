@@ -20,6 +20,8 @@ Guiding constraints for every ticket:
   with a fallback for the older path. CI runs the tests against the
   latest patch of every supported series plus the next alpha (PS-080), so
   a ticket is not done until the matrix is green.
+- UI strings are English literals that can be translated later without
+  restructuring (see Deferred: Multilingual UI).
 
 ## Milestones
 
@@ -155,6 +157,15 @@ model, fill and portal table are. Tickets cite its files by
 | [PS-093](tickets/PS-093-selection-tools.md) | Selection tools: box, ellipse, lasso, wand, by face | M | 091 092 095 |
 | [PS-094](tickets/PS-094-transform-tool.md) | Transform and move tool, pixel clipboard | L | 050 091 092 |
 | [PS-095](tickets/PS-095-fill-tool.md) | Fill tool with seam-aware flood | M | 050 091 |
+
+## Deferred
+
+- Multilingual UI. The v3 UI ships in English only for now, but every
+  ticket keeps strings translatable so a later `bpy.app.translations`
+  dictionary can cover them: pass literal `text=` arguments to layout
+  calls rather than building labels by concatenation or f-strings, keep
+  operator/property `name` and `description` as plain literals, and
+  route dynamic labels through a single helper when they are introduced.
 
 ## Not ported
 
