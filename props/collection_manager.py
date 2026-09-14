@@ -45,8 +45,13 @@ class CollectionManager:
         self.remove(self.active_index)
 
     def move(self, index: int, new_index: int):
-        self.collection.move(index, new_index)
-        self.active_index = min(new_index, len(self.collection) - 1)
+        # Blender 5.3+ raises IndexError on an out-of-range target; older
+        # versions ignored it. Clamp so adding BELOW a stale or empty
+        # active index still works.
+        new_index = max(0, min(new_index, len(self.collection) - 1))
+        if index != new_index:
+            self.collection.move(index, new_index)
+        self.active_index = new_index
         if self._callback:
             self._callback()
 
