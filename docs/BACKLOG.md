@@ -23,6 +23,7 @@ Guiding constraints for every ticket:
 | M1 Paint again | Image, solid and folder layers with clipping and the full sidebar UI, templates, painting workflow | 001 002 003 008 009 010 011 012 013 014 019 020 021 029 030 031 032 033 034 035 036 040 041 042 056 060 061 062 080 |
 | M2 All layer types | Remaining layer types, masks, linked layers, clipboard, actions, vector channels | 004 005 006 015 016 017 018 022 023 024 025 026 027 028 037 038 039 063 064 065 066 |
 | M3 Tools | GPU image filters, quick edit, export, channel bake, performance | 007 043 050 051 052 053 054 055 081 |
+| M3b Selection tools | Pixel undo, selection, transform and fill tools in both editors | 090 091 092 093 094 095 |
 | M4 Migration | Load v2 files into v3 | 070 071 072 082 |
 
 ## Epic A. Compositing core and compiler extensions
@@ -97,7 +98,7 @@ Guiding constraints for every ticket:
 
 | ID | Title | Size | Depends on |
 |---|---|---|---|
-| [PS-050](tickets/PS-050-gpu-filter-framework.md) | GPU image filter framework | L | – |
+| [PS-050](tickets/PS-050-gpu-filter-framework.md) | GPU image filter framework | L | 090 |
 | [PS-051](tickets/PS-051-gpu-blur-sharpen.md) | Gaussian blur and sharpen on the GPU | M | 050 |
 | [PS-052](tickets/PS-052-invert-fill-clear-resize.md) | Invert, fill, clear, resize | S | 050 |
 | [PS-053](tickets/PS-053-gpu-brush-painter.md) | Brush painter on the GPU | L | 050 009 |
@@ -132,6 +133,23 @@ Guiding constraints for every ticket:
 | [PS-080](tickets/PS-080-tests-and-ci.md) | Per-feature tests and CI | M | – |
 | [PS-081](tickets/PS-081-performance-budget.md) | Performance budget and profiling | M | 010 |
 | [PS-082](tickets/PS-082-grease-pencil.md) | Grease Pencil support (deferred) | L | 034 |
+
+## Epic J. Selection, transform and fill tools
+
+Inspired by Pixel Art Studio (`~/Downloads/pixel_art_studio_blender_v1.2.1-0`,
+GPL-3.0-or-later, same licence as Paint System). Its numpy raster core
+and integer-isometry seam engine are not ported; its tool design, undo
+model, fill and portal table are. Tickets cite its files by
+`file:line`.
+
+| ID | Title | Size | Depends on |
+|---|---|---|---|
+| [PS-090](tickets/PS-090-pixel-undo-stack.md) | Pixel undo stack for scripted image edits | M | – |
+| [PS-091](tickets/PS-091-selection-model-and-overlays.md) | Selection mask model and overlays | M | 090 |
+| [PS-092](tickets/PS-092-screen-to-uv-projection-pass.md) | Screen-to-UV projection pass | M | 050 |
+| [PS-093](tickets/PS-093-selection-tools.md) | Selection tools: box, ellipse, lasso, wand, by face | M | 091 092 095 |
+| [PS-094](tickets/PS-094-transform-tool.md) | Transform and move tool, pixel clipboard | L | 050 091 092 |
+| [PS-095](tickets/PS-095-fill-tool.md) | Fill tool with seam-aware flood | M | 050 091 |
 
 ## Not ported
 
