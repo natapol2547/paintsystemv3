@@ -1,325 +1,223 @@
 import bpy
 from bpy.types import Operator
+from bpy.props import EnumProperty, StringProperty
 from bpy.utils import register_classes_factory
 
-from ..nodes.builder import Flexible, NodeTreeBuilder
+from ..context import get_active_tree
+from ..compiler.core import compile_tree, flush_now, ensure_artifact
+from ..compiler.bake import create_managed_image
+
+
+MATERIAL_GROUP_KEY = "ps_tree_uuid"
+
+RESOLUTION_ITEMS = [
+    ('1024', "1024", ""),
+    ('2048', "2048", ""),
+    ('4096', "4096", ""),
+]
+
+
+def _new_tree(name: str):
+    tree = bpy.data.node_groups.new(name, 'PaintSystemNodeTree')
+    tree.initialize()
+    return tree
+
+
+def _find_material_group_node(material, tree):
+    for node in material.node_tree.nodes:
+        if node.bl_idname == 'ShaderNodeGroup' and node.get(MATERIAL_GROUP_KEY) == tree.uuid:
+            return node
+    return None
+
+
+def link_tree_to_material(material, tree):
+    """Instance the compiled group in *material* and feed Base Color if free."""
+    material.use_nodes = True
+    material.paint_system.tree = tree
+    compile_tree(tree)
+    nt = material.node_tree
+    bsdf = next((n for n in nt.nodes if n.bl_idname == 'ShaderNodeBsdfPrincipled'), None)
+    group = _find_material_group_node(material, tree)
+    if group is None:
+        group = nt.nodes.new('ShaderNodeGroup')
+        group[MATERIAL_GROUP_KEY] = tree.uuid
+        group.label = tree.name
+        if bsdf is not None:
+            group.location = (bsdf.location.x - 300, bsdf.location.y)
+    group.node_tree = ensure_artifact(tree)
+    if bsdf is not None and len(tree.channels):
+        base = bsdf.inputs.get('Base Color')
+        first = tree.channels[0].name
+        if base is not None and not base.is_linked and first in group.outputs:
+            nt.links.new(group.outputs[first], base)
+    return group
 
 
 class PAINTSYSTEM_OT_create_tree(Operator):
     bl_idname = "paint_system.create_tree"
-    bl_label = "New Paint System"
-    bl_description = "Create a new Paint System node tree with a companion shader node group"
+    bl_label = "New Paint System Tree"
+    bl_description = "Create a new Paint System node tree"
     bl_options = {'REGISTER', 'UNDO'}
 
+    name: StringProperty(name="Name", default="Paint System")
+
     def execute(self, context):
-        bpy.data.node_groups.new(
-            "Paint System", 'PaintSystemNodeTree')
+        tree = _new_tree(self.name)
+        context.scene.paint_system.active_node_tree = tree
         return {'FINISHED'}
 
 
-class PAINTSYSTEM_OT_test_build_shader_tree(Operator):
-    bl_idname = "paint_system.test_build_shader_tree"
-    bl_label = "Test Build Shader Tree"
-    bl_description = "Build a sample shader node tree via NodeTreeBuilder to verify the diff-based build pipeline"
+class PAINTSYSTEM_OT_setup_material(Operator):
+    bl_idname = "paint_system.setup_material"
+    bl_label = "Setup Paint System"
+    bl_description = "Create a Paint System tree for the active material and wire its compiled group into the material"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        return (
-            context.space_data
-            and context.space_data.type == 'NODE_EDITOR'
-            and getattr(context.space_data, 'edit_tree', None)
-            and context.space_data.edit_tree.bl_idname == 'PaintSystemNodeTree'
-        )
+        obj = context.object
+        return obj is not None and obj.type == 'MESH'
 
     def execute(self, context):
-        ps_tree = context.space_data.edit_tree
-        ps_tree.update_shader_node_tree(context)
-        shader_tree = ps_tree.shader_node_tree
-
-        builder = NodeTreeBuilder(shader_tree)
-
-        # Nodes
-        builder.add_node("principled", "ShaderNodeBsdfPrincipled")
-        builder.add_node("rgb", "ShaderNodeRGB")
-        builder.add_node("color_ramp", "ShaderNodeValToRGB")
-        builder.add_node("mix", "ShaderNodeMix",
-                         properties={"data_type": "RGBA"},
-                         inputs={0: {"default_value": Flexible(0.1)}})
-
-        # Socket values
-        builder.set_node_input(
-            "principled", "Base Color",
-            default_value=[0.8, 0.1, 0.1, 1.0],
-        )
-        builder.set_node_output(
-            "rgb", 0,
-            default_value=Flexible([0.1, 0.5, 0.8, 1.0]),
-        )
-
-        # Sub-object properties (color_ramp)
-        builder.set_node_special("color_ramp", "color_ramp", {
-            "color_mode": "RGB",
-            "interpolation": "LINEAR",
-            "elements": [
-                {"position": 0.0, "color": [0.0, 0.0, 0.0, 1.0]},
-                {"position": 0.5, "color": [0.5, 0.1, 0.1, 1.0]},
-                {"position": 1.0, "color": [1.0, 1.0, 1.0, 1.0]},
-            ],
-        })
-
-        # Links
-        builder.link_nodes("rgb", "color_ramp",
-                           from_socket=0, to_socket="Factor")
-        builder.link_nodes("color_ramp", "mix", from_socket=0, to_socket=6)
-        builder.link_nodes("mix", "principled",
-                           from_socket=2, to_socket="Base Color")
-
-        builder.build()
-
-        self.report(
-            {'INFO'},
-            f"Built shader tree: {len(shader_tree.nodes)} nodes, "
-            f"{len(shader_tree.links)} links",
-        )
+        obj = context.object
+        mat = obj.active_material
+        if mat is None:
+            mat = bpy.data.materials.new(f"{obj.name} Material")
+            mat.use_nodes = True
+            if len(obj.material_slots) == 0:
+                obj.data.materials.append(mat)
+            else:
+                obj.material_slots[obj.active_material_index].material = mat
+        tree = mat.paint_system.tree
+        if tree is None:
+            tree = _new_tree(mat.name)
+        link_tree_to_material(mat, tree)
+        context.scene.paint_system.active_node_tree = tree
         return {'FINISHED'}
 
 
-def _poll_paint_system_node_editor(context):
-    return (
-        context.space_data
-        and context.space_data.type == 'NODE_EDITOR'
-        and getattr(context.space_data, 'edit_tree', None)
-        and context.space_data.edit_tree.bl_idname == 'PaintSystemNodeTree'
-    )
+class PAINTSYSTEM_OT_compile_tree(Operator):
+    bl_idname = "paint_system.compile_tree"
+    bl_label = "Recompile"
+    bl_description = "Force a full rebuild of the compiled shader group"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        return get_active_tree(context) is not None
+
+    def execute(self, context):
+        tree = get_active_tree(context)
+        fingerprint = compile_tree(tree, force=True)
+        flush_now()
+        self.report({'INFO'}, f"Compiled {tree.compiled.name} ({fingerprint[:8]})")
+        return {'FINISHED'}
 
 
-class PAINTSYSTEM_OT_test_clear_shader_tree(Operator):
-    bl_idname = "paint_system.test_clear_shader_tree"
-    bl_label = "Clear Shader Tree"
-    bl_description = "Remove every node from the companion shader tree (resets state for arrange tests)"
+class PAINTSYSTEM_OT_add_layer(Operator):
+    bl_idname = "paint_system.add_layer"
+    bl_label = "Add Layer"
+    bl_description = "Add a layer on top of the active channel's stack"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    layer_type: EnumProperty(name="Type", items=[
+        ('IMAGE', "Image", "Paintable image layer"),
+        ('SOLID', "Solid Color", "Flat color layer"),
+        ('GROUP', "Group", "Nested Paint System tree"),
+    ], default='IMAGE')
+    resolution: EnumProperty(name="Resolution", items=RESOLUTION_ITEMS, default='2048')
+
+    @classmethod
+    def poll(cls, context):
+        tree = get_active_tree(context)
+        return tree is not None and len(tree.channels) > 0
+
+    def execute(self, context):
+        tree = get_active_tree(context)
+        below = context.active_node if (context.area and context.area.type == 'NODE_EDITOR') else None
+        if below is not None and not getattr(below, 'is_layer_node', False):
+            below = None
+        if self.layer_type == 'IMAGE':
+            node = tree.insert_layer_node('PaintSystemImageLayerNode', below=below)
+            size = int(self.resolution)
+            image = create_managed_image(f"{tree.name} {node.name}", size, size)
+            node.image = image
+            _set_paint_canvas(context, image)
+        elif self.layer_type == 'SOLID':
+            node = tree.insert_layer_node('PaintSystemSolidColorLayerNode', below=below)
+        else:
+            node = tree.nodes.new('PaintSystemGroupLayerNode')
+            node.node_tree = _new_tree(f"{tree.name} Group")
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        if self.layer_type == 'IMAGE':
+            return context.window_manager.invoke_props_dialog(self)
+        return self.execute(context)
+
+
+def _set_paint_canvas(context, image):
+    settings = context.scene.tool_settings.image_paint
+    settings.mode = 'IMAGE'
+    settings.canvas = image
+
+
+class PAINTSYSTEM_OT_set_active_layer(Operator):
+    bl_idname = "paint_system.set_active_layer"
+    bl_label = "Select Layer"
+    bl_description = "Make this layer active and paint on its image"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    node_name: StringProperty()
+
+    def execute(self, context):
+        tree = get_active_tree(context)
+        node = tree.nodes.get(self.node_name) if tree else None
+        if node is None:
+            return {'CANCELLED'}
+        for n in tree.nodes:
+            n.select = n == node
+        tree.nodes.active = node
+        image = getattr(node, 'image', None)
+        if image is not None:
+            _set_paint_canvas(context, image)
+        return {'FINISHED'}
+
+
+class PAINTSYSTEM_OT_remove_layer(Operator):
+    bl_idname = "paint_system.remove_layer"
+    bl_label = "Remove Layer"
+    bl_description = "Remove the active layer and reconnect the stack around it"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        return _poll_paint_system_node_editor(context)
+        tree = get_active_tree(context)
+        node = tree.nodes.active if tree else None
+        return node is not None and getattr(node, 'is_layer_node', False)
 
     def execute(self, context):
-        ps_tree = context.space_data.edit_tree
-        ps_tree.update_shader_node_tree(context)
-        shader_tree = ps_tree.shader_node_tree
-        for node in list(shader_tree.nodes):
-            shader_tree.nodes.remove(node)
-        self.report({'INFO'}, f"Cleared shader tree: {shader_tree.name}")
-        return {'FINISHED'}
-
-
-class PAINTSYSTEM_OT_test_insert_single_node(Operator):
-    bl_idname = "paint_system.test_insert_single_node"
-    bl_label = "Insert Single Node"
-    bl_description = (
-        "Build rgb -> invert -> color_ramp -> mix -> principled. Run AFTER the base build "
-        "to verify 'invert' is incrementally slotted between rgb and color_ramp"
-    )
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        return _poll_paint_system_node_editor(context)
-
-    def execute(self, context):
-        ps_tree = context.space_data.edit_tree
-        ps_tree.update_shader_node_tree(context)
-        shader_tree = ps_tree.shader_node_tree
-
-        builder = NodeTreeBuilder(shader_tree)
-        builder.add_node("principled", "ShaderNodeBsdfPrincipled")
-        builder.add_node("rgb", "ShaderNodeRGB")
-        builder.add_node("invert", "ShaderNodeInvert")
-        builder.add_node("color_ramp", "ShaderNodeValToRGB")
-        builder.add_node("mix", "ShaderNodeMix", properties={"data_type": "RGBA"})
-
-        builder.link_nodes("rgb", "invert", from_socket=0, to_socket="Color")
-        builder.link_nodes("invert", "color_ramp",
-                           from_socket="Color", to_socket="Factor")
-        builder.link_nodes("color_ramp", "mix", from_socket=0, to_socket=6)
-        builder.link_nodes("mix", "principled",
-                           from_socket=2, to_socket="Base Color")
-
-        builder.build()
-        self.report({'INFO'}, f"Insert test: {len(shader_tree.nodes)} nodes")
-        return {'FINISHED'}
-
-
-class PAINTSYSTEM_OT_test_fanout_fanin(Operator):
-    bl_idname = "paint_system.test_fanout_fanin"
-    bl_label = "Fan-Out / Fan-In"
-    bl_description = (
-        "Add hue_sat and gamma between mix and principled. Both new nodes share "
-        "(up=mix, down=principled) and should land in one column, stacked vertically"
-    )
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        return _poll_paint_system_node_editor(context)
-
-    def execute(self, context):
-        ps_tree = context.space_data.edit_tree
-        ps_tree.update_shader_node_tree(context)
-        shader_tree = ps_tree.shader_node_tree
-
-        builder = NodeTreeBuilder(shader_tree)
-        builder.add_node("principled", "ShaderNodeBsdfPrincipled")
-        builder.add_node("rgb", "ShaderNodeRGB")
-        builder.add_node("color_ramp", "ShaderNodeValToRGB")
-        builder.add_node("mix", "ShaderNodeMix", properties={"data_type": "RGBA"})
-        builder.add_node("hue_sat", "ShaderNodeHueSaturation")
-        builder.add_node("gamma", "ShaderNodeGamma")
-
-        builder.link_nodes("rgb", "color_ramp",
-                           from_socket=0, to_socket="Factor")
-        builder.link_nodes("color_ramp", "mix", from_socket=0, to_socket=6)
-        builder.link_nodes("mix", "hue_sat",
-                           from_socket=2, to_socket="Color")
-        builder.link_nodes("mix", "gamma",
-                           from_socket=2, to_socket="Color")
-        builder.link_nodes("hue_sat", "principled",
-                           from_socket=0, to_socket="Base Color")
-        builder.link_nodes("gamma", "principled",
-                           from_socket=0, to_socket="Emission Color")
-
-        builder.build()
-        self.report({'INFO'}, f"Fan-out test: {len(shader_tree.nodes)} nodes")
-        return {'FINISHED'}
-
-
-class PAINTSYSTEM_OT_test_build_no_arrange(Operator):
-    bl_idname = "paint_system.test_build_no_arrange"
-    bl_label = "Build Without Arrange"
-    bl_description = (
-        "Build the base chain with arrange=False — all nodes should pile up at (0,0). "
-        "Verifies the opt-out path"
-    )
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        return _poll_paint_system_node_editor(context)
-
-    def execute(self, context):
-        ps_tree = context.space_data.edit_tree
-        ps_tree.update_shader_node_tree(context)
-        shader_tree = ps_tree.shader_node_tree
-
-        builder = NodeTreeBuilder(shader_tree)
-        builder.add_node("principled", "ShaderNodeBsdfPrincipled")
-        builder.add_node("rgb", "ShaderNodeRGB")
-        builder.add_node("color_ramp", "ShaderNodeValToRGB")
-        builder.add_node("mix", "ShaderNodeMix", properties={"data_type": "RGBA"})
-
-        builder.link_nodes("rgb", "color_ramp",
-                           from_socket=0, to_socket="Factor")
-        builder.link_nodes("color_ramp", "mix", from_socket=0, to_socket=6)
-        builder.link_nodes("mix", "principled",
-                           from_socket=2, to_socket="Base Color")
-
-        builder.build(arrange=False)
-        self.report({'INFO'}, "Built with arrange=False")
-        return {'FINISHED'}
-
-
-class PAINTSYSTEM_OT_test_chain_insert(Operator):
-    bl_idname = "paint_system.test_chain_insert"
-    bl_label = "Chain Insert (regression)"
-    bl_description = (
-        "Regression test for the chain bug: starts from a tree containing only "
-        "'principled', then builds rgb -> mix -> principled so rgb AND mix are both "
-        "new with the same (None, principled) anchor pair. They should land in "
-        "SEPARATE columns left of principled, not piled in one column"
-    )
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        return _poll_paint_system_node_editor(context)
-
-    def execute(self, context):
-        ps_tree = context.space_data.edit_tree
-        ps_tree.update_shader_node_tree(context)
-        shader_tree = ps_tree.shader_node_tree
-
-        # Step 1: reset to a tree containing only `principled`, arranged.
-        for node in list(shader_tree.nodes):
-            shader_tree.nodes.remove(node)
-        b0 = NodeTreeBuilder(shader_tree)
-        b0.add_node("principled", "ShaderNodeBsdfPrincipled")
-        b0.build()
-
-        # Step 2: rebuild with rgb -> mix -> principled. Both rgb and mix are
-        # new; their (up_anchor, down_anchor) is (None, principled). The bug
-        # piled them at the same x.
-        b1 = NodeTreeBuilder(shader_tree)
-        b1.add_node("principled", "ShaderNodeBsdfPrincipled")
-        b1.add_node("rgb", "ShaderNodeRGB")
-        b1.add_node("mix", "ShaderNodeMix", properties={"data_type": "RGBA"})
-
-        b1.link_nodes("rgb", "mix", from_socket=0, to_socket=6)
-        b1.link_nodes("mix", "principled",
-                      from_socket=2, to_socket="Base Color")
-
-        b1.build()
-        self.report({'INFO'}, f"Chain insert test: {len(shader_tree.nodes)} nodes")
-        return {'FINISHED'}
-
-
-class PAINTSYSTEM_OT_test_orphan_node(Operator):
-    bl_idname = "paint_system.test_orphan_node"
-    bl_label = "Add Orphan Node"
-    bl_description = (
-        "Add an unlinked ShaderNodeValue to the existing tree. It should land in an "
-        "orphan column to the right of everything else, not piled at (0,0)"
-    )
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        return _poll_paint_system_node_editor(context)
-
-    def execute(self, context):
-        ps_tree = context.space_data.edit_tree
-        ps_tree.update_shader_node_tree(context)
-        shader_tree = ps_tree.shader_node_tree
-
-        builder = NodeTreeBuilder(shader_tree)
-        # Re-declare existing chain so the builder keeps it; add orphan on top.
-        builder.add_node("principled", "ShaderNodeBsdfPrincipled")
-        builder.add_node("rgb", "ShaderNodeRGB")
-        builder.add_node("color_ramp", "ShaderNodeValToRGB")
-        builder.add_node("mix", "ShaderNodeMix", properties={"data_type": "RGBA"})
-        builder.add_node("orphan_value", "ShaderNodeValue")
-
-        builder.link_nodes("rgb", "color_ramp",
-                           from_socket=0, to_socket="Factor")
-        builder.link_nodes("color_ramp", "mix", from_socket=0, to_socket=6)
-        builder.link_nodes("mix", "principled",
-                           from_socket=2, to_socket="Base Color")
-        # orphan_value has no links — should land in the orphan column
-
-        builder.build()
-        self.report({'INFO'}, f"Orphan test: {len(shader_tree.nodes)} nodes")
+        tree = get_active_tree(context)
+        node = tree.nodes.active
+        for in_name in ('Color', 'Alpha'):
+            src_socket = node.inputs.get(in_name)
+            out_socket = node.outputs.get(in_name)
+            if src_socket is None or out_socket is None or not src_socket.links:
+                continue
+            from_socket = src_socket.links[0].from_socket
+            for link in list(out_socket.links):
+                tree.links.new(from_socket, link.to_socket)
+        tree.nodes.remove(node)
         return {'FINISHED'}
 
 
 classes = (
     PAINTSYSTEM_OT_create_tree,
-    PAINTSYSTEM_OT_test_build_shader_tree,
-    PAINTSYSTEM_OT_test_insert_single_node,
-    PAINTSYSTEM_OT_test_fanout_fanin,
-    PAINTSYSTEM_OT_test_chain_insert,
-    PAINTSYSTEM_OT_test_orphan_node,
-    PAINTSYSTEM_OT_test_build_no_arrange,
-    PAINTSYSTEM_OT_test_clear_shader_tree,
+    PAINTSYSTEM_OT_setup_material,
+    PAINTSYSTEM_OT_compile_tree,
+    PAINTSYSTEM_OT_add_layer,
+    PAINTSYSTEM_OT_set_active_layer,
+    PAINTSYSTEM_OT_remove_layer,
 )
 
 

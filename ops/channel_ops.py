@@ -3,19 +3,9 @@ from bpy.types import Operator
 from bpy.props import EnumProperty, StringProperty
 from bpy.utils import register_classes_factory
 
-from ..nodetree.tree import PaintSystemNodeTree
 from ..props.channel import CHANNEL_SOCKET_TYPES
 from ..common import get_next_unique_name
-
-
-def _get_active_tree(context) -> PaintSystemNodeTree | None:
-    """Return the active PaintSystemNodeTree depending on the current editor."""
-    space = context.space_data
-    if space and space.type == 'NODE_EDITOR' and hasattr(space, 'edit_tree'):
-        tree = space.edit_tree
-        if tree and tree.bl_idname == 'PaintSystemNodeTree':
-            return tree
-    return getattr(context.scene.paint_system, 'active_node_tree', None)
+from ..context import get_active_tree as _get_active_tree
 
 
 class PAINTSYSTEM_OT_add_channel(Operator):

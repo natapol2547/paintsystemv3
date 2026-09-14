@@ -33,14 +33,15 @@ bl_info_copy = bl_info.copy()
 
 
 submodules = (
-    "panels",
     "props",
     "context",
-    "handlers",
-    "preferences",
+    "compiler",
     "nodes",
     "nodetree",
     "ops",
+    "panels",
+    "handlers",
+    "preferences",
     "keymaps",
 )
 

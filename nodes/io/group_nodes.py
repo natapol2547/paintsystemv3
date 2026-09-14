@@ -22,11 +22,13 @@ class PaintSystemGroupInputNode(PaintSystemGroupNode, Node):
     bl_label = 'Group Input'
     bl_icon = 'GROUP_UVS'
 
-    def draw_buttons(self, context, layout):
-        pass
-
     def draw_label(self):
         return "Group Input"
+
+    def emit(self, ctx):
+        nid = ctx.emit_node(self, 'in', 'NodeGroupInput')
+        for sock in self.outputs:
+            ctx.set_output(self, sock.name, nid, sock.name)
 
 
 class PaintSystemGroupOutputNode(PaintSystemGroupNode, Node):
@@ -47,6 +49,13 @@ class PaintSystemGroupOutputNode(PaintSystemGroupNode, Node):
 
     def draw_label(self):
         return "Group Output"
+
+    def emit(self, ctx):
+        nid = ctx.emit_node(self, 'out', 'NodeGroupOutput')
+        for sock in self.inputs:
+            ref = ctx.upstream(sock)
+            if ref is not None:
+                ctx.link(ref, nid, sock.name)
 
 
 classes = (

@@ -8,8 +8,7 @@ def is_ps_node_tree_poll(self, node_tree: bpy.types.NodeTree):
     return node_tree.bl_idname == 'PaintSystemNodeTree'
 
 
-class PaintSystem(bpy.types.PropertyGroup):
-    image: PointerProperty(type=bpy.types.Image)
+class PaintSystemSceneSettings(bpy.types.PropertyGroup):
     active_node_tree: PointerProperty(
         type=bpy.types.NodeTree,
         name="Active Paint System Tree",
@@ -18,8 +17,18 @@ class PaintSystem(bpy.types.PropertyGroup):
     )
 
 
+class PaintSystemMaterialSettings(bpy.types.PropertyGroup):
+    tree: PointerProperty(
+        type=bpy.types.NodeTree,
+        name="Paint System Tree",
+        description="Paint System tree driving this material",
+        poll=is_ps_node_tree_poll,
+    )
+
+
 classes = (
-    PaintSystem,
+    PaintSystemSceneSettings,
+    PaintSystemMaterialSettings,
 )
 
 _register, _unregister = register_classes_factory(classes)
@@ -27,36 +36,32 @@ _register, _unregister = register_classes_factory(classes)
 
 def register():
     _register()
-    bpy.types.Scene.paint_system = PointerProperty(type=PaintSystem)
+    bpy.types.Scene.paint_system = PointerProperty(type=PaintSystemSceneSettings)
+    bpy.types.Material.paint_system = PointerProperty(type=PaintSystemMaterialSettings)
 
 
 def unregister():
+    del bpy.types.Material.paint_system
     del bpy.types.Scene.paint_system
     _unregister()
 
 
-# import bpy
+def get_active_tree(context) -> bpy.types.NodeTree | None:
+    """Resolve the tree the UI should act on.
 
-# # 1. Define the function that fetches the name safely
-# def get_active_material_name(self):
-#     # 'self' here refers to the context object
-#     mat = self.active_object.active_material if self.active_object else None
-#     return mat.name if mat else ""
-
-
-# # 2. Register it to Blender's Context type
-# def register():
-#     bpy.types.Context.active_material_name = bpy.props.StringProperty(
-#         get=get_active_material_name
-#     )
-
-
-# def unregister():
-#     del bpy.types.Context.active_material_name
-
-
-# if __name__ == "__main__":
-#     register()
-    
-#     # How you use it anywhere in your addon:
-#     # print(bpy.context.active_material_name)
+    Node editor: the edited tree. Elsewhere: the active object's active
+    material tree, falling back to the scene-level selection.
+    """
+    space = getattr(context, 'space_data', None)
+    if space is not None and space.type == 'NODE_EDITOR':
+        tree = getattr(space, 'edit_tree', None)
+        if tree is not None and tree.bl_idname == 'PaintSystemNodeTree':
+            return tree
+    obj = getattr(context, 'object', None)
+    mat = obj.active_material if obj is not None else None
+    if mat is not None and mat.paint_system.tree is not None:
+        return mat.paint_system.tree
+    tree = context.scene.paint_system.active_node_tree
+    if tree is not None and tree.bl_idname == 'PaintSystemNodeTree':
+        return tree
+    return None

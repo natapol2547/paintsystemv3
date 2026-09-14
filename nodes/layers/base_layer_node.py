@@ -1,98 +1,123 @@
 import bpy
-import uuid
-from bpy.props import BoolProperty, FloatProperty, EnumProperty, PointerProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, FloatProperty, EnumProperty, PointerProperty, StringProperty
 
-from ..base_node import PaintSystemBaseNode, _set_name_transform
-from ..builder import NodeTreeBuilder
-from ...common import ensure_shader_node_tree
+from ..base_node import PaintSystemBaseNode, mark_tree_dirty
+from ...compiler.library import layer_blend_group
 
 
 BLEND_MODE_ITEMS = []
-for blend_mode in bpy.types.ShaderNodeMixRGB.bl_rna.properties['blend_type'].enum_items:
+for blend_mode in bpy.types.ShaderNodeMix.bl_rna.properties['blend_type'].enum_items:
     BLEND_MODE_ITEMS.append(
         (blend_mode.identifier, blend_mode.name, blend_mode.description))
     if blend_mode.identifier in ["MIX", "COLOR_BURN", "ADD", "LINEAR_LIGHT", "DIVIDE"]:
         BLEND_MODE_ITEMS.append(None)
 
 
-def _update_shader_node_tree(self, context):
-    self.update_shader_node_tree(context)
+def emit_image_texture(ctx, node, role: str, image, uv_map: str = ""):
+    """Emit an Image Texture (plus UV Map when set). Returns (color_ref, alpha_ref)."""
+    tid = ctx.emit_node(node, role, 'ShaderNodeTexImage', properties={
+        'image': image,
+        'interpolation': 'Linear',
+        'extension': 'REPEAT',
+    })
+    if uv_map:
+        uid = ctx.emit_node(node, f"{role}:uv", 'ShaderNodeUVMap',
+                            properties={'uv_map': uv_map})
+        ctx.link((uid, 'UV'), tid, 'Vector')
+    return (tid, 'Color'), (tid, 'Alpha')
 
 
 class PaintSystemLayerNode(PaintSystemBaseNode):
-    bl_width_default = 200
-    latest_version = 1
+    """A layer: takes the previous stack (Color/Alpha), produces a new stack.
 
-    # Properties
-    name: StringProperty(name="Name", default="Layer",
-                         set_transform=_set_name_transform,
-                         update=_update_shader_node_tree)
-    opacity: FloatProperty(name="Opacity", default=1.0,
-                           min=0.0, max=1.0, subtype='FACTOR')
-    blend_mode: EnumProperty(
-        name="Blend Mode", items=BLEND_MODE_ITEMS, default='MIX')
-    shader_node_tree: PointerProperty(
-        type=bpy.types.NodeTree, name="Shader Node Tree", description="Shader Node Tree for this layer")
-    version: IntProperty(name="Version", default=latest_version)
-    suppress_update: BoolProperty(
-        name="Suppress Update", default=False, options={'HIDDEN', 'SKIP_SAVE'})
+    Subclasses implement ``emit_source(ctx)`` returning ``(color, alpha)``
+    where each is an IR ref or a constant. Blending is shared.
+    """
+    bl_width_default = 200
+    is_layer_node = True
+
+    opacity: FloatProperty(name="Opacity", default=1.0, min=0.0, max=1.0,
+                           subtype='FACTOR', update=mark_tree_dirty)
+    blend_mode: EnumProperty(name="Blend Mode", items=BLEND_MODE_ITEMS,
+                             default='MIX', update=mark_tree_dirty)
+    enabled: BoolProperty(name="Enabled", default=True, update=mark_tree_dirty)
+
+    # Cache (hybrid bake). When valid, the compiler replaces this node and its
+    # whole upstream with a single image texture.
+    cache_enabled: BoolProperty(
+        name="Use Cache", default=False, update=mark_tree_dirty,
+        description="Replace this layer and everything below it with its baked image while the bake is up to date")
+    cache_image: PointerProperty(type=bpy.types.Image, name="Cache Image",
+                                 update=mark_tree_dirty)
+    cache_hash: StringProperty(name="Cache Fingerprint")
+    cache_uv_map: StringProperty(name="Cache UV Map", update=mark_tree_dirty)
+    cache_stale: BoolProperty(name="Cache Stale", default=False,
+                              options={'SKIP_SAVE'})
 
     def init(self, context):
         super().init(context)
-        self.inputs.new('NodeSocketColor',
-                        "Color").default_value = (0, 0, 0, 0)
-        mask_socket = self.inputs.new('NodeSocketFloat', "Mask")
-        mask_socket.hide_value = True
-        mask_socket.default_value = 1.0
-        self.outputs.new('NodeSocketColor',
-                         "Color").default_value = (0, 0, 0, 0)
-        self.update_shader_node_tree(context)
+        color_in = self.inputs.new('NodeSocketColor', "Color")
+        color_in.default_value = (0, 0, 0, 0)
+        color_in.hide_value = True
+        alpha_in = self.inputs.new('NodeSocketFloat', "Alpha")
+        alpha_in.default_value = 0.0
+        alpha_in.hide_value = True
+        mask_in = self.inputs.new('NodeSocketFloat', "Mask")
+        mask_in.default_value = 1.0
+        mask_in.hide_value = True
+        self.outputs.new('NodeSocketColor', "Color")
+        self.outputs.new('NodeSocketFloat', "Alpha")
 
-    def copy(self, node):
-        print(f"Copying layer node: {self.name}, {node.name}")
-        self.suppress_update = True
-        node.suppress_update = True
-        print("Suppressed update during copy")
-        node.shader_node_tree = None
-        super().copy(node)
-        print("Finished copying base node properties")
-        self.suppress_update = False
-        node.suppress_update = False
-
-    def free(self):
-        super().free()
-        if self.shader_node_tree:
-            bpy.data.node_groups.remove(self.shader_node_tree)
-            self.shader_node_tree = None
+    # -- ui ---------------------------------------------------------------------
 
     def draw_layer_settings(self, context, layout):
-        layout.prop(self, "opacity")
+        row = layout.row(align=True)
+        row.prop(self, "enabled", text="")
+        row.prop(self, "opacity")
         layout.prop(self, "blend_mode", text="")
 
-    def update_shader_node_tree(self, context):
-        print(f"{self} Suppress update: {self.suppress_update}")
-        if self.suppress_update:
+    def draw_cache_settings(self, context, layout):
+        box = layout.box()
+        row = box.row(align=True)
+        row.prop(self, "cache_enabled", text="Cache")
+        if self.cache_image is not None and self.cache_enabled:
+            if self.cache_stale:
+                row.label(text="Stale", icon='ERROR')
+            else:
+                row.label(text="Baked", icon='CHECKMARK')
+        row.operator("paint_system.bake_cache", text="", icon='RENDER_STILL')
+        if self.cache_enabled:
+            box.template_ID(self, "cache_image")
+
+    # -- compiler -----------------------------------------------------------------
+
+    def emit_source(self, ctx):
+        """Return (color, alpha): IR refs or constants for this layer's own content."""
+        return (0.0, 0.0, 0.0, 1.0), 0.0
+
+    def emit(self, ctx):
+        if ctx.is_cached(self):
+            self.cache_stale = False
+            color, alpha = emit_image_texture(ctx, self, 'cache', self.cache_image,
+                                              self.cache_uv_map)
+            ctx.alias_output(self, 'Color', color)
+            ctx.alias_output(self, 'Alpha', alpha)
             return
-        if not self.uuid:
-            self.uuid = str(uuid.uuid4())
-        self.shader_node_tree = ensure_shader_node_tree(
-            self.shader_node_tree, self._get_shader_node_tree_name())
-        if not self.shader_node_tree:
-            # Ensure can return None
-            return
+        self.cache_stale = bool(self.cache_enabled and self.cache_image is not None)
 
-        builder = NodeTreeBuilder(self.shader_node_tree)
-        builder.add_socket('INPUT', 'NodeSocketColor', 'Color')
-        builder.add_socket('INPUT', 'NodeSocketFloat', 'Alpha', subtype='FACTOR',
-                           min_value=0.0, max_value=1.0, default_value=1.0)
-        builder.add_socket('INPUT', 'NodeSocketFloat', 'Mask', hide_value=True,
-                           min_value=0.0, max_value=1.0, default_value=1.0)
-        builder.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
-        builder.add_socket('OUTPUT', 'NodeSocketFloat', 'Alpha', subtype='FACTOR',
-                           min_value=0.0, max_value=1.0, default_value=1.0)
-        builder.build()
+        color, alpha = self.emit_source(ctx)
+        self.emit_blend(ctx, color, alpha)
 
-        self.version = self.latest_version
-
-    def _get_shader_node_tree_name(self):
-        return f".PS {self.name} ({self.uuid[:4]})"
+    def emit_blend(self, ctx, color, alpha):
+        blend = ctx.emit_node(self, 'blend', 'ShaderNodeGroup', properties={
+            'node_tree': layer_blend_group(self.blend_mode),
+        })
+        ctx.connect_input(self.inputs['Color'], blend, 'Prev Color')
+        ctx.connect_input(self.inputs['Alpha'], blend, 'Prev Alpha')
+        ctx.connect_input(self.inputs['Mask'], blend, 'Mask')
+        ctx.link_or_set(color, blend, 'Color')
+        ctx.link_or_set(alpha, blend, 'Alpha')
+        ctx.ir.set_input(blend, 'Opacity',
+                         default_value=self.opacity if self.enabled else 0.0)
+        ctx.set_output(self, 'Color', blend, 'Color')
+        ctx.set_output(self, 'Alpha', blend, 'Alpha')

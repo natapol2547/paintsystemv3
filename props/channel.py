@@ -1,10 +1,9 @@
 import uuid
+
 import bpy
-from bpy.props import StringProperty, EnumProperty, PointerProperty
+from bpy.props import StringProperty, EnumProperty
 
-from ..nodes.builder import NodeTreeBuilder
-
-from ..common import ensure_shader_node_tree, transform_unique_name
+from ..common import transform_unique_name
 
 
 CHANNEL_SOCKET_TYPES = [
@@ -13,66 +12,70 @@ CHANNEL_SOCKET_TYPES = [
     ('VECTOR', "Vector", "Vector (XYZ) channel"),
 ]
 
+_CHANNEL_TYPE_TO_SOCKET = {
+    'COLOR': 'NodeSocketColor',
+    'FLOAT': 'NodeSocketFloat',
+    'VECTOR': 'NodeSocketVector',
+}
+
+
+def channel_socket_type(channel_type: str) -> str:
+    return _CHANNEL_TYPE_TO_SOCKET.get(channel_type, 'NodeSocketColor')
+
+
+def channel_alpha_name(channel_name: str) -> str:
+    return f"{channel_name} Alpha"
+
+
+def channel_socket_specs(channels) -> list[tuple[str, str, dict]]:
+    """Socket layout implied by *channels*: (name, socket bl_idname, properties).
+
+    Every channel contributes a value socket and an alpha socket. The same
+    layout is used for the custom Group Input/Output nodes, for
+    PaintSystemGroupLayerNode sockets, and for the compiled tree interface.
+    """
+    specs: list[tuple[str, str, dict]] = []
+    for ch in channels:
+        socket_type = channel_socket_type(ch.type)
+        props = {'hide_value': True}
+        if ch.type == 'COLOR':
+            props['default_value'] = (0.0, 0.0, 0.0, 0.0)
+        elif ch.type == 'FLOAT':
+            props['default_value'] = 0.0
+        specs.append((ch.name, socket_type, props))
+        specs.append((channel_alpha_name(ch.name), 'NodeSocketFloat',
+                      {'hide_value': True, 'default_value': 0.0}))
+    return specs
+
 
 def _set_name_transform(self, new_value, curr_value, is_set):
     return transform_unique_name(self, self.id_data, 'channels', new_value, curr_value, is_set)
 
 
-def _update_group_node_tree(self, context):
-    self.update_group_node_tree(context)
+def _on_channel_changed(self, context):
+    tree = self.id_data
+    if tree is not None and tree.bl_idname == 'PaintSystemNodeTree':
+        tree.on_channels_changed()
 
 
 class PaintSystemChannel(bpy.types.PropertyGroup):
     name: StringProperty(
         name="Name",
         default="Channel",
-        update=_update_group_node_tree,
+        update=_on_channel_changed,
         set_transform=_set_name_transform,
     )
     type: EnumProperty(
         name="Type",
         items=CHANNEL_SOCKET_TYPES,
         default='COLOR',
-        update=_update_group_node_tree,
+        update=_on_channel_changed,
     )
     uuid: StringProperty(name="UUID")
-    shader_node_tree: PointerProperty(
-        type=bpy.types.NodeTree, name="Shader Node Tree", description="Shader Node Tree for this channel")
 
-    def update_shader_node_tree(self, context):
+    def ensure_uuid(self):
         if not self.uuid:
             self.uuid = str(uuid.uuid4())
-        self.shader_node_tree = ensure_shader_node_tree(
-            self.shader_node_tree, self._get_shader_node_tree_name())
-
-        builder = NodeTreeBuilder(self.shader_node_tree)
-
-        # Prepare sockets
-        builder.add_socket('INPUT', 'NodeSocketColor', 'Color')
-        builder.add_socket('INPUT', 'NodeSocketFloat', 'Alpha', subtype='FACTOR',
-                           min_value=0.0, max_value=1.0, default_value=1.0)
-        builder.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
-        builder.add_socket('OUTPUT', 'NodeSocketFloat', 'Alpha', subtype='FACTOR',
-                           min_value=0.0, max_value=1.0, default_value=1.0)
-
-        # Add input/outputs
-        builder.add_node('group_input', 'NodeGroupInput')
-        builder.add_node('group_output', 'NodeGroupOutput')
-
-        # Add layers
-
-        builder.build()
-
-    def update_group_node_tree(self, context):
-        self.update_shader_node_tree(context)
-        node_tree = self.id_data
-        if node_tree and node_tree.bl_idname == 'PaintSystemNodeTree':
-            node_tree.sync_group_node_sockets()
-            from ..nodetree.tree import sync_group_nodes_referencing
-            sync_group_nodes_referencing(node_tree)
-
-    def _get_shader_node_tree_name(self):
-        return f".PS {self.name} Channel ({self.uuid[:4]})"
 
 
 classes = (

@@ -86,7 +86,7 @@ def get_next_unique_name(name: str, list_of_names: list[str]) -> str:
     # We add 0 to handle the case where the base name itself exists (e.g., 'Image').
     # This implies that 'Image 1' would be the next in sequence.
     numbers_found = {0}
-    pattern = re.compile(f"^{re.escape(base_name)}(?: (\d+))?$")
+    pattern = re.compile(rf"^{re.escape(base_name)}(?: (\d+))?$")
 
     for item in list_of_names:
         match = pattern.match(item)
@@ -116,14 +116,3 @@ def transform_unique_name(self, dataptr, propname, new_value, curr_value, is_set
         if on_name_update:
             on_name_update(new_name, curr_value, is_set)
     return new_name
-
-
-def ensure_shader_node_tree(node_tree, target_name) -> bpy.types.NodeTree | None:
-    if target_name.startswith("Copy Tree Group"):
-        # This is a workaround for a Blender bug where copied node groups get the name "Copy Tree Group" instead of the original name.
-        return node_tree
-    if not node_tree:
-        return bpy.data.node_groups.new(target_name, 'ShaderNodeTree')
-    elif node_tree.name != target_name:
-        node_tree.name = target_name
-    return node_tree

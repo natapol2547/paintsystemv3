@@ -1,12 +1,5 @@
-import uuid
-
-import bpy
 from bpy.types import Operator
-from bpy.props import StringProperty
 from bpy.utils import register_classes_factory
-
-from ..nodetree.tree import PaintSystemNodeTree
-from .channel_ops import _get_active_tree
 
 
 _GROUP_NODE_ID = 'PaintSystemGroupLayerNode'

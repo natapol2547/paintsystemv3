@@ -1,9 +1,14 @@
 import bpy
 
 from bpy.types import Node
-from bpy.props import PointerProperty
+from bpy.props import PointerProperty, StringProperty
+from bpy.utils import register_classes_factory
 
-from .base_layer_node import PaintSystemLayerNode
+from .base_layer_node import PaintSystemLayerNode, emit_image_texture
+from ..base_node import mark_tree_dirty
+
+
+IMAGE_LAYER_COLOR = (0.235291, 0.215529, 0.170224)
 
 
 class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
@@ -14,28 +19,39 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
     image: PointerProperty(
         type=bpy.types.Image,
         name="Image",
-        description="Image used by this layer",
+        description="Image painted on by this layer",
+        update=mark_tree_dirty,
     )
-
-    @classmethod
-    def poll(cls, ntree):
-        return ntree.bl_idname == 'PaintSystemNodeTree'
+    uv_map: StringProperty(
+        name="UV Map",
+        description="UV map used to place the image (empty: active render UV map)",
+        update=mark_tree_dirty,
+    )
 
     def init(self, context):
         super().init(context)
         self.use_custom_color = True
-        self.color = (0.235291, 0.215529, 0.170224)
+        self.color = IMAGE_LAYER_COLOR
 
     def draw_buttons(self, context, layout):
         self.draw_layer_settings(context, layout)
-        # header, panel = self.draw_panel(layout, "image_settings")
-        # if panel:
-        #     panel.template_ID(self, "image", new="image.new")
+        layout.template_ID(self, "image", new="image.new", open="image.open")
+        obj = context.object
+        if obj is not None and obj.type == 'MESH':
+            layout.prop_search(self, "uv_map", obj.data, "uv_layers", text="UV")
+        else:
+            layout.prop(self, "uv_map")
+        self.draw_cache_settings(context, layout)
 
     def draw_label(self):
         if self.image:
             return self.image.name
         return "Image Layer"
+
+    def emit_source(self, ctx):
+        if self.image is None:
+            return (0.0, 0.0, 0.0, 1.0), 0.0
+        return emit_image_texture(ctx, self, 'tex', self.image, self.uv_map)
 
 
 classes = (
@@ -43,11 +59,4 @@ classes = (
 )
 
 
-def register():
-    for cls in classes:
-        bpy.utils.register_class(cls)
-
-
-def unregister():
-    for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+register, unregister = register_classes_factory(classes)

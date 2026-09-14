@@ -233,7 +233,10 @@ class NodeTreeBuilder:
         for sock in _flat_sockets():
             key: SocketKey = (sock.name, sock.in_out)
             instr = desired_keys.get(key)
-            if instr is None or sock.bl_socket_idname != instr.socket_type:
+            # socket_type is the base type; bl_socket_idname includes the subtype
+            # (e.g. NodeSocketFloatFactor) and would churn sockets on every build.
+            existing_type = getattr(sock, 'socket_type', sock.bl_socket_idname)
+            if instr is None or existing_type != instr.socket_type:
                 interface.remove(sock)
 
         # Rebuild lookup after removals

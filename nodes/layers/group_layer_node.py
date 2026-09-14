@@ -5,21 +5,19 @@ from bpy.props import PointerProperty
 from bpy.utils import register_classes_factory
 
 from ..base_node import PaintSystemBaseNode
-from ...nodetree.tree import sync_sockets_to_channels
+from ...props.channel import channel_socket_specs
+from ...nodetree.tree import sync_sockets
+from ...compiler.core import compile_tree, mark_dirty
 
 
 GROUP_LAYER_COLOR = (0.149763, 0.170138, 0.235291)
 
 
 def _tree_references(tree, target, _visited=None):
-    """Return True if *target* is *tree* or is nested anywhere inside it.
-
-    Walks down through every PaintSystemGroupLayerNode's wrapped tree, guarding
-    against already-cyclic data so the recursion always terminates.
-    """
+    """True if *target* is *tree* or is nested anywhere inside it."""
     if tree is None:
         return False
-    if tree is target:
+    if tree == target:
         return True
     if _visited is None:
         _visited = set()
@@ -38,11 +36,16 @@ def is_ps_node_tree_poll(self, node_tree: bpy.types.NodeTree):
     return node_tree.bl_idname == 'PaintSystemNodeTree' and not _tree_references(node_tree, self.id_data)
 
 
-class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
-    """A layer that wraps another PaintSystemNodeTree (Smart Material / node group).
+def _on_tree_changed(self, context):
+    self.sync_sockets()
+    mark_dirty(self.id_data)
 
-    The wrapped tree's channels become this node's input/output socket pairs, so
-    the same PaintSystemNodeTree can be authored at top level *and* reused nested.
+
+class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
+    """A layer that wraps another PaintSystemNodeTree.
+
+    The wrapped tree's channels become this node's socket pairs. At compile
+    time the wrapped tree is compiled first and instanced as a ShaderNodeGroup.
     """
     bl_idname = 'PaintSystemGroupLayerNode'
     bl_label = 'Group'
@@ -52,15 +55,12 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
     node_tree: PointerProperty(
         type=NodeTree,
         name="Node Tree",
-        description="The node tree this group node wraps",
-        update=lambda self, context: self.sync_sockets(),
-        poll=is_ps_node_tree_poll
+        description="The Paint System tree this group node wraps",
+        update=_on_tree_changed,
+        poll=is_ps_node_tree_poll,
     )
 
     def poll_instance(self, node_tree):
-        # Prevent circular references: this group wraps self.node_tree, so it
-        # can't be placed into a tree that self.node_tree already contains
-        # (directly or nested) — that would form a cycle.
         return not _tree_references(self.node_tree, node_tree)
 
     def init(self, context):
@@ -69,35 +69,41 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
         self.color = GROUP_LAYER_COLOR
         self.sync_sockets()
 
-    def copy(self, node):
-        super().copy(node)
-
-    # -- channel toggles + socket sync --------------------------------------
-
     def sync_sockets(self):
-        """Reconcile toggles with the nested tree's channels, then sockets."""
         if not self.node_tree:
             return
-        channels = self.node_tree.channels
-        sync_sockets_to_channels(self.inputs, channels)
-        sync_sockets_to_channels(self.outputs, channels)
-
-    def get_channel_input_socket(self, name):
-        return self.inputs.get(name)
-
-    def get_channel_output_socket(self, name):
-        return self.outputs.get(name)
-
-    # -- ui ------------------------------------------------------------------
+        specs = channel_socket_specs(self.node_tree.channels)
+        sync_sockets(self.inputs, specs)
+        sync_sockets(self.outputs, specs)
 
     def draw_buttons(self, context, layout):
         row = layout.row(align=True)
         row.template_ID(self, "node_tree")
+        row.operator("paint_system.edit_node_group", text="", icon='NODETREE')
 
     def draw_label(self):
         if self.node_tree:
             return self.node_tree.name
         return "Group"
+
+    # -- compiler -----------------------------------------------------------------
+
+    def hash_parts(self, ctx):
+        if not self.node_tree:
+            return []
+        return [compile_tree(self.node_tree)]
+
+    def emit(self, ctx):
+        child = self.node_tree
+        if child is None:
+            return
+        compile_tree(child)
+        gid = ctx.emit_node(self, 'group', 'ShaderNodeGroup',
+                            properties={'node_tree': child.compiled})
+        for sock in self.inputs:
+            ctx.connect_input(sock, gid, sock.name)
+        for sock in self.outputs:
+            ctx.set_output(self, sock.name, gid, sock.name)
 
 
 classes = (

@@ -2,6 +2,7 @@ import bpy
 from bpy.types import UIList
 
 from .common import get_icon, PaintSystemPanel
+from ..context import get_active_tree
 
 
 class PAINTSYSTEM_UL_channels(UIList):
@@ -23,7 +24,6 @@ class PAINTSYSTEM_UL_channels(UIList):
 
 
 def _draw_channel_list(layout, node_tree):
-    """Shared UI for the channel UIList and its side buttons."""
     row = layout.row()
     row.template_list(
         "PAINTSYSTEM_UL_channels", "",
@@ -31,14 +31,51 @@ def _draw_channel_list(layout, node_tree):
         node_tree, "active_channel_index",
         rows=3,
     )
-
     col = row.column(align=True)
     col.operator("paint_system.add_channel", icon='ADD', text="")
     col.operator("paint_system.remove_channel", icon='REMOVE', text="")
     col.separator()
-    op = col.operator("paint_system.move_channel_up", icon='TRIA_UP', text="")
-    op = col.operator("paint_system.move_channel_down",
-                      icon='TRIA_DOWN', text="")
+    col.operator("paint_system.move_channel_up", icon='TRIA_UP', text="")
+    col.operator("paint_system.move_channel_down", icon='TRIA_DOWN', text="")
+
+
+def _draw_layer_stack(layout, tree):
+    """Linear stack feeding the active channel, top-most first."""
+    row = layout.row(align=True)
+    op = row.operator("paint_system.add_layer", text="Image", icon='IMAGE_DATA')
+    op.layer_type = 'IMAGE'
+    op = row.operator("paint_system.add_layer", text="Solid", icon='COLOR')
+    op.layer_type = 'SOLID'
+    row.operator("paint_system.remove_layer", text="", icon='REMOVE')
+
+    chain = tree.layer_chain()
+    if not chain:
+        layout.label(text="No layers on this channel", icon='INFO')
+        return
+    active = tree.nodes.active
+    col = layout.column(align=True)
+    for node in chain:
+        row = col.row(align=True)
+        row.prop(node, "enabled", text="")
+        icon = 'IMAGE_DATA' if node.bl_idname == 'PaintSystemImageLayerNode' else 'COLOR'
+        op = row.operator("paint_system.set_active_layer", text=node.name,
+                          icon=icon, depress=(node == active))
+        op.node_name = node.name
+        row.prop(node, "opacity", text="", slider=True)
+        if node.cache_enabled and node.cache_image is not None:
+            row.label(text="", icon='ERROR' if node.cache_stale else 'CHECKMARK')
+
+
+def _draw_compiled_info(layout, tree):
+    box = layout.box()
+    compiled = tree.compiled
+    if compiled is None:
+        box.label(text="Not compiled yet", icon='INFO')
+    else:
+        box.label(text=compiled.name, icon='NODETREE')
+        box.label(text=f"{len(compiled.nodes)} nodes, {len(compiled.links)} links, "
+                       f"fingerprint {tree.compiled_hash[:8]}")
+    box.operator("paint_system.compile_tree", icon='FILE_REFRESH')
 
 
 class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
@@ -48,49 +85,37 @@ class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
     bl_region_type = 'UI'
     bl_category = "Paint System"
 
-    def draw_header_preset(self, context):
-        layout = self.layout
-        # ps_ctx = self.parse_context(context)
-        # row = layout.row(align=True)
-        # if ps_ctx.ps_mat_data is None:
-        #     return
-        # groups = ps_ctx.ps_mat_data.groups
-        # if ps_ctx.ps_mat_data and groups:
-        #     if len(groups) > 1:
-        #         row.popover("MAT_PT_PaintSystemGroups",
-        #                     text="", icon="NODETREE")
-        #     row.operator("paint_system.new_group", icon='ADD', text="")
-        #     row.operator("wm.call_menu", text="",
-        #                  icon="REMOVE").name = "MAT_MT_DeleteGroupMenu"
-        # else:
-        #     row.popover("MAT_PT_Support", icon="FUND", text="Wah!")
-
-    # @classmethod
-    # def poll(cls, context):
-    #     ps_ctx = cls.parse_context(context)
-    #     return ps_ctx.ps_object is not None
-
     def draw_header(self, context):
-        layout = self.layout
-        layout.label(icon_value=get_icon("sunflower"))
+        self.layout.label(icon_value=get_icon("sunflower"))
 
     def draw(self, context):
         layout = self.layout
-        scene = context.scene
-        ps = scene.paint_system
+        obj = context.object
+        mat = obj.active_material if obj is not None else None
 
-        layout.operator("paint_system.create_tree", icon='ADD')
+        if mat is None or mat.paint_system.tree is None:
+            layout.operator("paint_system.setup_material", icon='ADD')
+            layout.separator()
+            layout.prop(context.scene.paint_system, "active_node_tree", text="Tree")
+        else:
+            row = layout.row(align=True)
+            row.label(text=mat.name, icon='MATERIAL')
+            row.prop(mat.paint_system, "tree", text="")
 
-        layout.separator()
-        layout.prop(ps, "active_node_tree", text="Tree")
-
-        tree = ps.active_node_tree
-        if tree is None or tree.bl_idname != 'PaintSystemNodeTree':
+        tree = get_active_tree(context)
+        if tree is None:
             return
 
         layout.separator()
-        layout.label(text="Channels:")
+        layout.label(text="Channels")
         _draw_channel_list(layout, tree)
+
+        layout.separator()
+        layout.label(text="Layers")
+        _draw_layer_stack(layout, tree)
+
+        layout.separator()
+        _draw_compiled_info(layout, tree)
 
 
 class PAINTSYSTEM_PT_main_node_editor(PaintSystemPanel):
@@ -110,8 +135,15 @@ class PAINTSYSTEM_PT_main_node_editor(PaintSystemPanel):
         layout = self.layout
         tree = context.space_data.edit_tree
 
-        layout.label(text="Channels:")
+        layout.label(text="Channels")
         _draw_channel_list(layout, tree)
+
+        layout.separator()
+        layout.label(text="Layers")
+        _draw_layer_stack(layout, tree)
+
+        layout.separator()
+        _draw_compiled_info(layout, tree)
 
 
 classes = (
