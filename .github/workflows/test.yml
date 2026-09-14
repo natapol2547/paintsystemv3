@@ -80,7 +80,7 @@ jobs:
             libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libice6
 
       - name: Blender version
-        run: "$BLENDER_DIR/blender" --version
+        run: '"$BLENDER_DIR/blender" --version'
 
       - name: Headless tests
         env:
