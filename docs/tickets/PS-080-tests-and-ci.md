@@ -4,27 +4,67 @@ Epic I. Size M. Milestone M1, extended by every later ticket.
 
 ## Current state
 
-`tests/smoke_compile.py` runs headless through `tests/run.sh` against
-Blender 5.2 LTS and covers the compiler core. `.github/workflows` has a
-v2-style matrix (`main.yml`, `pull_request.yml`) that must be re-pointed.
+The harness, the version matrix and the three base tests are in place.
+Each later ticket adds its own `tests/test_<feature>.py`.
 
-## Design
+- `tests/harness.py` registers the addon from the checkout (the checkout
+  folder name is the package name), exposes `VERSION`, `since()`,
+  `before()`, `check`, `section`, `guarded`, `import_from` and `finish`
+  (exits with a status in both background and windowed sessions).
+- `tests/test_compile.py` covers the compiler core.
+- `tests/test_api_surface.py` lists every Blender class, RNA property,
+  RNA function, operator and `gpu` entry point the addon relies on
+  (including the `bl_ui.properties_paint_common` panels the sidebar
+  reuses) and checks that each still resolves, with `since`/`until`
+  gates for known renames. It also scans the addon sources for
+  `bpy.types.X`, `bpy.ops.x.y`, `bpy.app.handlers.x` and `bl_ui.x`
+  references and resolves each of them, so a new dependency is checked
+  without editing the list.
+- `tests/test_ui_draw.py` runs windowed (Xvfb on CI). It wraps the
+  `draw`, `draw_header`, `draw_item` and `poll` methods of every class the
+  addon registers with same-signature recorders, builds a painted cube,
+  opens the 3D view, node editor and image editor sidebars, moves the
+  addon's sidebar panels onto the active tab, opens popover panels
+  through `wm.call_panel` and fails on any exception. Blender swallows
+  draw exceptions, so this is the only test that catches a broken panel.
+- `tests/run.sh [--ui] [test files]` drives all of the above.
+  `BLENDER` selects the executable; `XVFB=1` forces the UI test through
+  `xvfb-run` with Mesa software rendering and the OpenGL backend.
+  `--python-exit-code 1` makes an uncaught script exception fail the run.
 
-- Split `tests/` into `test_compiler.py`, `test_stack.py`,
-  `test_layers_<type>.py`, `test_ui_ops.py`, `test_migration.py`, sharing
-  `tests/harness.py` (register addon, `check`, `section`, pixel helpers,
-  `render_pixel(obj, uv)` that bakes a 1x1 patch through
-  `bake_refs_to_image` for blend parity tests).
-- `tests/run.sh` accepts a file glob; CI downloads Blender 5.2 LTS with
-  the existing workflow's download step and runs all tests with
-  `--factory-startup -b`. GPU filter tests (PS-050) are marked and
-  skipped when `gpu.platform.backend_type_get() == 'NONE'`.
+## CI
+
+- `.github/resolve-blender.py` reads `blender_version_min` from the
+  manifest, finds the latest patch of every series from there to the newest
+  stable on download.blender.org, and adds the daily build of the next
+  unreleased series (marked `experimental`).
+- `.github/workflows/test.yml` runs on push, pull request, weekly and on
+  demand. One job per Blender version: download (cached per release),
+  headless tests, UI draw test under Xvfb, then `extension validate`,
+  `build`, `install-file` and an enable check of the built package.
+  Experimental builds may fail without failing the workflow. A weekly
+  failure opens or updates an issue labelled `ci-compat`.
+- `.github/workflows/release.yml` (manual, with a release stage) reuses
+  the test workflow, builds the package with the minimum supported Blender
+  and creates a draft GitHub release.
+
+## Design for feature tests
+
+- Split by feature: `test_stack.py`, `test_layers_<type>.py`,
+  `test_ui_ops.py`, `test_migration.py`, sharing pixel helpers in the
+  harness (`render_pixel(obj, uv)` bakes a 1x1 patch through
+  `bake_refs_to_image` for blend tests).
+- GPU filter tests (PS-050) are skipped when
+  `gpu.platform.backend_type_get() == 'NONE'`.
 - v2 parity tests (PS-001, PS-013, PS-070) install the v2 addon from
   `~/paintsystem` into the same Blender in a separate process and dump
   reference pixels to `tests/fixtures/`; the fixtures are committed so CI
   does not need v2.
+- New panels are picked up by `test_ui_draw.py` automatically; panels
+  outside the three editors need an explicit open step there.
 
 ## Acceptance
 
 - `tests/run.sh` runs all files and exits non-zero on any failure.
-- CI green on push.
+- The test matrix is green on push for every supported Blender series.
+- A release cannot be built while the matrix fails.

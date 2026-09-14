@@ -15,6 +15,11 @@ Guiding constraints for every ticket:
   appended from `library2.blend` (PS-002).
 - Every port is an opportunity to simplify. Tickets note what v2 did badly
   and what the v3 version should do instead.
+- Blender 4.2 LTS and newer are supported (`blender_version_min` in the
+  manifest). Version-dependent API goes through `common.is_newer_than`
+  with a fallback for the older path. CI runs the tests against the
+  latest patch of every supported series plus the next alpha (PS-080), so
+  a ticket is not done until the matrix is green.
 
 ## Milestones
 

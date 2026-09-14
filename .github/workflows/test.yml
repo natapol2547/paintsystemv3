@@ -1,0 +1,142 @@
+# Test the addon against the latest patch release of every supported
+# Blender series (blender_version_min in blender_manifest.toml up to the
+# newest stable) plus the daily build of the next, unreleased series.
+#
+# Runs on push and pull request, weekly on a schedule so upstream API
+# changes are caught between commits, and as a reusable workflow for
+# release.yml.
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  matrix:
+    name: Resolve Blender builds
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+      min_version: ${{ steps.resolve.outputs.min_version }}
+      max_version: ${{ steps.resolve.outputs.max_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve latest patch of each series
+        id: resolve
+        run: |
+          python .github/resolve-blender.py --pretty
+          python .github/resolve-blender.py >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Blender ${{ matrix.version }}
+    needs: matrix
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
+    env:
+      BLENDER_DIR: ${{ github.workspace }}/.blender/${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The folder name becomes the Python package name in tests.
+          path: paint_system
+
+      - name: Cache Blender ${{ matrix.version }}
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BLENDER_DIR }}
+          # Daily builds change under the same version string; keep the
+          # cache for release archives only.
+          key: blender-linux-x64-${{ matrix.version }}-${{ matrix.experimental && github.run_id || 'release' }}
+
+      - name: Download Blender ${{ matrix.version }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL --fail --retry 3 -o blender.tar.xz "${{ matrix.url }}"
+          mkdir -p "$BLENDER_DIR"
+          tar -xf blender.tar.xz -C "$BLENDER_DIR" --strip-components=1
+          rm blender.tar.xz
+
+      - name: Install display and GL libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            xvfb libgl1 libegl1 libgl1-mesa-dri libglu1-mesa \
+            libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libice6
+
+      - name: Blender version
+        run: "$BLENDER_DIR/blender" --version
+
+      - name: Headless tests
+        env:
+          BLENDER: ${{ env.BLENDER_DIR }}/blender
+        run: paint_system/tests/run.sh
+
+      - name: UI draw test (Xvfb)
+        env:
+          BLENDER: ${{ env.BLENDER_DIR }}/blender
+          XVFB: '1'
+        run: paint_system/tests/run.sh --ui test_ui_draw.py
+
+      - name: Validate, build and install the extension package
+        run: |
+          B="$BLENDER_DIR/blender"
+          "$B" --background --command extension validate paint_system
+          mkdir -p dist
+          "$B" --background --command extension build \
+            --source-dir paint_system --output-dir dist
+          ZIP=$(ls dist/*.zip | head -1)
+          "$B" --background --command extension install-file --repo user_default --enable "$ZIP"
+          "$B" --background --factory-startup --python-exit-code 1 --python-expr "
+          import bpy
+          bpy.ops.preferences.addon_enable(module='bl_ext.user_default.paint_system')
+          assert 'bl_ext.user_default.paint_system' in bpy.context.preferences.addons, 'extension did not enable'
+          print('extension enabled from package')
+          "
+
+      - name: Upload crash logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.version }}
+          path: |
+            /tmp/*.crash.txt
+            /tmp/blender*.txt
+          if-no-files-found: ignore
+
+  report:
+    name: Report scheduled failure
+    needs: [matrix, test]
+    if: always() && github.event_name == 'schedule' && needs.test.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open or update the compatibility issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="Blender compatibility check failed"
+          BODY="The weekly test matrix failed against the latest Blender builds. See $RUN_URL"
+          NUM=$(gh issue list --label ci-compat --state open --json number --jq '.[0].number')
+          if [ -z "$NUM" ]; then
+            gh label create ci-compat --description "Automated Blender compatibility failures" --color d73a4a || true
+            gh issue create --title "$TITLE" --label ci-compat --body "$BODY"
+          else
+            gh issue comment "$NUM" --body "$BODY"
+          fi

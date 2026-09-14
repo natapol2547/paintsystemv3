@@ -61,8 +61,19 @@ color and alpha into the cache image, then stores the subtree hash.
 ## Testing
 
 ```
-tests/run.sh          # headless smoke test against Blender 5.2 LTS
+tests/run.sh                        # headless tests (tests/test_*.py)
+tests/run.sh --ui                   # plus the windowed UI draw test
+BLENDER=/path/to/blender tests/run.sh   # another Blender build
 ```
+
+`tests/harness.py` registers the addon from the checkout and provides
+`check`/`section`/`finish`. `test_compile.py` covers the compiler,
+`test_api_surface.py` asserts that every Blender class, property and
+operator the addon depends on still exists, and `test_ui_draw.py` draws
+every panel in a real window (Xvfb on CI) and fails on draw exceptions.
+`.github/workflows/test.yml` runs all of this against the latest patch of
+every supported Blender series; `release.yml` builds the package only after
+that matrix passes. See PS-080.
 
 ## Port backlog
 
