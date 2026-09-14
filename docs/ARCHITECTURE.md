@@ -63,3 +63,10 @@ color and alpha into the cache image, then stores the subtree hash.
 ```
 tests/run.sh          # headless smoke test against Blender 5.2 LTS
 ```
+
+## Port backlog
+
+The feature port from v2 is tracked in `docs/BACKLOG.md` with one ticket
+per task under `docs/tickets/`. Tickets that extend the rules above
+(artifact-owned parameter nodes, IR drivers, folder nodes) update this
+document when they land.
