@@ -1,6 +1,6 @@
-"""Headless smoke test for the compile-based architecture.
+"""Headless test for the compile-based architecture.
 
-Run:  blender -b --factory-startup --python tests/smoke_compile.py
+Run:  blender -b --factory-startup --python tests/test_compile.py
 """
 import os
 import sys
@@ -8,33 +8,20 @@ import traceback
 
 import bpy
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(REPO))
-PACKAGE = os.path.basename(REPO)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from harness import check, section, register_addon, import_from, finish  # noqa: E402
 
-addon = __import__(PACKAGE)
-addon.register()
+register_addon()
 
-from paintsystemv3.compiler.core import (  # noqa: E402
-    compile_tree, build_ir, flush, mark_dirty, normalize_tree, cleanup_orphan_artifacts,
-)
-from paintsystemv3.compiler import library  # noqa: E402
-from paintsystemv3.compiler.bake import bake_node_cache  # noqa: E402
-from paintsystemv3.ops.node_tree_ops import link_tree_to_material  # noqa: E402
-
-
-failures = []
-
-
-def check(cond, msg):
-    status = "ok  " if cond else "FAIL"
-    print(f"  [{status}] {msg}")
-    if not cond:
-        failures.append(msg)
-
-
-def section(title):
-    print(f"\n== {title}")
+_core = import_from("compiler.core")
+compile_tree = _core.compile_tree
+flush = _core.flush
+mark_dirty = _core.mark_dirty
+normalize_tree = _core.normalize_tree
+cleanup_orphan_artifacts = _core.cleanup_orphan_artifacts
+library = import_from("compiler.library")
+bake_node_cache = import_from("compiler.bake").bake_node_cache
+link_tree_to_material = import_from("ops.node_tree_ops").link_tree_to_material
 
 
 def compiled_nodes(tree, bl_idname):
@@ -210,12 +197,6 @@ try:
 
 except Exception:
     traceback.print_exc()
-    failures.append("exception")
+    check(False, "exception")
 
-print()
-if failures:
-    print(f"SMOKE TEST FAILED ({len(failures)}):")
-    for f in failures:
-        print(f"  - {f}")
-    sys.exit(1)
-print("SMOKE TEST PASSED")
+finish("COMPILE TEST")
