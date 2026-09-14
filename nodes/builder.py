@@ -122,7 +122,9 @@ class NodeTreeBuilder:
             name: Display name of the socket.
             **kwargs: Properties to force-apply to the socket on every build.
         """
-        if not self.node_tree.bl_use_group_interface:
+        # bl_use_group_interface exists from Blender 4.3; earlier versions
+        # give every node tree an interface.
+        if not getattr(self.node_tree, "bl_use_group_interface", True):
             raise ValueError("Node tree does not use group interface")
         self._socket_instructions.append(
             SocketInstruction(

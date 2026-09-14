@@ -99,6 +99,31 @@ def get_next_unique_name(name: str, list_of_names: list[str]) -> str:
     return f"{base_name} {next_number}"
 
 
+def unique_name_kwargs(set_transform):
+    """Keyword arguments for a unique-name ``StringProperty``.
+
+    ``set_transform`` exists from Blender 5.0. Older versions get no
+    transform; callers fall back to ``ensure_unique_name`` in ``update``.
+    """
+    if is_newer_than(5, 0):
+        return {'set_transform': set_transform}
+    return {}
+
+
+def ensure_unique_name(self, dataptr, propname):
+    """Rename *self* if its name clashes with a sibling (pre-5.0 fallback).
+
+    Assigning ``self.name`` re-enters the property's ``update`` once; the
+    second pass finds the name unique and stops.
+    """
+    siblings = [item.name for item in getattr(dataptr, propname) if item != self]
+    unique = get_next_unique_name(self.name, siblings)
+    if unique != self.name:
+        self.name = unique
+        return True
+    return False
+
+
 def transform_unique_name(self, dataptr, propname, new_value, curr_value, is_set):
     """Shared `set_transform` for name properties on PaintSystemNodeTree members.
 

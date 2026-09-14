@@ -3,7 +3,7 @@ import uuid
 import bpy
 from bpy.props import StringProperty, EnumProperty
 
-from ..common import transform_unique_name
+from ..common import transform_unique_name, unique_name_kwargs, ensure_unique_name, is_newer_than
 
 
 CHANNEL_SOCKET_TYPES = [
@@ -54,8 +54,11 @@ def _set_name_transform(self, new_value, curr_value, is_set):
 
 def _on_channel_changed(self, context):
     tree = self.id_data
-    if tree is not None and tree.bl_idname == 'PaintSystemNodeTree':
-        tree.on_channels_changed()
+    if tree is None or tree.bl_idname != 'PaintSystemNodeTree':
+        return
+    if not is_newer_than(5, 0) and ensure_unique_name(self, tree, 'channels'):
+        return  # the rename re-entered this callback and already refreshed
+    tree.on_channels_changed()
 
 
 class PaintSystemChannel(bpy.types.PropertyGroup):
@@ -63,7 +66,7 @@ class PaintSystemChannel(bpy.types.PropertyGroup):
         name="Name",
         default="Channel",
         update=_on_channel_changed,
-        set_transform=_set_name_transform,
+        **unique_name_kwargs(_set_name_transform),
     )
     type: EnumProperty(
         name="Type",

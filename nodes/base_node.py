@@ -2,12 +2,16 @@ import uuid
 
 from bpy.props import StringProperty
 
-from ..common import transform_unique_name
+from ..common import transform_unique_name, unique_name_kwargs
 from ..compiler.core import mark_dirty
 
 
 def _set_name_transform(self, new_value, curr_value, is_set):
     return transform_unique_name(self, self.id_data, 'nodes', new_value, curr_value, is_set)
+
+
+# Before Blender 5.0 there is no set_transform; node names are still unique
+# because Blender itself de-duplicates names inside a node tree.
 
 
 def mark_tree_dirty(self, context=None):
@@ -23,7 +27,7 @@ class PaintSystemBaseNode:
     """
     uuid: StringProperty(name="UUID")
     name: StringProperty(name="Name", default="",
-                         set_transform=_set_name_transform)
+                         **unique_name_kwargs(_set_name_transform))
 
     is_layer_node = False
 
