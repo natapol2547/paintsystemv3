@@ -1,10 +1,21 @@
 from __future__ import annotations
 
-import bpy
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
-from bpy.props import IntProperty, StringProperty
+
+import bpy
+
+log = logging.getLogger(__name__)
+
+# Custom ID property that tags each artifact node with the identifier the
+# builder emitted it under, so rebuilds can reuse nodes across renames.
+IDENTIFIER_KEY = "ps_identifier"
+
+
+def node_identifier(node) -> str:
+    return node.get(IDENTIFIER_KEY) or node.name
 
 
 # ── Layout constants ─────────────────────────────────────────────────
@@ -173,7 +184,7 @@ class NodeTreeBuilder:
             is_new = node is None
             if is_new:
                 node = self.node_tree.nodes.new(instr.bl_idname)
-                node.ps_identifier = identifier
+                node[IDENTIFIER_KEY] = identifier
                 self._existing_nodes[identifier] = node
                 self._newly_created.add(identifier)
 
@@ -182,12 +193,11 @@ class NodeTreeBuilder:
             self._apply_socket_properties(node.outputs, instr.outputs, is_new)
 
             for attr_name, props in instr.specials.items():
-                print(f"Applying special {attr_name} to node {node.name}")
                 sub_obj = getattr(node, attr_name, None)
                 if sub_obj is not None:
                     self._apply_props_recursive(sub_obj, props, is_new)
                 else:
-                    print(f"Special {attr_name} not found on node {node.name}")
+                    log.warning("special %s not found on node %s", attr_name, node.name)
 
         # Remove excess links
         desired_link_keys = self._build_desired_link_keys()
@@ -280,7 +290,7 @@ class NodeTreeBuilder:
 
     def _hydrate_existing_nodes(self) -> None:
         for node in self.node_tree.nodes:
-            identifier = node.ps_identifier if node.ps_identifier else node.name
+            identifier = node_identifier(node)
             self._existing_nodes[identifier] = node
 
     # ── Helpers ──────────────────────────────────────────────────────
@@ -429,7 +439,7 @@ class NodeTreeBuilder:
         return False
 
     def _get_node_identifier(self, node: bpy.types.Node) -> str:
-        return node.ps_identifier if node.ps_identifier else node.name
+        return node_identifier(node)
 
     # ── Arrangement ──────────────────────────────────────────────────
 
@@ -1143,10 +1153,8 @@ class NodeTreeBuilder:
                 for cid in cluster:
                     self._existing_nodes[cid].location.x += shift_amount
 
-        print(
-            "[NodeTreeBuilder.arrange_nodes] overlap resolution did not "
-            f"converge after {max_iter} iterations",
-        )
+        log.debug("arrange_nodes: overlap resolution did not converge after %d iterations",
+                  max_iter)
 
     def _place_orphan_group(
         self, members: list[str], positioned_ids: set[str],
@@ -1210,15 +1218,3 @@ def _resolve_socket_index(
         if s.name == socket_id:
             return i
     raise ValueError(f"Socket name '{socket_id}' not found")
-
-
-# ── Registration ─────────────────────────────────────────────────────
-
-
-def register():
-    bpy.types.Node.ps_identifier = StringProperty(
-        name="Identifier", default="")
-
-
-def unregister():
-    del bpy.types.Node.ps_identifier

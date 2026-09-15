@@ -12,6 +12,20 @@ from .core import (
 from .ir import IR, Ref
 from . import core as _core
 
+__all__ = (
+    "compile_tree",
+    "build_ir",
+    "mark_dirty",
+    "flush_now",
+    "suspend_compile",
+    "ps_trees",
+    "cleanup_orphan_artifacts",
+    "normalize_tree",
+    "CompileContext",
+    "IR",
+    "Ref",
+)
+
 
 def register():
     _core.reset_state()

@@ -9,7 +9,7 @@ Blender is idle. A tree is only rewritten when its IR fingerprint changes.
 """
 from __future__ import annotations
 
-import traceback
+import logging
 import uuid as _uuid
 from typing import Any, Iterable
 
@@ -18,6 +18,7 @@ import bpy
 from .ir import IR, Ref, SocketId, hash_payload, _serialize
 from ..props.channel import channel_socket_specs
 
+log = logging.getLogger(__name__)
 
 PS_TREE_ID = 'PaintSystemNodeTree'
 ARTIFACT_OWNER_KEY = "ps_owner"
@@ -360,7 +361,7 @@ def mark_dirty(tree=None) -> None:
             bpy.app.timers.register(flush, first_interval=0.0)
         except Exception:
             # Can fail during addon unregister; nothing to schedule then.
-            pass
+            log.debug("could not schedule compile flush", exc_info=True)
 
 
 def flush() -> None:
@@ -379,8 +380,7 @@ def flush() -> None:
         try:
             compile_tree(tree)
         except Exception:
-            print(f"Paint System: failed to compile '{tree.name}'")
-            traceback.print_exc()
+            log.exception("failed to compile '%s'", tree.name)
     return None
 
 

@@ -1,7 +1,14 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+import logging
 
 import bpy
 
+log = logging.getLogger(__name__)
+
+# (KeyMap, KeyMapItem) pairs this addon created in the addon keyconfig.
+# Only these are removed on unregister; user and default keymaps are
+# never touched.
 addon_keymaps = []
 
 
@@ -27,8 +34,8 @@ def add_keymap_entry(
         for prop, prop_value in properties.items():
             try:
                 setattr(kmi.properties, prop, prop_value)
-            except Exception:
-                pass
+            except (AttributeError, TypeError):
+                log.warning("keymap %s: cannot set %s on %s", name, prop, idname)
     addon_keymaps.append((km, kmi))
 
 
@@ -44,22 +51,10 @@ def find_keymap(keymap_name):
     return None
 
 
-def find_keymap_by_name(keymap_name) -> list[bpy.types.KeyMapItem]:
-    wm = bpy.context.window_manager
-    kc = wm.keyconfigs.user
-    if kc:
-        for km in kc.keymaps:
-            if km:
-                for kmi in km.keymap_items:
-                    if kmi.name == keymap_name:
-                        return kmi
-    return None
-
-
 def unregister_keymap_entries():
     for km, kmi in addon_keymaps:
         try:
             km.keymap_items.remove(kmi)
-        except Exception:
-            pass
+        except (ReferenceError, RuntimeError):
+            log.debug("keymap item already gone", exc_info=True)
     addon_keymaps.clear()

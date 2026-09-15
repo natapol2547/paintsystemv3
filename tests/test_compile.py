@@ -78,7 +78,7 @@ try:
     fp3 = compile_tree(tree)
     check(fp3 != fp2, "fingerprint changes with opacity")
     blend = art.nodes.get(f"{img_layer.uuid}:blend") or next(
-        n for n in art.nodes if n.ps_identifier == f"{img_layer.uuid}:blend")
+        n for n in art.nodes if n.get("ps_identifier") == f"{img_layer.uuid}:blend")
     check(abs(blend.inputs['Opacity'].default_value - 0.5) < 1e-6, "opacity written into blend instance")
     after2 = {n.name: n.as_pointer() for n in art.nodes}
     check(after == after2, "property change patches in place (no recreation)")
@@ -126,7 +126,7 @@ try:
     tree.links.new(group.outputs['Color'], gout.inputs['Color'])
     fp_before_child = compile_tree(tree)
     check(child.compiled is not None, "child compiled on demand")
-    ginst = next(n for n in art.nodes if n.ps_identifier == f"{group.uuid}:group")
+    ginst = next(n for n in art.nodes if n.get("ps_identifier") == f"{group.uuid}:group")
     check(ginst.node_tree == child.compiled, "parent instances child's artifact")
     child_solid.fill_color = (0.0, 0.0, 1.0, 1.0)
     child_fp = child.compiled_hash
@@ -171,11 +171,11 @@ try:
     check(baked is not None and img_layer.cache_hash != "", "bake produced image + hash")
     img_layer.cache_enabled = True
     compile_tree(tree)
-    check(not any(n.ps_identifier == f"{img_layer.uuid}:blend" for n in art.nodes),
+    check(not any(n.get("ps_identifier") == f"{img_layer.uuid}:blend" for n in art.nodes),
           "cached layer: blend removed from artifact")
-    check(not any(n.ps_identifier == f"{solid.uuid}:blend" for n in art.nodes),
+    check(not any(n.get("ps_identifier") == f"{solid.uuid}:blend" for n in art.nodes),
           "cached layer: upstream layer not compiled")
-    cache_tex = next(n for n in art.nodes if n.ps_identifier == f"{img_layer.uuid}:cache")
+    cache_tex = next(n for n in art.nodes if n.get("ps_identifier") == f"{img_layer.uuid}:cache")
     check(cache_tex.image == baked, "cache image texture emitted")
     px = [0.0] * (32 * 32 * 4)
     baked.pixels.foreach_get(px)
@@ -185,7 +185,7 @@ try:
     solid.fill_color = (0.2, 0.2, 0.2, 1.0)
     compile_tree(tree)
     check(img_layer.cache_stale, "upstream edit invalidates cache")
-    check(any(n.ps_identifier == f"{img_layer.uuid}:blend" for n in art.nodes),
+    check(any(n.get("ps_identifier") == f"{img_layer.uuid}:blend" for n in art.nodes),
           "stale cache falls back to live graph")
 
     section("cleanup")

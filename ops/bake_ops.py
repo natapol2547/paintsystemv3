@@ -1,4 +1,3 @@
-import bpy
 from bpy.types import Operator
 from bpy.props import EnumProperty, IntProperty, StringProperty
 from bpy.utils import register_classes_factory

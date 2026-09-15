@@ -1,4 +1,3 @@
-import bpy
 from typing import Literal
 
 

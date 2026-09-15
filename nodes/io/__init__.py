@@ -1,4 +1,3 @@
-import bpy
 from bpy.utils import register_submodule_factory
 
 submodules = (
