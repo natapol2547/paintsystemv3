@@ -4,14 +4,26 @@ Epic I. Size M. Milestone M1, extended by every later ticket.
 
 ## Current state
 
-The harness, the version matrix and the three base tests are in place.
+The harness, the version matrix and the base tests are in place.
 Each later ticket adds its own `tests/test_<feature>.py`.
 
 - `tests/harness.py` registers the addon from the checkout (the checkout
   folder name is the package name), exposes `VERSION`, `since()`,
   `before()`, `check`, `section`, `guarded`, `import_from` and `finish`
   (exits with a status in both background and windowed sessions).
-- `tests/test_compile.py` covers the compiler core.
+  Pixel helpers: `bake_group(node_group, inputs=...)` Cycles-bakes a
+  shader group's colour and alpha on a unit plane whose UVs span 0..1,
+  `pixel_at(rgba, u, v)` reads the texel under a UV, `close` and `fmt`
+  compare and print colours.
+- `tests/test_compile.py` covers the compiler core, including
+  synchronous compiles, `suspend_compile` batching and blocking.
+- `tests/test_smoke_loop.py` drives the operators end to end: setup,
+  add layers, painted pixels through the compiled group, save and reload
+  with packing, undo and redo of setup, add and remove (including the
+  double-push pattern where memfile undo reuses in-memory datablocks).
+  Script-called operators pass `('EXEC_DEFAULT', True)` to get the undo
+  push the UI would make, and background sessions need one explicit
+  `ed.undo_push()` before undo works.
 - `tests/test_api_surface.py` lists every Blender class, RNA property,
   RNA function, operator and `gpu` entry point the addon relies on
   (including the `bl_ui.properties_paint_common` panels the sidebar
@@ -57,9 +69,8 @@ Each later ticket adds its own `tests/test_<feature>.py`.
 ## Design for feature tests
 
 - Split by feature: `test_stack.py`, `test_layers_<type>.py`,
-  `test_ui_ops.py`, `test_migration.py`, sharing pixel helpers in the
-  harness (`render_pixel(obj, uv)` bakes a 1x1 patch through
-  `bake_refs_to_image` for blend tests).
+  `test_ui_ops.py`, `test_migration.py`, sharing the harness pixel
+  helpers (`bake_group`, `pixel_at`) for blend tests.
 - GPU filter tests (PS-050) are skipped when
   `gpu.platform.backend_type_get() == 'NONE'`.
 - v2 parity tests (PS-001, PS-013, PS-070) install the v2 addon from

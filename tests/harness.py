@@ -81,6 +81,109 @@ def guarded(fn):
         _failures.append(f"exception in {getattr(fn, '__name__', fn)}")
 
 
+# ── Pixel sampling ───────────────────────────────────────────────────
+
+BAKE_PLANE_NAME = "PS Test Bake Plane"
+
+
+def bake_plane():
+    """A unit plane whose UV map covers 0..1 exactly, created on first use.
+
+    Pixel (u, v) of a bake maps to the same (u, v) of any image layer that
+    uses the default UV map, so tests can check where paint lands.
+    """
+    obj = bpy.data.objects.get(BAKE_PLANE_NAME)
+    if obj is not None:
+        return obj
+    mesh = bpy.data.meshes.new(BAKE_PLANE_NAME)
+    mesh.from_pydata([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], [], [(0, 1, 2, 3)])
+    uv = mesh.uv_layers.new(name="UVMap")
+    for loop, co in zip(uv.data, ((0, 0), (1, 0), (1, 1), (0, 1))):
+        loop.uv = co
+    obj = bpy.data.objects.new(BAKE_PLANE_NAME, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def bake_group(node_group, *, color="Color", alpha="Color Alpha", inputs=None, size=8):
+    """Bake a shader group's colour and alpha outputs on the bake plane.
+
+    Returns ``size * size`` RGBA rows (linear values, row-major from the
+    bottom-left). ``inputs`` sets unlinked group node input values by name.
+    """
+    import numpy as np
+
+    obj = bake_plane()
+    scene = bpy.context.scene
+    view_layer = bpy.context.view_layer
+    mat = bpy.data.materials.new("PS Test Bake")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nt.nodes.clear()
+    group = nt.nodes.new('ShaderNodeGroup')
+    group.node_tree = node_group
+    for name, value in (inputs or {}).items():
+        group.inputs[name].default_value = value
+    emission = nt.nodes.new('ShaderNodeEmission')
+    output = nt.nodes.new('ShaderNodeOutputMaterial')
+    nt.links.new(emission.outputs['Emission'], output.inputs['Surface'])
+    target = nt.nodes.new('ShaderNodeTexImage')
+    nt.nodes.active = target
+    obj.data.materials.clear()
+    obj.data.materials.append(mat)
+
+    images = []
+    for name in (color, alpha):
+        image = bpy.data.images.new(f"PS Test Bake {name}", size, size, alpha=True, float_buffer=True)
+        image.colorspace_settings.name = 'Non-Color'
+        images.append(image)
+
+    scene.render.engine = 'CYCLES'
+    scene.cycles.samples = 1
+    scene.cycles.device = 'CPU'
+    scene.render.bake.target = 'IMAGE_TEXTURES'
+    scene.render.bake.margin = 0
+    try:
+        for o in view_layer.objects:
+            o.select_set(o == obj)
+        view_layer.objects.active = obj
+        with bpy.context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
+            for socket, image in zip((color, alpha), images):
+                for link in list(emission.inputs['Color'].links):
+                    nt.links.remove(link)
+                nt.links.new(group.outputs[socket], emission.inputs['Color'])
+                target.image = image
+                bpy.ops.object.bake(type='EMIT')
+        px = []
+        for image in images:
+            buf = np.empty(size * size * 4, dtype=np.float32)
+            image.pixels.foreach_get(buf)
+            px.append(buf.reshape(size * size, 4))
+        rgba = px[0].copy()
+        rgba[:, 3] = px[1][:, 0]
+        return rgba
+    finally:
+        obj.data.materials.clear()
+        bpy.data.materials.remove(mat)
+        for image in images:
+            bpy.data.images.remove(image)
+
+
+def pixel_at(rgba, u, v, size=8):
+    """The baked pixel nearest to UV ``(u, v)`` as a tuple of four floats."""
+    x = min(int(u * size), size - 1)
+    y = min(int(v * size), size - 1)
+    return tuple(float(c) for c in rgba[y * size + x])
+
+
+def close(a, b, tol=0.02):
+    return len(a) == len(b) and all(abs(x - y) <= tol for x, y in zip(a, b))
+
+
+def fmt(values):
+    return "(" + ", ".join(f"{v:.3f}" for v in values) + ")"
+
+
 def summary(name):
     print()
     print(f"Blender {bpy.app.version_string}, {_checks} checks")

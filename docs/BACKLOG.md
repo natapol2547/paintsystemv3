@@ -60,7 +60,7 @@ Slices, in order. Each ends playable, is committed, and keeps CI green.
 
 | Slice | Scope | Tickets (demo part only) |
 |---|---|---|
-| 1 Smoke the existing loop | Paint updates the viewport through the compiled group; pixels survive save and reload; undo after add/remove layer leaves a valid artifact. Fix what breaks | – |
+| 1 Smoke the existing loop (done) | Paint updates the viewport through the compiled group; pixels survive save and reload; undo after add/remove layer leaves a valid artifact. Fix what breaks. Found and fixed: compiles on a timer left stale artifacts after undo (now synchronous), node `name` shadowing broke layer lookup before 5.2, msgbus rename subscription lost on file load. `tests/test_smoke_loop.py` | – |
 | 2 Correct compositing | W3C blend groups with the Clip input; pixel sampling helper in `tests/harness.py`; MIX over transparent and half-transparent backdrops and the W3C property test. v2 comparison fixtures come later | 001 |
 | 3 Stack model | `stack()` walk, `nodetree/stack_ops.py`, folder node; `PSContext`; `lock_layer` and `lock_alpha` (no warnings API yet) | 010, 030, 019 |
 | 4 Layers panel | Row view model with indentation and folder collapse; move up/down with folders; registry and Add Layer menu for Folder, Image, Solid; layer settings for blend, opacity and image | 011, 012, 029, 034, 035 |
