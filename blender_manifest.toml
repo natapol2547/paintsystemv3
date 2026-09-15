@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "paint_system"
-version = "3.0.0-beta.1"
+version = "3.0.0"
 name = "Paint System"
 tagline = "Layer-based texture painting with channels, masks and filters"
 maintainer = "Tawan Sunflower"
