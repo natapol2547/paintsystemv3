@@ -1,7 +1,5 @@
-import bpy
-
 from bpy.types import AddonPreferences
-from bpy.props import BoolProperty, FloatProperty, IntProperty, EnumProperty
+from bpy.props import BoolProperty, FloatProperty, EnumProperty
 from bpy.utils import register_classes_factory
 
 from .common import ADDON_ID
@@ -9,7 +7,6 @@ from .keymaps.common import find_keymap
 
 
 class PaintSystemPreferences(AddonPreferences):
-    """Demo bare-bones preferences"""
     bl_idname = ADDON_ID
 
     show_tooltips: BoolProperty(
@@ -79,12 +76,6 @@ class PaintSystemPreferences(AddonPreferences):
         default=False
     )
 
-    use_legacy_ui: BoolProperty(
-        name="Use Legacy UI",
-        description="Use the legacy UI",
-        default=False
-    )
-
     use_panel_quick_access: BoolProperty(
         name="Use Panel Quick Access",
         description="Use the panel quick access",
@@ -112,51 +103,6 @@ class PaintSystemPreferences(AddonPreferences):
         name="Show Brush Controls (RMB)",
         description="Show brush radius/strength controls in the Texture Paint right-click popover",
         default=True
-    )
-
-    loading_donations: BoolProperty(
-        name="Loading Donations",
-        description="Loading donations",
-        default=False,
-        options={'SKIP_SAVE'}
-    )
-
-    # Version check settings
-    version_check_interval_days: IntProperty(
-        name="Version Check Interval (Days)",
-        description="Days between version checks",
-        default=1,
-        min=0,
-        soft_max=30
-    )
-
-    version_check_interval_hours: IntProperty(
-        name="Version Check Interval (Hours)",
-        description="Hours between version checks",
-        default=0,
-        min=0,
-        soft_max=23
-    )
-
-    version_check_interval_minutes: IntProperty(
-        name="Version Check Interval (Minutes)",
-        description="Minutes between version checks",
-        default=0,
-        min=0,
-        soft_max=59
-    )
-
-    update_state: EnumProperty(
-        name='Update State',
-        description='Extension update state',
-        items=(
-            ('UNAVAILABLE', 'Unavailable', ''),
-            ('AVAILABLE', 'Available', ''),
-            ('LOADING', 'Loading', ''),
-            ("ERROR", 'Error', '')
-        ),
-        default='UNAVAILABLE',
-        options={'SKIP_SAVE'}
     )
 
     def draw_shortcut(self, layout, kmi, text):
@@ -191,11 +137,8 @@ class PaintSystemPreferences(AddonPreferences):
         layout.prop(self, "use_compact_design", text="Use Compact Design")
         layout.prop(self, "show_opacity_in_layer_list",
                     text="Show Opacity in Layer List")
-        layout.prop(self, "use_legacy_ui", text="Use Legacy UI")
         layout.prop(self, "use_panel_quick_access",
                     text="Use Panel Quick Access")
-        # layout.prop(self, "name_layers_group",
-        #             text="Name Layers According to Group Name")
 
         dev_box = layout.box()
         dev_box.label(text="Advanced", icon='PREFERENCES')
@@ -207,28 +150,10 @@ class PaintSystemPreferences(AddonPreferences):
         rmb_box.prop(self, "color_picker_scale_rmb", text="Color Wheel Scale")
         rmb_box.prop(self, "show_hsv_sliders_rmb",
                      text="Show HSV sliders in RMB popover")
-        # rmb_box.prop(self, "show_active_palette_rmb", text="Show Active Palette in RMB popover")
+        rmb_box.prop(self, "show_active_palette_rmb",
+                     text="Show Active Palette in RMB popover")
         rmb_box.prop(self, "show_brush_settings_rmb",
                      text="Show Brush Controls in RMB popover")
-
-        # Version check settings
-        from .common import is_online
-        if is_online():
-            box = layout.box()
-            row = box.row()
-            row.operator("paint_system.check_for_updates",
-                         text="", icon='FILE_REFRESH')
-            # latest_version = get_latest_version()
-            latest_version = None
-            if latest_version:
-                row.label(text=f"Latest Version: {latest_version}")
-            else:
-                row.label(text="Failed to check latest version")
-            box.label(text="Version Check Interval:")
-            row = box.row()
-            row.prop(self, "version_check_interval_days", text="Days")
-            row.prop(self, "version_check_interval_hours", text="Hours")
-            row.prop(self, "version_check_interval_minutes", text="Minutes")
 
         box = layout.box()
         box.label(text="Paint System Shortcuts:")

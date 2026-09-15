@@ -14,23 +14,6 @@
 from bpy.utils import register_submodule_factory
 
 from .custom_icons import load_icons, unload_icons
-from .handlers import register as register_handlers, unregister as unregister_handlers
-
-bl_info = {
-    "name": "Paint System",
-    "author": "Tawan Sunflower, @blastframe",
-    "description": "",
-    "blender": (4, 2, 0),
-    "version": (3, 0, 0),
-    "location": "View3D > Sidebar > Paint System",
-    "warning": "",
-    "category": "Paint",
-    "support": "COMMUNITY",
-    "tracker_url": "https://github.com/natapol2547/paintsystem"
-}
-
-bl_info_copy = bl_info.copy()
-
 
 submodules = (
     "props",
@@ -51,10 +34,8 @@ _register, _unregister = register_submodule_factory(__name__, submodules)
 def register():
     load_icons()
     _register()
-    print("Paint System: Registered")
 
 
 def unregister():
     unload_icons()
     _unregister()
-    print("Paint System: Unregistered")

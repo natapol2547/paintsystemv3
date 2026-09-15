@@ -21,7 +21,7 @@ import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (  # noqa: E402
-    REPO, PACKAGE, VERSION, check, section, register_addon, finish, since, before,
+    REPO, VERSION, check, section, register_addon, finish,
 )
 
 
@@ -196,7 +196,6 @@ SURFACE = [
     attr("bpy.app.handlers.load_post"),
     attr("bpy.app.handlers.depsgraph_update_post"),
     attr("bpy.app.handlers.save_pre"),
-    attr("bpy.app.online_access"),
 
     # GPU entry points for the image filters (PS-050) and overlays.
     attr("gpu.shader.create_from_info"),
