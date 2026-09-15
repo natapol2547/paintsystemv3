@@ -1,3 +1,4 @@
+import logging
 import re
 import bpy
 import pathlib
@@ -7,6 +8,8 @@ from .custom_icons import get_icon
 
 
 ADDON_ID = "paint_system"
+
+log = logging.getLogger(__name__)
 
 
 def is_newer_than(major, minor=0, patch=0):
@@ -68,6 +71,33 @@ def get_image_editor_icon(current_image_editor: str) -> int:
 # Path
 def get_project_root_path() -> str:
     return os.path.dirname(os.path.abspath(__file__))
+
+
+# Images
+
+
+def save_image(image: bpy.types.Image) -> None:
+    """Keep the unsaved pixels of *image* when the blend file is saved.
+
+    A packed image, or one without a file, is packed again from memory. An
+    image backed by a file is written to that file; when the write fails
+    (a missing or read-only directory), the image drops its path and is
+    packed instead. Images without unsaved changes are left alone.
+    """
+    if not image.is_dirty:
+        return
+    if image.packed_file is None and image.filepath:
+        try:
+            image.save()
+            return
+        except RuntimeError as error:
+            log.warning("Could not save image %r to %r, packing it instead: %s",
+                        image.name, image.filepath, error)
+            image.filepath_raw = ''
+    try:
+        image.pack()
+    except RuntimeError as error:
+        log.warning("Could not pack image %r: %s", image.name, error)
 
 
 # Unique Name

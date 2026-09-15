@@ -105,6 +105,13 @@ message bus subscription on `Object.active_material_index` for another
 material slot, and a node editor draw callback plus a timer for a node
 clicked in the node editor, which Blender reports in no other way.
 
+Painted pixels live in memory until the file is saved. `save_pre`
+(`handlers/node_tree_handlers.py`) passes every image a Paint System node
+points at, and every image the addon created, to `common.save_image`: a
+packed image or one without a file is packed again, an image with a file
+is written to it, and a failed write drops the path and packs instead.
+Images nothing in a Paint System tree uses are left to Blender.
+
 ## Triggers
 
 Compiles run synchronously, inside the edit that caused them, so the
@@ -187,6 +194,7 @@ BLENDER=/path/to/blender tests/run.sh   # another Blender build
 `test_layers.py` the layer list, moves and the layer type registry,
 `test_clip.py` clipping by pixel,
 `test_painting.py` the canvas, UV map and brush following the selection,
+`test_images.py` where painted images go on save,
 `test_smoke_loop.py` the operators end to end with save, reload and undo,
 `test_api_surface.py` asserts that every Blender class, property and
 operator the addon depends on still exists, and `test_ui_draw.py` draws

@@ -2,6 +2,34 @@
 
 Epic F. Size S. Milestone M1.
 
+## Status
+
+Done for the demo (M0 slice 6).
+
+- `common.py::save_image(image)` follows the v2 rules. It skips an image
+  without unsaved changes. It packs an image that is already packed or has
+  no file path. Otherwise it writes the image to its file. When that write
+  raises, it logs a warning, clears `filepath_raw` and packs. A failed pack
+  is logged instead of raised, and only `RuntimeError` is caught (v2 caught
+  everything and left the fallback pack unguarded).
+- `on_save_pre` calls it for every image a Paint System node points at,
+  found through the node's `Image` pointer properties (today `image` and
+  `cache_image`), plus every `ps_managed` image. Channel bake images and
+  mask images are picked up the same way once they are node properties.
+  Images inside property groups or collections on a node are not scanned
+  yet.
+- Not ported: v2's `refresh_image`, which reloads the active layer image
+  after load (added in v2 commit e03c011, "Fix packed files bug", without
+  a recorded reason). `tests/test_images.py` reads the pixels of packed
+  and on-disk images back after reopening on every Blender in the matrix
+  without it, and a reload would decode the image again on every file
+  open. Revisit if a packed image shows stale pixels in the viewport after
+  load.
+- `tests/test_images.py` covers the acceptance below plus: a packed image
+  with a path stays packed and its file is not written, a generated image
+  the addon did not create is packed, an image no Paint System node uses
+  and an image without changes are left alone.
+
 ## v2 behaviour
 
 `save_image` (`paintsystem/image.py:108`): pack when already packed or no

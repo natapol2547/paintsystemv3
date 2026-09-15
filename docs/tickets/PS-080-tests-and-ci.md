@@ -47,6 +47,11 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   without recompiling (PS-060, PS-061). Its `run` helper evaluates the
   depsgraph after each operator, as the window loop does, so the
   depsgraph handlers see every step.
+- `tests/test_images.py` paints a managed image, an image on disk, a
+  packed image with a file path, an image whose directory cannot be
+  created and a generated cache image, saves, and checks each image was
+  packed or written as PS-056 says (and that unused or unchanged images
+  were not), then reopens the file and reads the pixels back.
 - `tests/test_api_surface.py` lists every Blender class, RNA property,
   RNA function, operator and `gpu` entry point the addon relies on
   (including the `bl_ui.properties_paint_common` panels the sidebar

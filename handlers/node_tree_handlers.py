@@ -1,11 +1,23 @@
 import bpy
 
+from ..common import save_image
+from ..compiler.bake import PS_IMAGE_KEY
 from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty, ps_trees,
                              unblock_compile)
 from ..nodetree.tree import subscribe_name_changes
 
 
-PS_IMAGE_KEY = "ps_managed"
+def paint_system_images() -> set[bpy.types.Image]:
+    """Images the addon created and every image a Paint System node points at."""
+    images = {image for image in bpy.data.images if image.get(PS_IMAGE_KEY)}
+    for tree in ps_trees():
+        for node in tree.nodes:
+            for prop in node.bl_rna.properties:
+                if prop.type == 'POINTER' and prop.fixed_type.identifier == 'Image':
+                    image = getattr(node, prop.identifier)
+                    if image is not None:
+                        images.add(image)
+    return images
 
 
 @bpy.app.handlers.persistent
@@ -48,13 +60,9 @@ def on_undo_post(*args):
 
 @bpy.app.handlers.persistent
 def on_save_pre(*args):
-    """Pack generated images the addon created so painted pixels survive reload."""
-    for image in bpy.data.images:
-        if image.get(PS_IMAGE_KEY) and image.is_dirty and not image.filepath:
-            try:
-                image.pack()
-            except RuntimeError:
-                pass
+    """Save or pack painted layer images so their pixels survive reload (PS-056)."""
+    for image in paint_system_images():
+        save_image(image)
 
 
 _handlers = [
