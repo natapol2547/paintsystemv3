@@ -195,6 +195,7 @@ BLENDER=/path/to/blender tests/run.sh   # another Blender build
 `test_clip.py` clipping by pixel,
 `test_painting.py` the canvas, UV map and brush following the selection,
 `test_images.py` where painted images go on save,
+`test_demo_flow.py` the whole playable demo by pixel,
 `test_smoke_loop.py` the operators end to end with save, reload and undo,
 `test_api_surface.py` asserts that every Blender class, property and
 operator the addon depends on still exists, and `test_ui_draw.py` draws

@@ -12,8 +12,8 @@ import sys
 import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import (bake_group, check, close, finish, fmt, import_from, pixel_at,  # noqa: E402
-                     register_addon, section)
+from harness import (bake_group, check, close, finish, fmt, import_from, multiply_blend, over,  # noqa: E402
+                     pixel_at, register_addon, section)
 
 register_addon()
 core = import_from("compiler.core")
@@ -30,26 +30,6 @@ HALF_RED = (1.0, 0.0, 0.0, 0.5)
 GREEN = (0.0, 1.0, 0.0, 1.0)
 BLUE = (0.0, 0.0, 1.0, 1.0)
 YELLOW = (1.0, 1.0, 0.0, 1.0)
-
-
-def mix_blend(cb, cs):
-    return cs
-
-
-def multiply_blend(cb, cs):
-    return tuple(b * s for b, s in zip(cb, cs))
-
-
-def over(backdrop, layer, opacity=1.0, clip=False, blend=mix_blend):
-    """*layer* (straight RGBA) composited over *backdrop* by the PS-001 coverage rule."""
-    cb, ab = backdrop[:3], backdrop[3]
-    cs, es = layer[:3], layer[3] * opacity
-    weights = (es * ab, 0.0 if clip else es * (1.0 - ab), ab * (1.0 - es))
-    colors = (blend(cb, cs), cs, cb)
-    alpha = sum(weights)
-    if alpha == 0.0:
-        return cb + (0.0,)
-    return tuple(sum(w * c[i] for w, c in zip(weights, colors)) / alpha for i in range(3)) + (alpha,)
 
 
 def new_tree(name):

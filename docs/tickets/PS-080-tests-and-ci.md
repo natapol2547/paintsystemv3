@@ -12,9 +12,12 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   `before()`, `check`, `section`, `guarded`, `import_from` and `finish`
   (exits with a status in both background and windowed sessions).
   Pixel helpers: `bake_group(node_group, inputs=...)` Cycles-bakes a
-  shader group's colour and alpha on a unit plane whose UVs span 0..1,
-  `pixel_at(rgba, u, v)` reads the texel under a UV, `close` and `fmt`
-  compare and print colours.
+  shader group's colour and alpha on a unit plane whose UVs span 0..1
+  and gives the selection back afterwards, `pixel_at(rgba, u, v)` reads
+  the texel under a UV, `close` and `fmt` compare and print colours, and
+  `over(backdrop, layer, opacity, clip, blend)` with `mix_blend` and
+  `multiply_blend` composites expected colours by the PS-001 coverage
+  rule.
 - `tests/test_compile.py` covers the compiler core, including
   synchronous compiles, `suspend_compile` batching and blocking.
 - `tests/test_blend.py` bakes the layer blend group of every blend mode
@@ -52,6 +55,14 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   created and a generated cache image, saves, and checks each image was
   packed or written as PS-056 says (and that unused or unchanged images
   were not), then reopens the file and reads the pixels back.
+- `tests/test_demo_flow.py` is the M0 demo acceptance test. On the
+  factory cube it runs Setup Paint System, adds image and solid layers and
+  a folder, moves a layer past the folder, sets blend mode, opacity and
+  clipping, toggles paint mode and writes pixels into the canvas each
+  selected layer gives, then saves, reopens, undoes and redoes a clip
+  change and a removal, and saves and reopens again. After each step the
+  compiled group must match the tree and two baked texels must match the
+  stack composited by hand.
 - `tests/test_api_surface.py` lists every Blender class, RNA property,
   RNA function, operator and `gpu` entry point the addon relies on
   (including the `bl_ui.properties_paint_common` panels the sidebar

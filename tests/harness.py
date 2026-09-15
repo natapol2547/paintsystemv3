@@ -143,6 +143,8 @@ def bake_group(node_group, *, color="Color", alpha="Color Alpha", inputs=None, s
     scene.cycles.device = 'CPU'
     scene.render.bake.target = 'IMAGE_TEXTURES'
     scene.render.bake.margin = 0
+    previous_active = view_layer.objects.active
+    previous_selected = [o for o in view_layer.objects if o.select_get()]
     try:
         for o in view_layer.objects:
             o.select_set(o == obj)
@@ -163,6 +165,11 @@ def bake_group(node_group, *, color="Color", alpha="Color Alpha", inputs=None, s
         rgba[:, 3] = px[1][:, 0]
         return rgba
     finally:
+        # Give the selection back so operators that act on the active
+        # object still find the object the test was working on.
+        for o in view_layer.objects:
+            o.select_set(o in previous_selected)
+        view_layer.objects.active = previous_active
         obj.data.materials.clear()
         bpy.data.materials.remove(mat)
         for image in images:
@@ -182,6 +189,26 @@ def close(a, b, tol=0.02):
 
 def fmt(values):
     return "(" + ", ".join(f"{v:.3f}" for v in values) + ")"
+
+
+def mix_blend(cb, cs):
+    return cs
+
+
+def multiply_blend(cb, cs):
+    return tuple(b * s for b, s in zip(cb, cs))
+
+
+def over(backdrop, layer, opacity=1.0, clip=False, blend=mix_blend):
+    """*layer* (straight RGBA) composited over *backdrop* by the PS-001 coverage rule."""
+    cb, ab = backdrop[:3], backdrop[3]
+    cs, es = layer[:3], layer[3] * opacity
+    weights = (es * ab, 0.0 if clip else es * (1.0 - ab), ab * (1.0 - es))
+    colors = (blend(cb, cs), cs, cb)
+    alpha = sum(weights)
+    if alpha == 0.0:
+        return cb + (0.0,)
+    return tuple(sum(w * c[i] for w, c in zip(weights, colors)) / alpha for i in range(3)) + (alpha,)
 
 
 def summary(name):
