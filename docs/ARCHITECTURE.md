@@ -72,8 +72,10 @@ BLENDER=/path/to/blender tests/run.sh   # another Blender build
 operator the addon depends on still exists, and `test_ui_draw.py` draws
 every panel in a real window (Xvfb on CI) and fails on draw exceptions.
 `.github/workflows/test.yml` runs all of this against the latest patch of
-every supported Blender series; `release.yml` builds the package only after
-that matrix passes. See PS-080.
+every supported Blender series, lints with ruff (`uvx ruff check .`
+locally) and validates the built package with the strict
+`blender-extension-builder` validator; `release.yml` drafts a release only
+after all of that passes. See PS-080.
 
 ## Port backlog
 

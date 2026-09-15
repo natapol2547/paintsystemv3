@@ -22,6 +22,16 @@ Guiding constraints for every ticket:
   a ticket is not done until the matrix is green.
 - UI strings are English literals that can be translated later without
   restructuring (see Deferred: Multilingual UI).
+- Extension platform rules, as given by the Blender extensions review
+  team. No `threading`: use `bpy.app.timers`, `subprocess` or
+  `multiprocessing` for background work. Register keymap entries in the
+  addon keyconfig only and never remove default or user entries. No
+  adverts, social links, funding or update checkers in the UI. No calls
+  into third-party software. Build the package with
+  `blender --command extension build` so development files are excluded.
+  No leftover code: unused imports, dead modules and stale preferences
+  are removed. CI enforces these with ruff and the strict
+  `blender-extension-builder` validator on every push (PS-080).
 
 ## Milestones
 

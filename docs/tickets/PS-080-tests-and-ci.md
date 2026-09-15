@@ -39,14 +39,20 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   stable on download.blender.org, and adds the daily build of the next
   unreleased series (marked `experimental`).
 - `.github/workflows/test.yml` runs on push, pull request, weekly and on
-  demand. One job per Blender version: download (cached per release),
-  headless tests, UI draw test under Xvfb, then `extension validate`,
-  `build`, `install-file` and an enable check of the built package.
-  Experimental builds may fail without failing the workflow. A weekly
-  failure opens or updates an issue labelled `ci-compat`.
-- `.github/workflows/release.yml` (manual, with a release stage) reuses
-  the test workflow, builds the package with the minimum supported Blender
-  and creates a draft GitHub release.
+  demand. `lint` runs ruff (Pyflakes rules from `pyproject.toml`).
+  `package` builds the extension with `natapol2547/blender-extension-builder`
+  and runs its validator in strict mode, which covers the extension
+  platform rules (no threading, no promo links, no updater, no dev files,
+  no stray properties on `bpy.types` IDs, manifest hygiene). One `test`
+  job per Blender version: download (cached per release), headless tests,
+  UI draw test under Xvfb, then `extension validate`, `build`,
+  `install-file` and an enable check of the built package. Experimental
+  builds may fail without failing the workflow. A weekly failure opens or
+  updates an issue labelled `ci-compat`.
+- `.github/workflows/release.yml` (manual) reuses the test workflow, then
+  runs the same action with `create-release` on, which builds, validates
+  strictly and drafts a GitHub release tagged from the manifest version.
+  Pre-releases use a semver suffix in the manifest (`3.0.0-beta.1`).
 
 ## Design for feature tests
 

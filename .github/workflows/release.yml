@@ -1,16 +1,11 @@
 # Build the extension package and create a draft GitHub release.
-# Runs the full test matrix first so a broken build cannot be published.
+# Runs the full test workflow first so a broken build cannot be published.
+# The release tag comes from the manifest version; use a pre-release
+# suffix there (for example 3.0.0-beta.1) for anything that is not final.
 name: Release
 
 on:
   workflow_dispatch:
-    inputs:
-      release_stage:
-        type: choice
-        description: Release stage
-        required: true
-        default: gold
-        options: [alpha, beta, rc, gold]
 
 permissions:
   contents: write
@@ -20,70 +15,23 @@ jobs:
   test:
     uses: ./.github/workflows/test.yml
 
-  build:
-    name: Build package
+  release:
+    name: Build and draft release
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Build, validate and draft release
+        id: build
+        uses: natapol2547/blender-extension-builder@main
         with:
-          python-version: '3.12'
+          source-dir: '.'
+          strict: 'true'
 
-      - name: Resolve minimum supported Blender
-        id: resolve
-        run: python .github/resolve-blender.py >> "$GITHUB_OUTPUT"
-
-      - name: Read manifest version
-        id: meta
-        env:
-          RELEASE_STAGE: ${{ github.event.inputs.release_stage }}
+      - name: Summary
         run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import os, tomllib
-          with open("blender_manifest.toml", "rb") as f:
-              version = tomllib.load(f)["version"]
-          stage = os.environ["RELEASE_STAGE"]
-          tag = f"v{version}" if stage == "gold" else f"v{version}_{stage}"
-          print(f"version={version}")
-          print(f"tag={tag}")
-          print(f"prerelease={'false' if stage == 'gold' else 'true'}")
-          print(f"title=Paint System {tag}")
-          PY
-
-      - name: Cache Blender ${{ steps.resolve.outputs.min_version }}
-        id: cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/blender
-          key: blender-linux-x64-${{ steps.resolve.outputs.min_version }}-release
-
-      - name: Download Blender
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          curl -sSL --fail --retry 3 -o blender.tar.xz "${{ steps.resolve.outputs.min_url }}"
-          mkdir -p "$RUNNER_TEMP/blender"
-          tar -xf blender.tar.xz -C "$RUNNER_TEMP/blender" --strip-components=1
-
-      - name: Validate and build
-        run: |
-          B="$RUNNER_TEMP/blender/blender"
-          "$B" --background --command extension validate "$GITHUB_WORKSPACE"
-          mkdir -p dist
-          "$B" --background --command extension build \
-            --source-dir "$GITHUB_WORKSPACE" --output-dir "$GITHUB_WORKSPACE/dist" --verbose
-
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: paint_system-${{ steps.meta.outputs.tag }}
-          path: dist/*.zip
-
-      - name: Create draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          EXTRA=()
-          [ "${{ steps.meta.outputs.prerelease }}" = "true" ] && EXTRA+=(--prerelease)
-          gh release create "${{ steps.meta.outputs.tag }}" dist/*.zip \
-            --draft --title "${{ steps.meta.outputs.title }}" "${EXTRA[@]}"
+          {
+            echo "Built ${{ steps.build.outputs.addon-id }} ${{ steps.build.outputs.addon-version }} with Blender ${{ steps.build.outputs.blender-version }}"
+            echo "Draft release: ${{ steps.build.outputs.release-url }}"
+          } >> "$GITHUB_STEP_SUMMARY"

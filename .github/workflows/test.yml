@@ -1,6 +1,8 @@
 # Test the addon against the latest patch release of every supported
 # Blender series (blender_version_min in blender_manifest.toml up to the
 # newest stable) plus the daily build of the next, unreleased series.
+# Lint the sources and validate the built package against the extension
+# platform rules on the side.
 #
 # Runs on push and pull request, weekly on a schedule so upstream API
 # changes are caught between commits, and as a reusable workflow for
@@ -21,6 +23,27 @@ permissions:
   issues: write
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ruff (unused imports, undefined names)
+        uses: astral-sh/ruff-action@v3
+
+  package:
+    name: Package validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and validate against the extension platform rules
+        uses: natapol2547/blender-extension-builder@main
+        with:
+          source-dir: '.'
+          strict: 'true'
+          create-release: 'false'
+          upload-artifact: 'false'
+
   matrix:
     name: Resolve Blender builds
     runs-on: ubuntu-latest
@@ -93,7 +116,7 @@ jobs:
           XVFB: '1'
         run: paint_system/tests/run.sh --ui test_ui_draw.py
 
-      - name: Validate, build and install the extension package
+      - name: Build, install and enable the extension package
         run: |
           B="$BLENDER_DIR/blender"
           "$B" --background --command extension validate paint_system
@@ -121,8 +144,8 @@ jobs:
 
   report:
     name: Report scheduled failure
-    needs: [matrix, test]
-    if: always() && github.event_name == 'schedule' && needs.test.result == 'failure'
+    needs: [lint, package, matrix, test]
+    if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
