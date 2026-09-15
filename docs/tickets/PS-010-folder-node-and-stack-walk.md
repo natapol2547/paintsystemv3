@@ -3,6 +3,25 @@
 Epic B. Size L. Milestone M1. This ticket defines how the v2 nested list
 maps onto the node graph; most of Epic B and D builds on it.
 
+## Status
+
+Done (M0 slice 3) apart from `move` (PS-012): `nodetree/stack_ops.py`,
+`nodes/layers/folder_layer_node.py`, `tree.stack()` and
+`tests/test_stack.py`. Deviations from the design below:
+
+- `normalize_tree` does not repair alpha links. Compiles can run after
+  the edit's undo step was pushed, and links created inside
+  `NodeTree.update` are dropped anyway. The compiler reads alpha through
+  the colour link instead (`CompileContext.source`), and
+  `repair_alpha_links` runs at the start of `insert_layer_node` and
+  `remove_layer_node`.
+- The stack walk and the compiler ignore `NodeLink.is_valid` and skip only
+  muted links, because a link created by the edit being compiled is not
+  validated yet inside `NodeTree.update`.
+- `insert_on_top` joins `insert_above` and `insert_into`; the add operator
+  follows v2: an active folder receives the new layer at the top of its
+  content, any other active layer gets it directly above.
+
 ## v2 behaviour
 
 Layers are a flat collection with `id`, `parent_id`, `order`
@@ -52,11 +71,14 @@ the same tree means one artifact, one undo history, one uuid namespace.
 
 ## Acceptance
 
-- `stack()` on a tree with folders nested two deep returns the v2 order
-  and levels for the same layout.
-- Inserting into an empty folder, into a folder at top and at bottom,
-  removing a folder with children (children are removed with it, as in
-  v2 `delete_item`) all keep `normalize_tree` silent.
-- Compiled output equals a flat stack when the folder is MIX at opacity 1.
-- Node editor view of a two-level stack is readable after
-  `arrange` (folders' content chains placed above the folder).
+- Done: `stack()` on a tree with folders nested two deep returns the v2
+  order and levels for the same layout.
+- Done: inserting into an empty folder, into a folder at top and at
+  bottom, removing a folder with children (children are removed with it,
+  as in v2 `delete_item`) all leave alpha links following colour links
+  (`repair_alpha_links` finds nothing to fix).
+- Done: compiled output equals a flat stack when the folder is MIX at
+  opacity 1; folder opacity scales and a disabled folder hides its content.
+- Done: `arrange_stack` lays the stack out right to left from the Group
+  Output with each folder's content a row above the folder. Readability in
+  the node editor has not been reviewed by eye.

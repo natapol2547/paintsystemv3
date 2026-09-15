@@ -2,6 +2,21 @@
 
 Epic D. Size S. Milestone M1.
 
+## Status
+
+Done for the demo (M0 slice 3): `context.PSContext` and
+`parse_context(context)`, covered by `tests/test_stack.py`. Deviations from
+the design below:
+
+- No `prefs`, `trees` or `source_layer` fields yet; they arrive with the
+  tickets that need them (PS-040, PS-016).
+- No `PSContextMixin`. Call sites use `parse_context(context)` directly,
+  which reads the same without a base class.
+- `ps_object` accepts meshes only (an EMPTY resolves to its parent mesh).
+  Grease Pencil support comes with the ticket that paints on it.
+- Panel polls do not use it yet; the layers panel rework (PS-034) moves
+  them over.
+
 ## v2 behaviour
 
 `paintsystem/context.py`: `PSContext` dataclass (`ps_settings`,

@@ -38,6 +38,35 @@ PaintSystemNodeTree  --compile-->  IR  --NodeTreeBuilder-->  ShaderNodeTree (tre
 The compiler never writes back into the document beyond the normalize
 repairs, so a nested compile request only needs a re-entrancy flag.
 
+## Layer stack (`nodetree/stack_ops.py`)
+
+The stack is the graph; there is no parent or order property. The top
+layer feeds a channel socket on the active Group Output, each layer takes
+the stack below it on `Color`/`Alpha`, and a folder
+(`PaintSystemFolderLayerNode`) takes the top of its content on
+`Content Color`/`Content Alpha`. The bottom layer of a folder has nothing
+linked below it, which reads as a transparent backdrop. A folder composites
+its content like any layer composites its source, so its opacity, blend
+mode and `enabled` apply to the whole content without touching the child
+layers.
+
+`tree.stack(channel)` walks this top first and returns `StackItem(node,
+level, parent, index_in_parent)`, each folder followed by its content.
+Structural edits (`insert_on_top`, `insert_above`, `insert_into`, `remove`)
+are link operations that keep two invariants: a layer's `Color` output
+feeds at most one slot, and a slot's alpha input is linked from the alpha
+partner of whatever feeds its colour input.
+
+Hand edits in the node editor can break the second invariant. The compiler
+reads alpha through the colour link regardless (`CompileContext.source`),
+and `repair_alpha_links` tidies the links at the start of the next stack
+edit. It does not run during a compile: compiles can run after the edit's
+undo step was pushed, where changing the document would reintroduce the
+stale-undo problem described under Triggers.
+
+`context.parse_context(context)` resolves the object, material, tree,
+channel, active layer and its stack item in one place (PS-030).
+
 ## Triggers
 
 Compiles run synchronously, inside the edit that caused them, so the
@@ -48,21 +77,46 @@ An artifact patched after its step was pushed (from a timer, for example)
 survives the undo with nodes for layers that no longer exist and pointers
 to images the undo just freed. `tests/test_smoke_loop.py` covers this.
 
-- `NodeTree.update`, `Node.update` and every property `update=` call
-  `mark_dirty(tree)`, which compiles immediately.
+- Every property `update=` calls `mark_dirty(tree)`, which compiles
+  immediately.
 - Anything that makes several edits in a row (operators, `insert_layer_node`,
   `create_channel`, channel socket sync) wraps them in `suspend_compile`;
   the outermost exit compiles once.
+- `NodeTree.update` (links and nodes edited in the node editor or by a
+  script) calls `tree_updated(tree)`. It builds the IR to tell a no-op from
+  a change. A change stamps the artifact's fingerprint with a fresh
+  `pending <token>` and leaves the build to a timer, because Blender builds
+  no sockets for a group node created during a node tree update (see
+  below). The stamp is written inside the edit, so that step's artifact
+  differs from every other step and memfile undo re-reads it instead of
+  keeping the copy the timer built afterwards.
 - `load_pre`, `undo_pre` and `redo_pre` block compiles, because Blender
   calls `NodeTree.update` on half-restored data. `load_post` (which runs
   before the file's initial undo step is recorded), `undo_post` and
   `redo_post` unblock and compile every tree; with consistent steps that is
   a fingerprint check per tree.
 - While `bpy.data` is restricted (addon registration) or writing is
-  forbidden (drawing), a `bpy.app.timers` callback compiles instead. That is
-  the only path that runs outside an undo step.
+  forbidden (drawing), a `bpy.app.timers` callback compiles instead.
 - `depsgraph_update_post` initialises trees created from the node editor
   header, which has no init hook.
+
+Scripts that edit links directly and need the artifact at once call
+`flush_now()` or make the edits inside `suspend_compile`.
+
+What Blender does around `NodeTree.update`, checked on 4.2 and 5.2:
+
+- It calls `Node.update` for every node of the tree, then `NodeTree.update`
+  once. The addon only implements the tree callback, so an edit costs one
+  IR build rather than one per node.
+- `BKE_ntree_update` returns early when re-entered. Inside the callback,
+  assigning `node_tree` to a new `ShaderNodeGroup` leaves it without
+  sockets, and `interface_update` does not help. A group created from
+  scratch is fine: its Group Input and Output nodes are added after its
+  interface exists.
+- Links created by the callback are dropped afterwards.
+- A link the edit just created still reads `is_valid == False`, because
+  validation runs after the callback. The stack walk and the compiler
+  therefore ignore `is_valid` and skip only muted links.
 
 Synchronous compiles cost a full IR build per edit: about 2 ms for 5
 layers, 14 ms for 20 and 85 ms for 50 when dragging an opacity slider.
@@ -91,6 +145,8 @@ BLENDER=/path/to/blender tests/run.sh   # another Blender build
 `tests/harness.py` registers the addon from the checkout and provides
 `check`/`section`/`finish` plus Cycles bake helpers for pixel checks.
 `test_compile.py` covers the compiler, `test_blend.py` the blend math,
+`test_stack.py` the stack walk, folders, stack edits and `PSContext`,
+`test_smoke_loop.py` the operators end to end with save, reload and undo,
 `test_api_surface.py` asserts that every Blender class, property and
 operator the addon depends on still exists, and `test_ui_draw.py` draws
 every panel in a real window (Xvfb on CI) and fails on draw exceptions.

@@ -2,6 +2,18 @@
 
 Epic B. Size S. Milestone M1.
 
+## Status
+
+Partly done (M0 slice 3): `lock_layer` and `lock_alpha` exist on the base
+layer node, the compiler ignores them (they are left out of the
+fingerprint and cache hashes), and `lock_layer` disables the enabled,
+opacity and blend settings, in the node and on its stack row, where a lock
+icon shows.
+`is_folder` is a class attribute. Clearing the canvas and driving the
+brush's `use_alpha` wait for PS-060; `external_image`,
+`edit_external_mode`, `is_clip`, `modifies_color_data` and the warnings
+API are open.
+
 ## v2 behaviour
 
 `Layer` (`data.py:1240-1290`): `lock_layer` (row icon VIEW_LOCKED, layer

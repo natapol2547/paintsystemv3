@@ -23,7 +23,12 @@ Each later ticket adds its own `tests/test_<feature>.py`.
 - `tests/test_smoke_loop.py` drives the operators end to end: setup,
   add layers, painted pixels through the compiled group, save and reload
   with packing, undo and redo of setup, add and remove (including the
-  double-push pattern where memfile undo reuses in-memory datablocks).
+  double-push pattern where memfile undo reuses in-memory datablocks), and
+  undo of a node editor link whose build ran after its undo step.
+- `tests/test_stack.py` covers the stack walk with nested folders, stack
+  edits, folder compositing by pixel, alpha following hand-made colour
+  links, editing state kept out of the fingerprint, `PSContext` and the
+  add and remove operators with folders (PS-010, PS-019, PS-030).
   Script-called operators pass `('EXEC_DEFAULT', True)` to get the undo
   push the UI would make, and background sessions need one explicit
   `ed.undo_push()` before undo works.

@@ -46,7 +46,7 @@ try:
     img_layer = tree.insert_layer_node('PaintSystemImageLayerNode')
     image = bpy.data.images.new("Paint", 64, 64, alpha=True)
     img_layer.image = image
-    check(tree.layer_chain() == [img_layer, solid], "layer chain top-first")
+    check([item.node for item in tree.stack()] == [img_layer, solid], "stack top-first")
 
     fp1 = compile_tree(tree)
     art = tree.compiled
@@ -121,7 +121,7 @@ try:
     child.initialize()
     child_solid = child.insert_layer_node('PaintSystemSolidColorLayerNode')
     child_solid.fill_color = (0.0, 1.0, 0.0, 1.0)
-    group = tree.insert_layer_node('PaintSystemGroupLayerNode') if False else tree.nodes.new('PaintSystemGroupLayerNode')
+    group = tree.nodes.new('PaintSystemGroupLayerNode')
     group.node_tree = child
     check([s.name for s in group.inputs] == ['Color', 'Color Alpha'], "group node sockets from child channels")
     tree.links.new(img_layer.outputs['Color'], group.inputs['Color'])
@@ -156,6 +156,9 @@ try:
         compiles.append(t.name)
         return real_compile_tree(t, **kwargs)
 
+    # The links made by hand above left their builds to a timer, which
+    # never fires in a headless script.
+    _core.flush_now()
     _core.compile_tree = counting_compile_tree
     try:
         fp = artifact_fingerprint(tree)
@@ -179,6 +182,24 @@ try:
         _core.unblock_compile()
         mark_dirty()
         check(artifact_fingerprint(tree) != fp, "unblock then mark_dirty compiles")
+
+        # Node editor edits arrive through NodeTree.update, where Blender
+        # builds no sockets for new group nodes.
+        fp = artifact_fingerprint(tree)
+        top = gout.inputs['Color'].links[0].from_node
+        extra = tree.nodes.new('PaintSystemSolidColorLayerNode')
+        tree.links.new(top.outputs['Color'], extra.inputs['Color'])
+        check(artifact_fingerprint(tree) == fp and not bpy.app.timers.is_registered(flush),
+              "node editor edits that leave the output alone change nothing")
+        tree.links.new(extra.outputs['Color'], gout.inputs['Color'])
+        check(artifact_fingerprint(tree).startswith("pending "), "a node editor edit stamps the artifact pending")
+        check(bpy.app.timers.is_registered(flush), "and leaves the build to a timer")
+        _core.flush_now()
+        blend = next((n for n in art.nodes if n.get("ps_identifier") == f"{extra.uuid}:blend"), None)
+        check(blend is not None and blend.inputs['Prev Color'].is_linked and blend.outputs['Color'].is_linked,
+              "the timer builds the new group node with its links")
+        check(artifact_fingerprint(tree) == _core.build_ir(tree).fingerprint(), "the artifact is current after the tick")
+        tree.remove_layer_node(extra)
     finally:
         _core.compile_tree = real_compile_tree
         _core.unblock_compile()

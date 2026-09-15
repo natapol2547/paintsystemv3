@@ -40,29 +40,52 @@ def _draw_channel_list(layout, node_tree):
     col.operator("paint_system.move_channel_down", icon='TRIA_DOWN', text="")
 
 
+def _is_hidden(item):
+    parent = item.parent
+    while parent is not None:
+        if not parent.node.is_expanded:
+            return True
+        parent = parent.parent
+    return False
+
+
 def _draw_layer_stack(layout, tree):
-    """Linear stack feeding the active channel, top-most first."""
+    """Stack feeding the active channel, top-most first, folder content indented."""
     row = layout.row(align=True)
-    op = row.operator("paint_system.add_layer", text="Image", icon='IMAGE_DATA')
-    op.layer_type = 'IMAGE'
-    op = row.operator("paint_system.add_layer", text="Solid", icon='COLOR')
-    op.layer_type = 'SOLID'
+    for layer_type, text, icon in (('IMAGE', "Image", 'IMAGE_DATA'),
+                                   ('SOLID', "Solid", 'COLOR'),
+                                   ('FOLDER', "Folder", 'FILE_FOLDER')):
+        op = row.operator("paint_system.add_layer", text=text, icon=icon)
+        op.layer_type = layer_type
     row.operator("paint_system.remove_layer", text="", icon='REMOVE')
 
-    chain = tree.layer_chain()
-    if not chain:
+    items = tree.stack()
+    if not items:
         layout.label(text="No layers on this channel", icon='INFO')
         return
     active = tree.nodes.active
     col = layout.column(align=True)
-    for node in chain:
+    for item in items:
+        if _is_hidden(item):
+            continue
+        node = item.node
         row = col.row(align=True)
-        row.prop(node, "enabled", text="")
-        icon = 'IMAGE_DATA' if node.bl_idname == 'PaintSystemImageLayerNode' else 'COLOR'
+        for _level in range(item.level):
+            row.label(text="", icon='BLANK1')
+        if node.is_folder:
+            row.prop(node, "is_expanded", text="", emboss=False,
+                     icon='DISCLOSURE_TRI_DOWN' if node.is_expanded else 'DISCLOSURE_TRI_RIGHT')
+        sub = row.row(align=True)
+        sub.enabled = not node.lock_layer
+        sub.prop(node, "enabled", text="")
         op = row.operator("paint_system.set_active_layer", text=node.name,
-                          icon=icon, depress=(node == active))
+                          icon=node.bl_icon, depress=(node == active))
         op.node_name = node.name
-        row.prop(node, "opacity", text="", slider=True)
+        sub = row.row(align=True)
+        sub.enabled = not node.lock_layer
+        sub.prop(node, "opacity", text="", slider=True)
+        if node.lock_layer:
+            row.label(text="", icon='LOCKED')
         if node.cache_enabled and node.cache_image is not None:
             row.label(text="", icon='ERROR' if node.cache_stale else 'CHECKMARK')
 

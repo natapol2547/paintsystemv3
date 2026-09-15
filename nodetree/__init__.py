@@ -14,6 +14,7 @@ node_categories = [
     PaintSystemNodeCategory('PAINTSYSTEM_LAYERS', "Layers", items=[
         NodeItem('PaintSystemImageLayerNode'),
         NodeItem('PaintSystemSolidColorLayerNode'),
+        NodeItem('PaintSystemFolderLayerNode'),
         NodeItem('PaintSystemGroupLayerNode'),
     ]),
     PaintSystemNodeCategory('PAINTSYSTEM_IO', "Group", items=[

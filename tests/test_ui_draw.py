@@ -154,6 +154,10 @@ def setup_scene(window):
         bpy.ops.paint_system.setup_material()
         bpy.ops.paint_system.add_layer(layer_type='IMAGE')
         bpy.ops.paint_system.add_layer(layer_type='SOLID')
+        # A folder with a locked layer inside draws the nested, locked rows.
+        bpy.ops.paint_system.add_layer(layer_type='FOLDER')
+        bpy.ops.paint_system.add_layer(layer_type='SOLID')
+        cube.active_material.paint_system.tree.nodes.active.lock_layer = True
         if "paint" in PARTS:
             bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
     return cube

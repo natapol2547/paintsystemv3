@@ -6,9 +6,10 @@ from bpy.utils import register_classes_factory
 
 from bpy_extras.node_utils import connect_sockets
 
+from . import stack_ops
 from ..props.channel import PaintSystemChannel, channel_socket_specs, channel_alpha_name
 from ..props.collection_manager import CollectionManager
-from ..compiler.core import mark_dirty, suspend_compile
+from ..compiler.core import mark_dirty, suspend_compile, tree_updated
 
 
 GROUP_INPUT_ID = 'PaintSystemGroupInputNode'
@@ -96,8 +97,9 @@ class PaintSystemNodeTree(NodeTree):
     def update(self):
         # Called on link changes, node add/remove, and during file load and
         # undo (where the compiler holds off until the post handler).
-        # Never mutate this tree here; the compiler's normalize pass repairs invariants.
-        mark_dirty(self)
+        # Never mutate this tree here: Blender drops links created by the
+        # callback and builds no sockets for new group nodes.
+        tree_updated(self)
 
     # -- lifecycle --------------------------------------------------------
 
@@ -190,81 +192,50 @@ class PaintSystemNodeTree(NodeTree):
     def layer_nodes(self) -> list:
         return [n for n in self.nodes if getattr(n, 'is_layer_node', False)]
 
-    def layer_chain(self, channel_name: str | None = None) -> list:
-        """Layer nodes feeding *channel_name* on the active output, top-most first.
+    def _channel_name(self, channel_name: str | None) -> str | None:
+        if channel_name is not None:
+            return channel_name
+        channel = self.active_channel
+        return channel.name if channel else None
 
-        Follows each layer's 'Color' input upstream. Only the linear stack is
-        returned; branches off the main chain are not included.
+    def stack(self, channel_name: str | None = None) -> list[stack_ops.StackItem]:
+        """Layers of *channel_name* (default: the active channel), top first.
+
+        Each folder is followed by its content; see ``nodetree/stack_ops.py``.
         """
-        if channel_name is None:
-            ch = self.active_channel
-            if ch is None:
-                return []
-            channel_name = ch.name
-        output = self.get_output_node()
-        if output is None or channel_name not in output.inputs:
-            return []
-        chain = []
-        socket = output.inputs[channel_name]
-        visited = set()
-        while socket.links:
-            node = socket.links[0].from_node
-            if node.name in visited or not getattr(node, 'is_layer_node', False):
-                break
-            visited.add(node.name)
-            chain.append(node)
-            socket = node.inputs.get('Color')
-            if socket is None:
-                break
-        return chain
+        channel_name = self._channel_name(channel_name)
+        return stack_ops.stack(self, channel_name) if channel_name is not None else []
 
     def insert_layer_node(self, bl_idname: str, channel_name: str | None = None,
-                          below: bpy.types.Node | None = None) -> bpy.types.Node:
-        """Add a layer node and splice it into the channel's stack.
+                          target: bpy.types.Node | None = None) -> bpy.types.Node:
+        """Add a layer node to the channel's stack and make it active.
 
-        By default it goes on top (directly before the output). If *below* is
-        a layer node in the chain, the new node is inserted above it.
+        With no *target* the layer goes on top. A folder *target* receives it
+        at the top of its content; any other layer gets it directly above.
         """
-        if channel_name is None:
-            ch = self.active_channel
-            channel_name = ch.name if ch else None
+        channel_name = self._channel_name(channel_name)
         with suspend_compile(self):
-            return self._splice_layer_node(bl_idname, channel_name, below)
-
-    def _splice_layer_node(self, bl_idname, channel_name, below):
-        output = self.get_output_node()
-        node = self.nodes.new(bl_idname)
-
-        if output is None or channel_name is None or channel_name not in output.inputs:
-            return node
-
-        alpha_name = channel_alpha_name(channel_name)
-        if below is not None and 'Color' in below.outputs:
-            # Insert between `below` and whatever it feeds.
-            targets = [(l.to_node, l.to_socket) for l in below.outputs['Color'].links]
-            alpha_targets = [(l.to_node, l.to_socket) for l in below.outputs['Alpha'].links]
-            connect_sockets(below.outputs['Color'], node.inputs['Color'])
-            connect_sockets(below.outputs['Alpha'], node.inputs['Alpha'])
-            for to_node, to_socket in targets:
-                connect_sockets(node.outputs['Color'], to_socket)
-            for to_node, to_socket in alpha_targets:
-                connect_sockets(node.outputs['Alpha'], to_socket)
-            node.location = (below.location.x + 40, below.location.y - 40)
-        else:
-            color_in = output.inputs[channel_name]
-            alpha_in = output.inputs.get(alpha_name)
-            prev_color = color_in.links[0].from_socket if color_in.links else None
-            prev_alpha = alpha_in.links[0].from_socket if alpha_in and alpha_in.links else None
-            if prev_color is not None:
-                connect_sockets(prev_color, node.inputs['Color'])
-            if prev_alpha is not None:
-                connect_sockets(prev_alpha, node.inputs['Alpha'])
-            connect_sockets(node.outputs['Color'], color_in)
-            if alpha_in is not None:
-                connect_sockets(node.outputs['Alpha'], alpha_in)
-            node.location = (output.location.x - 260, output.location.y)
-        self.nodes.active = node
+            stack_ops.repair_alpha_links(self)
+            node = self.nodes.new(bl_idname)
+            if target is not None and target.is_folder:
+                stack_ops.insert_into(self, target, node)
+            elif target is not None:
+                stack_ops.insert_above(self, node, target)
+            elif channel_name is not None:
+                stack_ops.insert_on_top(self, node, channel_name)
+            if channel_name is not None:
+                stack_ops.arrange_stack(self, channel_name)
+            self.nodes.active = node
         return node
+
+    def remove_layer_node(self, node: bpy.types.Node, channel_name: str | None = None) -> None:
+        """Remove a layer (a folder with its content) and close the gap."""
+        channel_name = self._channel_name(channel_name)
+        with suspend_compile(self):
+            stack_ops.repair_alpha_links(self)
+            stack_ops.remove(self, node)
+            if channel_name is not None:
+                stack_ops.arrange_stack(self, channel_name)
 
 
 classes = (

@@ -17,6 +17,7 @@ from typing import Any, Iterable
 import bpy
 
 from .ir import IR, Ref, SocketId, hash_payload, _serialize
+from ..nodetree.stack_ops import alpha_partner, feeding_link, paired_color_input
 from ..props.channel import channel_socket_specs
 
 log = logging.getLogger(__name__)
@@ -29,7 +30,8 @@ ARTIFACT_FINGERPRINT_KEY = "ps_fingerprint"
 BAKE_TREE_NAME = ".PS Bake Target"
 
 _BASE_NODE_PROPS = {p.identifier for p in bpy.types.Node.bl_rna.properties}
-_HASH_EXCLUDED_PROPS = {'uuid'}
+# Identity and editing state that never reaches the shader.
+_HASH_EXCLUDED_PROPS = {'uuid', 'is_expanded', 'lock_layer', 'lock_alpha'}
 
 
 # ── Tree helpers ─────────────────────────────────────────────────────
@@ -55,8 +57,13 @@ def normalize_tree(tree) -> None:
     """Repair invariants without triggering update callbacks.
 
     - every node has a uuid unique within the tree (duplicates come from copy/paste)
+    - every channel has a uuid
     - group input/output nodes exist and one output is active
-    - at least one channel exists
+
+    Links are not repaired here. A compile can run after the edit's undo
+    step was pushed (``tree_updated``), where it must not change the
+    document; the compiler reads around broken alpha links instead
+    (``CompileContext.source``) and stack edits repair them.
     """
     ensure_tree_uuid(tree)
     seen: set[str] = set()
@@ -142,18 +149,36 @@ class CompileContext:
 
     @staticmethod
     def incoming_link(socket) -> bpy.types.NodeLink | None:
-        for link in socket.links:
-            if link.is_muted or not link.is_valid:
-                continue
-            return link
-        return None
+        return feeding_link(socket)
 
-    def upstream(self, socket) -> Ref | None:
-        """IR reference feeding *socket* on a custom node, or None if unlinked."""
+    def source(self, socket) -> tuple[bpy.types.Node, str] | None:
+        """The node and output name *socket* reads from, or None.
+
+        That is its link, except for the alpha input of a slot: alpha follows
+        colour, so it reads the alpha partner of whatever feeds the paired
+        colour input, and nothing when that is unlinked. A hand edit that
+        relinks only the colour therefore still composites correctly.
+        """
+        color_in = paired_color_input(socket)
+        if color_in is not None:
+            link = self.incoming_link(color_in)
+            if link is None:
+                return None
+            partner = alpha_partner(link.from_node, link.from_socket.name)
+            if partner is not None and partner in link.from_node.outputs:
+                return link.from_node, partner
         link = self.incoming_link(socket)
         if link is None:
             return None
-        return self._outputs.get((link.from_node.uuid, link.from_socket.name))
+        return link.from_node, link.from_socket.name
+
+    def upstream(self, socket) -> Ref | None:
+        """IR reference feeding *socket* on a custom node, or None if unlinked."""
+        source = self.source(socket)
+        if source is None:
+            return None
+        node, output_name = source
+        return self._outputs.get((node.uuid, output_name))
 
     def input_source(self, socket) -> Ref | Any:
         """Ref when linked, else the socket's default value."""
@@ -257,9 +282,9 @@ def topological_order(start, ctx: CompileContext) -> list:
         visited.add(node.name)
         if not ctx.is_cached(node):
             for sock in node.inputs:
-                link = ctx.incoming_link(sock)
-                if link is not None:
-                    visit(link.from_node)
+                source = ctx.source(sock)
+                if source is not None:
+                    visit(source[0])
         order.append(node)
 
     visit(start)
@@ -359,12 +384,14 @@ def compile_tree(tree, *, force: bool = False) -> str:
 # therefore survive an undo with nodes for layers that no longer exist
 # and pointers to images the undo just freed.
 #
-# Three situations cannot compile on the spot:
+# Four situations cannot compile on the spot:
 # - inside ``suspend_compile``: the outermost exit compiles once;
 # - while a file loads or an undo step decodes (Blender calls
 #   ``NodeTree.update`` on half-restored data): the post handler compiles;
 # - while ``bpy.data`` is restricted (addon registration) or writing is
-#   forbidden (drawing): a timer compiles as soon as Blender allows it.
+#   forbidden (drawing): a timer compiles as soon as Blender allows it;
+# - inside ``NodeTree.update`` (edits made in the node editor): see
+#   ``tree_updated``.
 
 _dirty_uuids: set[str] = set()
 _dirty_all = False
@@ -390,6 +417,33 @@ def mark_dirty(tree=None) -> None:
         _schedule()
         return
     flush()
+
+
+def tree_updated(tree) -> None:
+    """``NodeTree.update`` entry point: compile on the next tick when needed.
+
+    Blender does not rebuild node sockets while it runs node tree update
+    callbacks (``BKE_ntree_update`` returns early when re-entered), so a
+    group node created here has no sockets to link. The IR is still built
+    to tell a no-op from a real change. A real change stamps the artifact
+    with a token no earlier state holds and leaves the build to a timer.
+    The stamp is part of the edit's undo step, so memfile undo sees the
+    artifact differ from every other step and re-reads it instead of
+    keeping the copy the timer patched after the step was pushed.
+    """
+    if _suspended or _flushing or _blocked or not isinstance(bpy.data, bpy.types.BlendData):
+        mark_dirty(tree)
+        return
+    try:
+        current = artifact_fingerprint(tree) == build_ir(tree).fingerprint()
+    except Exception:
+        log.debug("could not fingerprint '%s' during a node tree update", tree.name, exc_info=True)
+        current = False
+    if current:
+        return
+    _dirty_uuids.add(ensure_tree_uuid(tree))
+    ensure_artifact(tree)[ARTIFACT_FINGERPRINT_KEY] = f"pending {_uuid.uuid4().hex}"
+    _schedule()
 
 
 def _schedule() -> None:

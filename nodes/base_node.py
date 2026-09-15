@@ -23,7 +23,11 @@ class PaintSystemBaseNode:
     # Python property shadows it and drifts from the name ``nodes.get``
     # looks up before Blender 5.2.
 
+    # No ``update`` override: Blender calls Node.update for every node of a
+    # tree whose links changed and then NodeTree.update once, which compiles.
+
     is_layer_node = False
+    is_folder = False
 
     @classmethod
     def poll(cls, ntree):
@@ -35,10 +39,6 @@ class PaintSystemBaseNode:
     def copy(self, node):
         # Called on the new node with the source node; the copy needs its own identity.
         self.uuid = str(uuid.uuid4())
-
-    def update(self):
-        # Blender calls this when links attached to this node change.
-        mark_dirty(self.id_data)
 
     def free(self):
         pass

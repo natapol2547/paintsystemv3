@@ -45,7 +45,7 @@ def material_group(mat, tree):
 
 def layer_names():
     tree = active_tree()
-    return [n.name for n in tree.layer_chain()] if tree else None
+    return [item.node.name for item in tree.stack()] if tree else None
 
 
 def check_artifact(label):
@@ -63,7 +63,7 @@ def check_artifact(label):
     check(group is not None and group.node_tree == art, f"{label}: material instances the artifact")
     blends = sorted(n.get('ps_identifier') for n in art.nodes
                     if (n.get('ps_identifier') or '').endswith(':blend'))
-    expected = sorted(f"{n.uuid}:blend" for n in tree.layer_chain())
+    expected = sorted(f"{item.node.uuid}:blend" for item in tree.stack())
     check(blends == expected, f"{label}: one blend instance per stacked layer")
 
 
@@ -125,7 +125,7 @@ try:
     tree = active_tree()
     image_node = tree.nodes.active
     check(image_node.bl_idname == 'PaintSystemImageLayerNode', "new image layer is active")
-    check([n.bl_idname for n in tree.layer_chain()]
+    check([item.node.bl_idname for item in tree.stack()]
           == ['PaintSystemImageLayerNode', 'PaintSystemSolidColorLayerNode'], "image stacked above solid")
     image = image_node.image
     check(image is not None and image.get('ps_managed'), "image layer owns a managed image")
@@ -177,8 +177,8 @@ try:
     check_artifact("after undo add image")
 
     section("undo and redo remove layer")
-    image_layer = next(n.name for n in active_tree().layer_chain()
-                       if n.bl_idname == 'PaintSystemImageLayerNode')
+    image_layer = next(item.node.name for item in active_tree().stack()
+                       if item.node.bl_idname == 'PaintSystemImageLayerNode')
     check(run(bpy.ops.paint_system.set_active_layer, node_name=image_layer), "select image layer")
     check(run(bpy.ops.paint_system.remove_layer), "remove image layer")
     check(image_layer not in layer_names(), "image layer removed")
@@ -191,6 +191,41 @@ try:
     bpy.ops.ed.redo()
     check(image_layer not in layer_names(), "redo removes the layer again")
     check_artifact("after redo remove")
+
+    section("undo a node editor edit")
+    # Links made in the node editor build on the next tick, after Blender
+    # pushed the undo step (core.tree_updated). flush_now stands in for the
+    # timer.
+    restored = []
+
+    def record_restored_artifact(*args):
+        # Inserted ahead of the addon's handler, which recompiles.
+        restored.append({n.get('ps_identifier') or '' for n in active_tree().compiled.nodes})
+
+    before = layer_names()
+    tree = active_tree()
+    hand = tree.nodes.new('PaintSystemImageLayerNode')
+    hand.image = bpy.data.images.new("Hand Image", 8, 8)
+    HAND_NAME, HAND_UUID = hand.name, hand.uuid
+    bpy.ops.ed.undo_push(message="Smoke add unlinked layer")
+    output = tree.get_output_node()
+    tree.links.new(output.inputs['Color'].links[0].from_socket, hand.inputs['Color'])
+    tree.links.new(hand.outputs['Color'], output.inputs['Color'])
+    bpy.ops.ed.undo_push(message="Smoke link by hand")
+    core.flush_now()
+    check(layer_names() == [HAND_NAME] + before, f"hand-linked layer tops the stack {layer_names()}")
+    check_artifact("after the hand link builds")
+    del tree, hand, output
+    bpy.app.handlers.undo_post.insert(0, record_restored_artifact)
+    try:
+        bpy.ops.ed.undo()
+    finally:
+        bpy.app.handlers.undo_post.remove(record_restored_artifact)
+    check(restored and not any(i.startswith(HAND_UUID) for i in restored[0]),
+          "undo re-reads the artifact instead of keeping the build made after the step")
+    check(layer_names() == before, f"undo unlinks the hand-linked layer {layer_names()}")
+    check_artifact("after undo hand link")
+    check_no_freed_images("after undo hand link")
 
 except Exception:
     traceback.print_exc()

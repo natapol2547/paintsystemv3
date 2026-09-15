@@ -42,6 +42,12 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
                              default='MIX', update=mark_tree_dirty)
     enabled: BoolProperty(name="Enabled", default=True, update=mark_tree_dirty)
 
+    # Editing state only; the compiler ignores both (core._HASH_EXCLUDED_PROPS).
+    lock_layer: BoolProperty(name="Lock Layer", default=False,
+                             description="Prevent changes to this layer's settings")
+    lock_alpha: BoolProperty(name="Lock Alpha", default=False,
+                             description="Paint without changing this layer's transparency")
+
     # Cache (hybrid bake). When valid, the compiler replaces this node and its
     # whole upstream with a single image texture.
     cache_enabled: BoolProperty(
@@ -72,9 +78,14 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
 
     def draw_layer_settings(self, context, layout):
         row = layout.row(align=True)
-        row.prop(self, "enabled", text="")
-        row.prop(self, "opacity")
-        layout.prop(self, "blend_mode", text="")
+        row.prop(self, "lock_layer", text="", icon='LOCKED' if self.lock_layer else 'UNLOCKED')
+        settings = row.row(align=True)
+        settings.enabled = not self.lock_layer
+        settings.prop(self, "enabled", text="")
+        settings.prop(self, "opacity")
+        settings = layout.column()
+        settings.enabled = not self.lock_layer
+        settings.prop(self, "blend_mode", text="")
 
     def draw_cache_settings(self, context, layout):
         box = layout.box()
