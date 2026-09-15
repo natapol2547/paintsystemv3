@@ -36,8 +36,10 @@ Groups in the file (name: inputs -> outputs):
   the copy so it only carries what v3 appends.
 - Add `get_appended_group(name)` next to `get_library_group`. It loads the
   group with `libraries.load(link=False)`, renames it to `.PS Lib <name>`,
-  sets `use_fake_user`, stamps `ps_lib_version = LIBRARY_VERSION` and
-  `ps_lib_source = 'blend'`. `is_library_group` must recognise both kinds.
+  stamps `ps_lib_version = LIBRARY_VERSION` and `ps_lib_source = 'blend'`.
+  `is_library_group` must recognise both kinds. Like generated groups it
+  gets no fake user: a group no artifact uses is dropped when the file is
+  saved and appended again on next use.
 - Version bump replaces the group in place: append the new copy, then
   `user_remap` the old datablock to it and remove the old one, so existing
   artifact instances keep working without a recompile.

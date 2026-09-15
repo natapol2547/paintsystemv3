@@ -1,9 +1,13 @@
 """Static, shared shader node groups used by compiled trees.
 
 Library groups are stateless building blocks (for example the layer blend
-group). They are generated in Python on first use, stored with a fake user,
-and rebuilt only when ``LIBRARY_VERSION`` changes. Per-layer state never lives
-here; it is passed in through sockets on the instancing group node.
+group). They are generated in Python on first use and rebuilt only when
+``LIBRARY_VERSION`` changes. Per-layer state never lives here; it is passed
+in through sockets on the instancing group node.
+
+They have no fake user, so a group no compiled tree uses is not saved with
+the file and does not clutter it; it is generated again when a layer needs
+it. Undo steps keep datablocks without users, so undo still finds them.
 """
 from __future__ import annotations
 
@@ -26,7 +30,6 @@ def get_library_group(key: str, build: Callable[[bpy.types.NodeTree], None]) -> 
         tree = None
     if tree is None:
         tree = bpy.data.node_groups.new(name, 'ShaderNodeTree')
-        tree.use_fake_user = True
     if tree.get(_VERSION_KEY) != LIBRARY_VERSION:
         build(tree)
         tree[_VERSION_KEY] = LIBRARY_VERSION

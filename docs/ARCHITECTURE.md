@@ -17,6 +17,10 @@ PaintSystemNodeTree  --compile-->  IR  --NodeTreeBuilder-->  ShaderNodeTree (tre
 - Shared logic lives in static library groups (`compiler/library.py`), built
   in Python on first use and versioned by `LIBRARY_VERSION`. Per-layer state
   is passed through sockets on the instancing group node.
+- The addon sets no fake users. Every datablock it makes is kept by a real
+  user (the material, the tree's `compiled` pointer, an artifact's group
+  node), so what nothing uses is not saved and does not clutter the file.
+  Library groups are generated again on next use.
 - A nested `PaintSystemGroupLayerNode` instances the wrapped tree's own
   artifact. This is the only artifact-to-artifact reference and it mirrors a
   real datablock relationship.

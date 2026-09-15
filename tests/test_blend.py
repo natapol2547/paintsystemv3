@@ -17,6 +17,7 @@ functions.
 import math
 import os
 import sys
+import tempfile
 
 import bpy
 
@@ -136,5 +137,58 @@ library.layer_blend_group('MULTIPLY')
 check(group.get("ps_lib_version") == library.LIBRARY_VERSION, "an older group is rebuilt at the current version")
 check("Clip" in [s.name for s in group.interface.items_tree], "rebuilt group gains the Clip input")
 check("a_mask" not in [n.get("ps_identifier") for n in group.nodes], "rebuilt group drops nodes it no longer uses")
+
+
+def blend_group_name(mode):
+    return f"{library.LIBRARY_PREFIX}Layer Blend [{mode}]"
+
+
+def check_artifact(label, tree, mode):
+    art = tree.compiled
+    check(core.artifact_fingerprint(tree) == core.build_ir(tree).fingerprint(), f"{label}: artifact matches the tree")
+    groups = [n.node_tree for n in art.nodes if n.bl_idname == 'ShaderNodeGroup']
+    check(groups and all(g is not None and g.name in bpy.data.node_groups for g in groups)
+          and blend_group_name(mode) in [g.name for g in groups],
+          f"{label}: the artifact uses live groups, including the {mode} blend group")
+
+
+section("library groups nothing uses")
+core = import_from("compiler.core")
+link_tree_to_material = import_from("ops.node_tree_ops").link_tree_to_material
+check(not [ng.name for ng in bpy.data.node_groups if library.is_library_group(ng) and ng.use_fake_user],
+      "library groups have no fake user")
+bpy.ops.ed.undo_push(message="Library start")
+tree = bpy.data.node_groups.new("Library Users", 'PaintSystemNodeTree')
+tree.initialize()
+link_tree_to_material(bpy.data.objects["Cube"].active_material, tree)
+layer = tree.insert_layer_node('PaintSystemSolidColorLayerNode')
+layer.blend_mode = 'MULTIPLY'
+LAYER_NAME = layer.name
+bpy.ops.ed.undo_push(message="Multiply")
+layer.blend_mode = 'MIX'
+bpy.ops.ed.undo_push(message="Mix")
+check(bpy.data.node_groups[blend_group_name('MULTIPLY')].users == 0,
+      "the blend group a layer stops using has no users left")
+del tree, layer, group
+
+bpy.ops.ed.undo()
+tree = bpy.data.node_groups["Library Users"]
+check(tree.nodes[LAYER_NAME].blend_mode == 'MULTIPLY', "undo restores the blend mode")
+check_artifact("after undo", tree, 'MULTIPLY')
+bpy.ops.ed.redo()
+tree = bpy.data.node_groups["Library Users"]
+check_artifact("after redo", tree, 'MIX')
+
+path = os.path.join(tempfile.mkdtemp(prefix="ps_blend_"), "library.blend")
+del tree
+check(bpy.ops.wm.save_as_mainfile(filepath=path) == {'FINISHED'}, "saved")
+check(bpy.ops.wm.open_mainfile(filepath=path) == {'FINISHED'}, "reopened")
+kept = sorted((ng.name, ng.users) for ng in bpy.data.node_groups if library.is_library_group(ng))
+check(kept and all(users > 0 for _name, users in kept), f"only library groups in use are saved {kept}")
+check(blend_group_name('MULTIPLY') not in [name for name, _users in kept], "the unused MULTIPLY group is gone")
+tree = bpy.data.node_groups["Library Users"]
+check_artifact("after reopen", tree, 'MIX')
+tree.nodes[LAYER_NAME].blend_mode = 'MULTIPLY'
+check_artifact("using MULTIPLY again", tree, 'MULTIPLY')
 
 finish("BLEND TEST")

@@ -22,7 +22,9 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   synchronous compiles, `suspend_compile` batching and blocking.
 - `tests/test_blend.py` bakes the layer blend group of every blend mode
   over transparent, half-transparent and opaque backdrops, clipped and
-  not, against closed forms (PS-001).
+  not, against closed forms (PS-001). It also checks that library groups
+  have no fake user: a blend group a layer stops using survives undo, is
+  not saved with the file, and is rebuilt when a layer uses it again.
 - `tests/test_smoke_loop.py` drives the operators end to end: setup,
   add layers, painted pixels through the compiled group, save and reload
   with packing, undo and redo of setup, add and remove (including the
