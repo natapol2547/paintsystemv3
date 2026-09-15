@@ -223,8 +223,16 @@ def open_move_popup(window, view3d, tree):
         errors.append(("PAINTSYSTEM_OT_move_layer_up", "invoke", traceback.format_exc()))
 
 
+class Wait(float):
+    """A step's delay after which the same step runs again."""
+
+
 class Steps:
-    """Timer-driven test: each step returns the delay before the next."""
+    """Timer-driven test: each step returns the delay before the next,
+    ``Wait(delay)`` to run again, or None once the results are in."""
+
+    # Redraws a state may need to settle; software rendering on CI is slow.
+    MAX_WAITS = 40
 
     def __init__(self):
         self.window = bpy.context.window_manager.windows[0]
@@ -232,8 +240,17 @@ class Steps:
         self.view3d = None
         self.tree = None
         self.areas = []
-        self.popups = []
-        self.state = 0
+        self.queue = [self.step_setup]
+        self.waits = 0
+
+    def wait_until(self, condition):
+        """``Wait`` while *condition* is false and redraws remain, else None."""
+        if condition() or self.waits >= self.MAX_WAITS:
+            self.waits = 0
+            return None
+        self.waits += 1
+        tag_redraw(self.window)
+        return Wait(0.25)
 
     def step_setup(self):
         section("wrap draw callbacks")
@@ -250,8 +267,14 @@ class Steps:
         self.tree = tree
         self.areas = setup_areas(self.window, tree)
         self.view3d = self.areas[0]
-        self.popups = ([(open_popover, cls) for cls in popover_panels(self.classes)]
-                       + [(open_menu, cls) for cls in self.classes if issubclass(cls, bpy.types.Menu)])
+        popups = ([(open_popover, cls) for cls in popover_panels(self.classes)]
+                  + [(open_menu, cls) for cls in self.classes if issubclass(cls, bpy.types.Menu)])
+        # Painting runs before any popup opens: an open menu can hold off
+        # the node editor redraw a node click relies on.
+        self.queue += [self.step_retab, self.step_node_click, self.step_node_click_synced,
+                       self.step_add_material, self.step_switch_material, self.step_material_synced]
+        self.queue += [functools.partial(self.step_popup, opener, cls) for opener, cls in popups]
+        self.queue += [self.step_move_popup, self.step_results]
         tag_redraw(self.window)
         return 0.5
 
@@ -262,8 +285,7 @@ class Steps:
         tag_redraw(self.window)
         return 1.0
 
-    def step_popup(self):
-        opener, cls = self.popups.pop()
+    def step_popup(self, opener, cls):
         opener(self.window, self.view3d, cls)
         tag_redraw(self.window)
         return 0.5
@@ -286,12 +308,21 @@ class Steps:
         self.tree.nodes.active = self.image_layer(self.tree)
         bpy.context.scene.tool_settings.image_paint.canvas = None
         tag_redraw(self.window)
-        return 0.5
+        return 0.25
+
+    def step_node_click_synced(self):
+        if len(self.areas) < 2:
+            return 0.1
+        image = self.image_layer(self.tree).image
+        waits = self.waits
+        wait = self.wait_until(lambda: bpy.context.scene.tool_settings.image_paint.canvas == image)
+        if wait is not None:
+            return wait
+        canvas = bpy.context.scene.tool_settings.image_paint.canvas
+        check(canvas == image, f"clicking a node paints on its layer ({canvas}, {waits} redraws waited)")
+        return 0.1
 
     def step_add_material(self):
-        canvas = bpy.context.scene.tool_settings.image_paint.canvas
-        if len(self.areas) >= 2:
-            check(canvas == self.image_layer(self.tree).image, f"clicking a node paints on its layer ({canvas})")
         cube = bpy.data.objects['Cube']
         region = window_region(self.view3d)
         with bpy.context.temp_override(window=self.window, area=self.view3d, region=region, object=cube):
@@ -312,9 +343,14 @@ class Steps:
         tag_redraw(self.window)
         return 0.5
 
-    def step_check_material(self):
+    def step_material_synced(self):
+        image = self.image_layer(self.tree).image
+        waits = self.waits
+        wait = self.wait_until(lambda: bpy.context.scene.tool_settings.image_paint.canvas == image)
+        if wait is not None:
+            return wait
         canvas = bpy.context.scene.tool_settings.image_paint.canvas
-        check(canvas == self.image_layer(self.tree).image, f"switching material slots paints on that layer ({canvas})")
+        check(canvas == image, f"switching material slots paints on that layer ({canvas}, {waits} redraws waited)")
         return 0.1
 
     def step_results(self):
@@ -338,20 +374,11 @@ class Steps:
 
     def __call__(self):
         try:
-            if self.state == 0:
-                self.state = 1
-                return self.step_setup()
-            if self.state == 1:
-                self.state = 2
-                return self.step_retab()
-            if self.popups:
-                return self.step_popup()
-            steps = (self.step_move_popup, self.step_node_click, self.step_add_material,
-                     self.step_switch_material, self.step_check_material)
-            if self.state - 2 < len(steps):
-                self.state += 1
-                return steps[self.state - 3]()
-            self.step_results()
+            delay = self.queue[0]()
+            if not isinstance(delay, Wait):
+                self.queue.pop(0)
+            if delay is not None:
+                return float(delay)
         except Exception:
             traceback.print_exc()
             check(False, "exception in test driver")
