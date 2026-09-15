@@ -2,6 +2,35 @@
 
 Epic D. Size M. Milestone M1.
 
+## Status
+
+Partly done (M0 slice 6): `panels/brush_panels.py` draws the Brush and
+Color sections of the 3D view main panel, below the channel list, while
+texture painting. They keep the `layout.panel` idnames `MAT_PT_Brush` and
+`MAT_PT_BrushColor`.
+
+- Brush: a brush picker, then Blender's `brush_settings` in a box and the
+  Advanced Settings sub-section (occlude, backface culling, normal falloff
+  and its angle). The picker is the brush asset shelf popover
+  (`BrushAssetShelf.draw_popup_selector`) from 4.3 and
+  `template_ID_preview` before. v2 showed no picker from 4.3 on.
+- Color: closed, the header shows the colour, the secondary colour and
+  the flip button, as in v2. Open, it draws Blender's
+  `draw_color_settings` with the colour and gradient switch: picker,
+  swatches, unified colour toggle, and colour jitter where the version has
+  it. That replaces v2's hand-built picker. A Color Palette sub-section
+  follows.
+- The paint settings come from `paint_settings_from_active_tool` where it
+  exists (5.3) and `paint_settings` before; the panels detect features
+  instead of comparing version numbers.
+- Not ported for the demo: the tooltips popover (its shortcuts have no
+  operators yet), Add Preset Brushes, the colour picker settings popover
+  (scale, HSV sliders, hex, which need addon preferences and scene
+  properties), colour history (PS-062) and grease pencil.
+- Tests: a script cannot open a `layout.panel` section, so
+  `test_ui_draw.py` registers a test-only panel that draws the open
+  section bodies on every Blender in the matrix.
+
 ## v2 behaviour
 
 - `toggle_paint_mode_ui` (`panels/common.py:269-314`): 1.7x "Toggle Paint

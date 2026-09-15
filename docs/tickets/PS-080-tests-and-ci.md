@@ -66,7 +66,11 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   draw exceptions, so this is the only test that catches a broken panel.
   It also checks the painting triggers only a window loop runs: a node
   made active in the node editor and a material slot switch reported
-  through the message bus both move the canvas (PS-060).
+  through the message bus both move the canvas (PS-060). Those checks run
+  before any popup opens, because an open menu holds off the node editor
+  redraw, and wait for redraws instead of a fixed delay. The Brush and
+  Color section bodies start closed and a script cannot open them, so a
+  test-only panel draws them in texture paint mode (PS-033).
 - `tests/run.sh [--ui] [test files]` drives all of the above.
   `BLENDER` selects the executable; `XVFB=1` forces the UI test through
   `xvfb-run` with Mesa software rendering and the OpenGL backend.

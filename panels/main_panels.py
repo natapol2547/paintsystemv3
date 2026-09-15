@@ -1,6 +1,7 @@
 import bpy
 from bpy.types import UIList
 
+from .brush_panels import draw_paint_sections
 from .common import get_icon, PaintSystemPanel
 from ..common import icon_kwargs
 from ..compiler.core import artifact_fingerprint
@@ -99,6 +100,7 @@ class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
         layout.separator()
         layout.label(text="Channels")
         _draw_channel_list(layout, tree)
+        draw_paint_sections(layout, context)
         _draw_compiled_info(layout, tree)
 
 

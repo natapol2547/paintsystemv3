@@ -101,6 +101,11 @@ SURFACE = [
     attr(f"{PPC}.StrokePanel"),
     attr(f"{PPC}.FalloffPanel"),
     gated(attr(f"{PPC}.BrushAssetShelf"), since_v=(4, 3)),
+    # The brush section's asset picker; a local brush picker before 4.3.
+    gated(attr(f"{PPC}.BrushAssetShelf.draw_popup_selector"), since_v=(4, 3)),
+    gated(rna_func("UILayout", "template_asset_shelf_popover"), since_v=(4, 3)),
+    gated(rna_func("UILayout", "template_ID_preview"), until_v=(4, 3)),
+    gated(op("brush.add"), until_v=(4, 3)),
     gated(any_of(attr(f"{PPC}.draw_color_jitter_panel"),
                  attr(f"{PPC}.color_jitter_panel")), since_v=(5, 0)),
     attr("bl_ui.space_toolsystem_common.ToolSelectPanelHelper.tool_active_from_context"),
@@ -115,6 +120,18 @@ SURFACE = [
     rna_prop("Brush", "use_pressure_size"),
     rna_prop("Brush", "use_pressure_strength"),
     rna_prop("Brush", "image_paint_capabilities"),
+    rna_prop("Brush", "color_type"),
+    rna_prop("Brush", "use_alpha"),
+    rna_prop("BrushCapabilitiesImagePaint", "has_color"),
+    rna_prop("ImagePaint", "use_occlude"),
+    rna_prop("ImagePaint", "use_backface_culling"),
+    rna_prop("ImagePaint", "use_normal_falloff"),
+    rna_prop("ImagePaint", "normal_angle"),
+    rna_prop("Paint", "palette"),
+    rna_func("UILayout", "template_palette"),
+    op("palette.new"),
+    rna_prop("Object", "active_material_index"),
+    attr("bpy.msgbus.subscribe_rna"),
     rna_prop("ImagePaint", "brush"),
     rna_prop("ImagePaint", "canvas"),
     rna_prop("ImagePaint", "mode"),
@@ -223,7 +240,8 @@ SKIP_DIRS = {"tests", "docs", ".git", "__pycache__", ".github", "dist", "build"}
 RE_TYPES = re.compile(r"\bbpy\.types\.([A-Z][A-Za-z0-9_]*)")
 RE_OPS = re.compile(r"\bbpy\.ops\.([a-z_0-9]+)\.([a-z_0-9]+)")
 RE_HANDLERS = re.compile(r"\bbpy\.app\.handlers\.([a-z_]+)")
-RE_BL_UI = re.compile(r"^\s*from\s+(bl_ui(?:\.[a-z_0-9]+)+)\s+import\s+\(?([^)\n]*(?:\n[^)]*)?)\)?",
+# Either a parenthesised name list, which may span lines, or the rest of one line.
+RE_BL_UI = re.compile(r"^\s*from\s+(bl_ui(?:\.[a-z_0-9]+)+)\s+import\s+(?:\(([^)]*)\)|([^(\n]*)$)",
                       re.MULTILINE)
 
 
@@ -248,7 +266,7 @@ def scan_sources():
         for m in RE_HANDLERS.finditer(src):
             handlers.setdefault(m.group(1), rel)
         for m in RE_BL_UI.finditer(src):
-            names = [n.strip() for n in m.group(2).replace("\n", ",").split(",")]
+            names = [n.strip() for n in (m.group(2) or m.group(3)).replace("\n", ",").split(",")]
             for n in names:
                 n = n.split(" as ")[0].strip()
                 if n:

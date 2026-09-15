@@ -18,7 +18,7 @@ import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (  # noqa: E402
-    PACKAGE, check, section, register_addon, finish,
+    PACKAGE, check, section, register_addon, finish, import_from,
 )
 
 if bpy.app.background:
@@ -26,6 +26,32 @@ if bpy.app.background:
     sys.exit(2)
 
 register_addon()
+brush_panels = import_from("panels.brush_panels")
+
+
+class PAINTSYSTEM_PT_test_paint_sections(bpy.types.Panel):
+    """The Brush and Color section bodies, open and closed.
+
+    The main panel draws them in ``layout.panel`` sections that start
+    closed, and a script cannot open those, so this test-only panel draws
+    what an open section would.
+    """
+    bl_label = "Paint Sections (test)"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Paint System"
+
+    def draw(self, context):
+        settings = brush_panels.texture_paint_settings(context)
+        if settings is None or settings.brush is None:
+            return
+        brush_panels.draw_brush_settings(self.layout.column(), context, settings)
+        brush_panels.draw_color_header(self.layout, context, settings.brush)
+        brush_panels.draw_color_body(self.layout, context, settings)
+        paint_sections_drawn.append(settings.brush.name)
+
+
+paint_sections_drawn = []
 
 DRAW_METHODS = ("draw", "draw_header", "draw_header_preset", "draw_item", "filter_items", "poll")
 errors = []
@@ -254,6 +280,9 @@ class Steps:
 
     def step_setup(self):
         section("wrap draw callbacks")
+        if "paint" in PARTS:
+            bpy.utils.register_class(PAINTSYSTEM_PT_test_paint_sections)
+            self.classes.append(PAINTSYSTEM_PT_test_paint_sections)
         if not os.environ.get("PS_UI_NOWRAP"):
             for cls in self.classes:
                 for name in DRAW_METHODS:
@@ -360,6 +389,8 @@ class Steps:
         check("PAINTSYSTEM_PT_layers_3dview" in calls, "layers panel was drawn")
         check("PAINTSYSTEM_UL_layers" in calls, "layer list rows were drawn")
         check("PAINTSYSTEM_MT_add_layer" in calls, "add layer menu was drawn")
+        if "paint" in PARTS:
+            check(paint_sections_drawn, f"brush and color sections were drawn {sorted(set(paint_sections_drawn))}")
         check(len(drawn) > 0, f"callbacks reached: {', '.join(drawn)}")
         seen = set()
         for cls_name, method, tb in errors:
