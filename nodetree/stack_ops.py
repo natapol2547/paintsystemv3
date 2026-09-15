@@ -159,6 +159,63 @@ def descendants(folder) -> list[bpy.types.Node]:
     return found
 
 
+# ── Clipping ─────────────────────────────────────────────────────────
+#
+# A clipped layer composites onto the content of the first unclipped layer
+# below it, its base, instead of onto the stack. The base's blend then
+# puts the base with its clipped layers over the stack below, as one. The
+# base and the clipped layers under the top one therefore output the run
+# so far, not the stack; the top one outputs the stack.
+
+
+def layer_below(node):
+    """The layer *node* composites over within its folder or channel, or None."""
+    link = feeding_link(node.inputs['Color'])
+    if link is None or link.from_socket.name != 'Color' or not is_layer(link.from_node):
+        return None
+    return link.from_node
+
+
+def layer_above(node):
+    """The layer compositing over *node* within its folder or channel, or None."""
+    for link in node.outputs['Color'].links:
+        consumer = link.to_node
+        if (is_layer(consumer) and link.to_socket.name == 'Color'
+                and feeding_link(link.to_socket) == link):
+            return consumer
+    return None
+
+
+def clip_base(node):
+    """The layer a clipped *node* clips to, or None when it composites normally.
+
+    That is the first unclipped layer below it. Clipped layers with no
+    layer below them, at the bottom of a folder or channel, composite as
+    if they were not clipped.
+    """
+    if not node.is_clip:
+        return None
+    visited = {node.name}
+    below = layer_below(node)
+    while below is not None and below.is_clip:
+        if below.name in visited:
+            return None
+        visited.add(below.name)
+        below = layer_below(below)
+    return below
+
+
+def feeds_clip_run(node) -> bool:
+    """Whether *node*'s outputs are a clip run that a layer above still blends.
+
+    True for a base and for the clipped layers under the top of its run.
+    """
+    above = layer_above(node)
+    if above is None or not above.is_clip:
+        return False
+    return not node.is_clip or clip_base(node) is not None
+
+
 # ── Editing ──────────────────────────────────────────────────────────
 
 

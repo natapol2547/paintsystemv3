@@ -78,6 +78,10 @@ class PAINTSYSTEM_UL_layers(UIList):
             else:
                 row.label(text="", icon='BLANK1')
         row.active = item.enabled and item.opacity > 0
+        if item.is_clip:
+            clip = row.row()
+            clip.scale_x = 0.7
+            clip.label(text="", **icon_kwargs('clipping'))
         item.draw_row_icon(row)
         main_row.separator()
         main_row.prop(item, "name", text="", emboss=False)
@@ -108,7 +112,7 @@ class PAINTSYSTEM_MT_add_layer(Menu):
 
 
 def draw_layer_properties(layout, context, node):
-    """Lock, blend mode and opacity of the active layer, on one row when the sidebar is wide enough."""
+    """Clip, lock, blend mode and opacity of the active layer, on one row when the sidebar is wide enough."""
     ui_scale = context.preferences.view.ui_scale
     region = getattr(context, 'region', None)
     wide = region is not None and region.width - 70 * ui_scale > 170 * ui_scale
@@ -116,6 +120,9 @@ def draw_layer_properties(layout, context, node):
     split.scale_x = 1.3
     split.scale_y = 1.3
     row = split.row(align=True)
+    clip = row.row(align=True)
+    clip.enabled = not node.lock_layer
+    clip.prop(node, "is_clip", text="", icon='SELECT_INTERSECT')
     row.prop(node, "lock_layer", text="", icon='VIEW_LOCKED')
     blend = row.row(align=True)
     blend.enabled = not node.lock_layer

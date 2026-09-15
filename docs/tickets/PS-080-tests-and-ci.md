@@ -36,6 +36,11 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   active layer index, the move option table and every move's result with
   one compile each, the move operators and undo, and the layer type
   registry through the add operator (PS-011, PS-012, PS-029).
+- `tests/test_clip.py` finds clip bases and bakes clipped stacks against
+  the PS-001 coverage rule applied run by run: base alpha and opacity,
+  runs of several layers, disabled layers, the base's blend mode, the
+  ends of a folder or channel, folders as bases and clipped, moves,
+  recompiles and caches (PS-013).
 - `tests/test_api_surface.py` lists every Blender class, RNA property,
   RNA function, operator and `gpu` entry point the addon relies on
   (including the `bl_ui.properties_paint_common` panels the sidebar
@@ -47,7 +52,7 @@ Each later ticket adds its own `tests/test_<feature>.py`.
 - `tests/test_ui_draw.py` runs windowed (Xvfb on CI). It wraps the
   `draw`, `draw_header`, `draw_item`, `filter_items` and `poll` methods of
   every class the addon registers with same-signature recorders, builds a
-  painted cube with nested, locked and disabled layers, opens the 3D view,
+  painted cube with clipped, nested, locked and disabled layers, opens the 3D view,
   node editor and image editor sidebars, moves the addon's sidebar panels
   onto the active tab, opens popover panels through `wm.call_panel`, menus
   through `wm.call_menu` and the move layer popup, and fails on any

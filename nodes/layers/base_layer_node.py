@@ -4,6 +4,7 @@ from bpy.props import BoolProperty, FloatProperty, EnumProperty, PointerProperty
 from ..base_node import PaintSystemBaseNode, mark_tree_dirty
 from ...common import icon_kwargs
 from ...compiler.library import layer_blend_group
+from ...nodetree.stack_ops import clip_base, feeds_clip_run
 
 
 BLEND_MODE_ITEMS = []
@@ -57,6 +58,9 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     blend_mode: EnumProperty(name="Blend Mode", items=BLEND_MODE_ITEMS,
                              default='MIX', update=mark_tree_dirty)
     enabled: BoolProperty(name="Enabled", default=True, update=mark_tree_dirty)
+    is_clip: BoolProperty(
+        name="Clip", default=False, update=mark_tree_dirty,
+        description="Show this layer only where the layer below it is visible")
 
     # Editing state only; the compiler ignores both (core._HASH_EXCLUDED_PROPS).
     lock_layer: BoolProperty(name="Lock Layer", default=False,
@@ -118,6 +122,7 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         row.prop(self, "lock_layer", text="", icon='LOCKED' if self.lock_layer else 'UNLOCKED')
         settings = row.row(align=True)
         settings.enabled = not self.lock_layer
+        settings.prop(self, "is_clip", text="", icon='SELECT_INTERSECT')
         settings.prop(self, "enabled", text="")
         settings.prop(self, "opacity")
         settings = layout.column()
@@ -154,9 +159,25 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         self.cache_stale = bool(self.cache_enabled and self.cache_image is not None)
 
         color, alpha = self.emit_source(ctx)
-        self.emit_blend(ctx, color, alpha)
+        base = clip_base(self)
+        if base is not None:
+            color, alpha = self.emit_blend(ctx, color, alpha, clip=True)
+            if not feeds_clip_run(self):
+                # Top of the run: blend the base with everything clipped to it.
+                color, alpha = base.emit_blend(ctx, color, alpha)
+        elif not feeds_clip_run(self):
+            color, alpha = self.emit_blend(ctx, color, alpha)
+        # Otherwise this is a base: the clipped layers above composite onto
+        # its content, and the top one blends the result with its settings.
+        ctx.alias_output(self, 'Color', color)
+        ctx.alias_output(self, 'Alpha', alpha)
 
-    def emit_blend(self, ctx, color, alpha):
+    def emit_blend(self, ctx, color, alpha, *, clip=False):
+        """Blend (color, alpha) over this layer's ``Color``/``Alpha`` inputs.
+
+        Uses this layer's blend mode, opacity and mask, and returns the
+        result's colour and alpha refs. *clip* keeps the backdrop's alpha.
+        """
         blend = ctx.emit_node(self, 'blend', 'ShaderNodeGroup', properties={
             'node_tree': layer_blend_group(self.blend_mode),
         })
@@ -167,5 +188,7 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         ctx.link_or_set(alpha, blend, 'Alpha')
         ctx.ir.set_input(blend, 'Opacity',
                          default_value=self.opacity if self.enabled else 0.0)
-        ctx.set_output(self, 'Color', blend, 'Color')
-        ctx.set_output(self, 'Alpha', blend, 'Alpha')
+        # Always set: the artifact reuses nodes by id and keeps the values of
+        # inputs the IR leaves out.
+        ctx.ir.set_input(blend, 'Clip', default_value=1.0 if clip else 0.0)
+        return (blend, 'Color'), (blend, 'Alpha')

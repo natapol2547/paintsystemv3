@@ -12,8 +12,8 @@ panel box, and the layer's source settings. The layer list shows a lock icon; it
 stays usable on a locked layer, as in v2.
 `is_folder` is a class attribute. Clearing the canvas and driving the
 brush's `use_alpha` wait for PS-060; `external_image`,
-`edit_external_mode`, `is_clip`, `modifies_color_data` and the warnings
-API are open.
+`edit_external_mode`, `modifies_color_data` and the warnings API are
+open. `is_clip` came with PS-013.
 
 ## v2 behaviour
 

@@ -33,7 +33,9 @@ PaintSystemNodeTree  --compile-->  IR  --NodeTreeBuilder-->  ShaderNodeTree (tre
    fingerprint stored on the artifact (`ps_fingerprint`), `IR.apply`
    patches the artifact through the diff-based `NodeTreeBuilder`
    (identifiers are `"<node uuid>:<role>"`). The fingerprint lives on the
-   artifact so it always describes the nodes next to it.
+   artifact so it always describes the nodes next to it. A reused node
+   keeps the value of any input the IR does not set, so an emitter sets
+   an input on every compile or never.
 
 The compiler never writes back into the document beyond the normalize
 repairs, so a nested compile request only needs a re-entrancy flag.
@@ -70,6 +72,14 @@ sibling, enter a folder, leave one) and `move` detaches the node and
 reinserts it; a folder carries its content because the content hangs off
 the folder. `tree.move_layer_node` runs a move as one compile and expands
 the folders around the result, as `insert_layer_node` does after an add.
+
+Clipping is resolved at compile time from the same links. A clipped
+layer's base is the first unclipped layer below it (`clip_base`). The
+base outputs its source unblended, the clipped layers composite onto it
+with the blend group's `Clip` input on, and the top of the run blends the
+result over the stack with the base's settings. Moves and edits never
+touch `is_clip`; the next compile finds the new base. A layer whose
+outputs are part of a run ignores its cache.
 
 `context.parse_context(context)` resolves the object, material, tree,
 channel, active layer and its stack item in one place (PS-030).
@@ -162,6 +172,7 @@ BLENDER=/path/to/blender tests/run.sh   # another Blender build
 `test_compile.py` covers the compiler, `test_blend.py` the blend math,
 `test_stack.py` the stack walk, folders, stack edits and `PSContext`,
 `test_layers.py` the layer list, moves and the layer type registry,
+`test_clip.py` clipping by pixel,
 `test_smoke_loop.py` the operators end to end with save, reload and undo,
 `test_api_surface.py` asserts that every Blender class, property and
 operator the addon depends on still exists, and `test_ui_draw.py` draws

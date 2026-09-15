@@ -17,7 +17,7 @@ from typing import Any, Iterable
 import bpy
 
 from .ir import IR, Ref, SocketId, hash_payload, _serialize
-from ..nodetree.stack_ops import alpha_partner, feeding_link, paired_color_input
+from ..nodetree.stack_ops import alpha_partner, feeding_link, feeds_clip_run, paired_color_input
 from ..props.channel import channel_socket_specs
 
 log = logging.getLogger(__name__)
@@ -198,6 +198,10 @@ class CompileContext:
         if not getattr(node, 'cache_enabled', False):
             return False
         if getattr(node, 'cache_image', None) is None:
+            return False
+        # A cache holds the stack; these outputs are a clip run, and the
+        # run's top layer needs the base's inputs compiled.
+        if feeds_clip_run(node):
             return False
         return node.cache_hash == self.subtree_hash(node)
 

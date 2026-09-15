@@ -4,8 +4,9 @@ Epic B. Size M. Milestone M1.
 
 ## Status
 
-Done for the demo (M0 slice 4) except the clip relationship, which waits
-for PS-013. `stack_ops.movement_options` returns `MoveOption(action,
+Done for the demo (M0 slice 4). Moves leave `is_clip` alone and a
+clipped layer clips to whatever layer ends up below it (PS-013, slice 5).
+`stack_ops.movement_options` returns `MoveOption(action,
 target, placement, folder)` and `stack_ops.move` performs one;
 `PaintSystemNodeTree.move_layer_node` wraps it in one compile and expands
 the folders around the moved layer. Deviations:

@@ -2,6 +2,38 @@
 
 Epic B. Size M. Milestone M1.
 
+## Status
+
+Done (M0 slice 5) as designed below, with the v2 pixel comparison
+replaced by closed-form pixel tests in `tests/test_clip.py`.
+
+- `is_clip` is on the base layer node. `stack_ops.clip_base(node)` finds
+  the base from the links on every compile; `feeds_clip_run(node)` is true
+  for the base and for clipped layers under the top of the run.
+  `StackItem` has no `clip_base`: nothing outside the compiler needs it.
+- In `PaintSystemLayerNode.emit` a base outputs its source unblended,
+  each clipped layer blends with `Clip = 1` over the run so far, and the
+  top of the run then calls the base's `emit_blend` on the result. The
+  base's blend node keeps the base's identifier.
+- The base's blend mode applies to the run as a whole, as does its
+  opacity and visibility. v2 blended the base inside the run and put the
+  run over the stack with `.PS Alpha Over`, so the base's blend mode never
+  applied against the stack below.
+- A clipped layer with no layer below it (bottom of the channel or of a
+  folder) composites unclipped. Layers clipped to an empty folder are
+  hidden, since the folder is their base.
+- A cached base or a cached clipped layer under the top of its run
+  compiles live (`CompileContext.is_cached`): their outputs are part of a
+  run, and the top needs the base's inputs compiled. The top of a run
+  caches the whole stack as usual.
+- The blend's `Clip` input is set on every layer. The artifact builder
+  reuses nodes by identifier and keeps the value of an input the IR stops
+  setting, so setting it only for clipped layers left unclipped layers
+  clipped.
+- The list shows the `clipping` icon on clipped rows; the active layer
+  box and the node have the `SELECT_INTERSECT` toggle, disabled while the
+  layer is locked.
+
 ## v2 behaviour
 
 - `Layer.is_clip` (`data.py:1269`), drawn as the SELECT_INTERSECT toggle in
