@@ -5,9 +5,10 @@ maps onto the node graph; most of Epic B and D builds on it.
 
 ## Status
 
-Done (M0 slice 3) apart from `move` (PS-012): `nodetree/stack_ops.py`,
-`nodes/layers/folder_layer_node.py`, `tree.stack()` and
-`tests/test_stack.py`. Deviations from the design below:
+Done (M0 slice 3; moves followed in slice 4, see PS-012):
+`nodetree/stack_ops.py`, `nodes/layers/folder_layer_node.py`,
+`tree.stack()` and `tests/test_stack.py`. Deviations from the design
+below:
 
 - `normalize_tree` does not repair alpha links. Compiles can run after
   the edit's undo step was pushed, and links created inside

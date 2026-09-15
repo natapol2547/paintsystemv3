@@ -10,18 +10,21 @@ class PaintSystemNodeCategory(NodeCategory):
         return context.space_data.tree_type == 'PaintSystemNodeTree'
 
 
-node_categories = [
-    PaintSystemNodeCategory('PAINTSYSTEM_LAYERS', "Layers", items=[
-        NodeItem('PaintSystemImageLayerNode'),
-        NodeItem('PaintSystemSolidColorLayerNode'),
-        NodeItem('PaintSystemFolderLayerNode'),
-        NodeItem('PaintSystemGroupLayerNode'),
-    ]),
-    PaintSystemNodeCategory('PAINTSYSTEM_IO', "Group", items=[
-        NodeItem('PaintSystemGroupInputNode'),
-        NodeItem('PaintSystemGroupOutputNode'),
-    ]),
-]
+def node_categories():
+    # Imported on registration: the layer node package imports
+    # ``nodetree.tree`` and may load while this package is initialising.
+    from ..nodes.layers.registry import layer_types
+    layer_items = [NodeItem(cls.bl_idname) for cls in layer_types()]
+    return [
+        PaintSystemNodeCategory('PAINTSYSTEM_LAYERS', "Layers", items=[
+            *layer_items,
+            NodeItem('PaintSystemGroupLayerNode'),
+        ]),
+        PaintSystemNodeCategory('PAINTSYSTEM_IO', "Group", items=[
+            NodeItem('PaintSystemGroupInputNode'),
+            NodeItem('PaintSystemGroupOutputNode'),
+        ]),
+    ]
 
 
 submodules = (
@@ -34,7 +37,7 @@ _register, _unregister = register_submodule_factory(__name__, submodules)
 
 def register():
     _register()
-    nodeitems_utils.register_node_categories('PAINTSYSTEM_NODES', node_categories)
+    nodeitems_utils.register_node_categories('PAINTSYSTEM_NODES', node_categories())
 
 
 def unregister():

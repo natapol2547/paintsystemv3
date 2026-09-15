@@ -1,12 +1,10 @@
 import bpy
 from bpy.types import Operator
-from bpy.props import EnumProperty, StringProperty
+from bpy.props import StringProperty
 from bpy.utils import register_classes_factory
 
-from ..context import get_active_tree, parse_context
-from ..compiler.core import compile_tree, flush_now, ensure_artifact, suspend_compile
-from ..compiler.bake import create_managed_image
-from ..nodetree.stack_ops import descendants
+from ..context import get_active_tree
+from ..compiler.core import compile_tree, flush_now, ensure_artifact
 
 
 MATERIAL_GROUP_KEY = "ps_tree_uuid"
@@ -115,117 +113,10 @@ class PAINTSYSTEM_OT_compile_tree(Operator):
         return {'FINISHED'}
 
 
-class PAINTSYSTEM_OT_add_layer(Operator):
-    bl_idname = "paint_system.add_layer"
-    bl_label = "Add Layer"
-    bl_description = ("Add a layer above the active layer, inside it when it is a folder, "
-                      "or on top of the stack when no layer is active")
-    bl_options = {'REGISTER', 'UNDO'}
-
-    layer_type: EnumProperty(name="Type", items=[
-        ('IMAGE', "Image", "Paintable image layer"),
-        ('SOLID', "Solid Color", "Flat color layer"),
-        ('FOLDER', "Folder", "Group layers and blend them as one"),
-        ('GROUP', "Group", "Nested Paint System tree"),
-    ], default='IMAGE')
-    resolution: EnumProperty(name="Resolution", items=RESOLUTION_ITEMS, default='2048')
-
-    @classmethod
-    def poll(cls, context):
-        tree = get_active_tree(context)
-        return tree is not None and len(tree.channels) > 0
-
-    def execute(self, context):
-        ps = parse_context(context)
-        tree = ps.tree
-        target = ps.layer if ps.stack_item is not None else None
-        with suspend_compile(tree):
-            if self.layer_type == 'IMAGE':
-                node = tree.insert_layer_node('PaintSystemImageLayerNode', target=target)
-                size = int(self.resolution)
-                image = create_managed_image(f"{tree.name} {node.name}", size, size)
-                node.image = image
-                _set_paint_canvas(context, image)
-            elif self.layer_type == 'SOLID':
-                node = tree.insert_layer_node('PaintSystemSolidColorLayerNode', target=target)
-            elif self.layer_type == 'FOLDER':
-                tree.insert_layer_node('PaintSystemFolderLayerNode', target=target)
-            else:
-                node = tree.nodes.new('PaintSystemGroupLayerNode')
-                node.node_tree = _new_tree(f"{tree.name} Group")
-        return {'FINISHED'}
-
-    def invoke(self, context, event):
-        if self.layer_type == 'IMAGE':
-            return context.window_manager.invoke_props_dialog(self)
-        return self.execute(context)
-
-
-def _set_paint_canvas(context, image):
-    settings = context.scene.tool_settings.image_paint
-    settings.mode = 'IMAGE'
-    settings.canvas = image
-
-
-class PAINTSYSTEM_OT_set_active_layer(Operator):
-    bl_idname = "paint_system.set_active_layer"
-    bl_label = "Select Layer"
-    bl_description = "Make this layer active and paint on its image"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    node_name: StringProperty()
-
-    def execute(self, context):
-        tree = get_active_tree(context)
-        node = tree.nodes.get(self.node_name) if tree else None
-        if node is None:
-            return {'CANCELLED'}
-        for n in tree.nodes:
-            n.select = n == node
-        tree.nodes.active = node
-        image = getattr(node, 'image', None)
-        if image is not None:
-            _set_paint_canvas(context, image)
-        return {'FINISHED'}
-
-
-class PAINTSYSTEM_OT_remove_layer(Operator):
-    bl_idname = "paint_system.remove_layer"
-    bl_label = "Remove Layer"
-    bl_description = "Remove the active layer, and a folder's content with it, and close the gap"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        tree = get_active_tree(context)
-        node = tree.nodes.active if tree else None
-        return node is not None and getattr(node, 'is_layer_node', False)
-
-    def execute(self, context):
-        ps = parse_context(context)
-        tree, node = ps.tree, ps.layer
-        # The row that moves up into the removed row stays active, or the
-        # last row when the removed one was at the bottom.
-        rows = [item.node.name for item in tree.stack()]
-        gone = {node.name, *(child.name for child in descendants(node))} if node.is_folder else {node.name}
-        position = rows.index(node.name) if node.name in rows else len(rows)
-        after = [name for name in rows[position:] if name not in gone]
-        before = [name for name in rows[:position] if name not in gone]
-        next_active = after[0] if after else (before[-1] if before else None)
-
-        tree.remove_layer_node(node)
-        if next_active is not None:
-            tree.nodes.active = tree.nodes[next_active]
-        return {'FINISHED'}
-
-
 classes = (
     PAINTSYSTEM_OT_create_tree,
     PAINTSYSTEM_OT_setup_material,
     PAINTSYSTEM_OT_compile_tree,
-    PAINTSYSTEM_OT_add_layer,
-    PAINTSYSTEM_OT_set_active_layer,
-    PAINTSYSTEM_OT_remove_layer,
 )
 
 

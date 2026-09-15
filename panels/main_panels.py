@@ -40,58 +40,12 @@ def _draw_channel_list(layout, node_tree):
     col.operator("paint_system.move_channel_down", icon='TRIA_DOWN', text="")
 
 
-def _is_hidden(item):
-    parent = item.parent
-    while parent is not None:
-        if not parent.node.is_expanded:
-            return True
-        parent = parent.parent
-    return False
-
-
-def _draw_layer_stack(layout, tree):
-    """Stack feeding the active channel, top-most first, folder content indented."""
-    row = layout.row(align=True)
-    for layer_type, text, icon in (('IMAGE', "Image", 'IMAGE_DATA'),
-                                   ('SOLID', "Solid", 'COLOR'),
-                                   ('FOLDER', "Folder", 'FILE_FOLDER')):
-        op = row.operator("paint_system.add_layer", text=text, icon=icon)
-        op.layer_type = layer_type
-    row.operator("paint_system.remove_layer", text="", icon='REMOVE')
-
-    items = tree.stack()
-    if not items:
-        layout.label(text="No layers on this channel", icon='INFO')
-        return
-    active = tree.nodes.active
-    col = layout.column(align=True)
-    for item in items:
-        if _is_hidden(item):
-            continue
-        node = item.node
-        row = col.row(align=True)
-        for _level in range(item.level):
-            row.label(text="", icon='BLANK1')
-        if node.is_folder:
-            row.prop(node, "is_expanded", text="", emboss=False,
-                     icon='DISCLOSURE_TRI_DOWN' if node.is_expanded else 'DISCLOSURE_TRI_RIGHT')
-        sub = row.row(align=True)
-        sub.enabled = not node.lock_layer
-        sub.prop(node, "enabled", text="")
-        op = row.operator("paint_system.set_active_layer", text=node.name,
-                          icon=node.bl_icon, depress=(node == active))
-        op.node_name = node.name
-        sub = row.row(align=True)
-        sub.enabled = not node.lock_layer
-        sub.prop(node, "opacity", text="", slider=True)
-        if node.lock_layer:
-            row.label(text="", icon='LOCKED')
-        if node.cache_enabled and node.cache_image is not None:
-            row.label(text="", icon='ERROR' if node.cache_stale else 'CHECKMARK')
-
-
 def _draw_compiled_info(layout, tree):
-    box = layout.box()
+    header, body = layout.panel("paint_system_compiled_panel", default_closed=True)
+    header.label(text="Compiled Shader")
+    if body is None:
+        return
+    box = body.box()
     compiled = tree.compiled
     if compiled is None:
         box.label(text="Not compiled yet", icon='INFO')
@@ -133,12 +87,6 @@ class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
         layout.separator()
         layout.label(text="Channels")
         _draw_channel_list(layout, tree)
-
-        layout.separator()
-        layout.label(text="Layers")
-        _draw_layer_stack(layout, tree)
-
-        layout.separator()
         _draw_compiled_info(layout, tree)
 
 
@@ -161,12 +109,6 @@ class PAINTSYSTEM_PT_main_node_editor(PaintSystemPanel):
 
         layout.label(text="Channels")
         _draw_channel_list(layout, tree)
-
-        layout.separator()
-        layout.label(text="Layers")
-        _draw_layer_stack(layout, tree)
-
-        layout.separator()
         _draw_compiled_info(layout, tree)
 
 

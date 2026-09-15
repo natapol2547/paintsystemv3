@@ -124,3 +124,13 @@ def parse_context(context) -> PSContext:
         layer=layer,
         stack_item=stack_item,
     )
+
+
+def update_active_image(context) -> None:
+    """Paint on the active layer's image, when it has one."""
+    image = getattr(parse_context(context).layer, 'image', None)
+    if image is None:
+        return
+    settings = context.scene.tool_settings.image_paint
+    settings.mode = 'IMAGE'
+    settings.canvas = image

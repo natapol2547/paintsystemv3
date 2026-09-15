@@ -2,6 +2,17 @@
 
 Epic D. Size L. Milestone M1 (image, transform), M2 (rest).
 
+## Status
+
+Partly done (M0 slice 4): the Layers panel draws a "Layer Settings"
+`layout.panel("layer_settings_panel")`, disabled while the layer is
+locked, with the type's `draw_source_settings(context, layout)`: the
+image and UV map for image layers, the colour for solid layers, nothing
+for folders. Nodes draw the same method between their layer and cache
+settings. The name is `draw_source_settings`, pairing with `emit_source`,
+because `draw_layer_settings` already draws the lock, opacity and blend
+row on nodes. The Image, Transform and Actions sub-panels are open.
+
 ## v2 behaviour
 
 `draw_layer_settings` (`panels/layers_panels.py:171-492`),

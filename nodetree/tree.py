@@ -68,6 +68,20 @@ def sync_group_nodes_referencing(tree) -> None:
             mark_dirty(ng)
 
 
+def _get_active_layer_index(tree) -> int:
+    active = tree.nodes.active
+    return tree.nodes.find(active.name) if active is not None else -1
+
+
+def _set_active_layer_index(tree, index: int) -> None:
+    if not 0 <= index < len(tree.nodes) or not stack_ops.is_layer(tree.nodes[index]):
+        return
+    tree.activate_layer_node(tree.nodes[index])
+    # Imported here: ``context`` imports this package.
+    from ..context import update_active_image
+    update_active_image(bpy.context)
+
+
 class PaintSystemNodeTree(NodeTree):
     bl_idname = 'PaintSystemNodeTree'
     bl_label = 'Paint System'
@@ -78,6 +92,15 @@ class PaintSystemNodeTree(NodeTree):
     channels: CollectionProperty(type=PaintSystemChannel)
     active_channel_index: IntProperty(name="Active Channel", default=0)
     uuid: StringProperty(name="UUID")
+
+    # The layer list shows ``nodes`` directly; its active row is the active
+    # node, so nothing is stored that could disagree with the graph.
+    active_layer_index: IntProperty(
+        name="Active Layer",
+        description="Index in nodes of the active layer",
+        get=_get_active_layer_index,
+        set=_set_active_layer_index,
+    )
 
     # Build artifact. Owned by this tree, rebuilt by the compiler, never edited by hand.
     compiled: PointerProperty(
@@ -225,7 +248,8 @@ class PaintSystemNodeTree(NodeTree):
                 stack_ops.insert_on_top(self, node, channel_name)
             if channel_name is not None:
                 stack_ops.arrange_stack(self, channel_name)
-            self.nodes.active = node
+            self.activate_layer_node(node)
+            self.reveal_layer_node(node, channel_name)
         return node
 
     def remove_layer_node(self, node: bpy.types.Node, channel_name: str | None = None) -> None:
@@ -236,6 +260,39 @@ class PaintSystemNodeTree(NodeTree):
             stack_ops.remove(self, node)
             if channel_name is not None:
                 stack_ops.arrange_stack(self, channel_name)
+
+    def move_layer_node(self, node: bpy.types.Node, direction: str, action: str,
+                        channel_name: str | None = None) -> bool:
+        """Move a layer a row ``'UP'`` or ``'DOWN'`` by one of ``stack_ops.movement_options``.
+
+        A folder takes its content along. Returns False, changing nothing,
+        when the move is not on offer.
+        """
+        channel_name = self._channel_name(channel_name)
+        if channel_name is None:
+            return False
+        with suspend_compile(self):
+            stack_ops.repair_alpha_links(self)
+            moved = stack_ops.move(self, channel_name, node, direction, action)
+            if moved:
+                stack_ops.arrange_stack(self, channel_name)
+                self.reveal_layer_node(node, channel_name)
+        return moved
+
+    def activate_layer_node(self, node: bpy.types.Node) -> None:
+        """Make *node* the active and only selected node."""
+        for other in self.nodes:
+            other.select = other == node
+        self.nodes.active = node
+
+    def reveal_layer_node(self, node: bpy.types.Node, channel_name: str | None = None) -> None:
+        """Expand every folder around *node* so its row shows in the layer list."""
+        item = next((item for item in self.stack(channel_name) if item.node == node), None)
+        parent = item.parent if item is not None else None
+        while parent is not None:
+            if not parent.node.is_expanded:
+                parent.node.is_expanded = True
+            parent = parent.parent
 
 
 classes = (

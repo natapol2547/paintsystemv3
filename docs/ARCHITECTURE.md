@@ -64,8 +64,23 @@ edit. It does not run during a compile: compiles can run after the edit's
 undo step was pushed, where changing the document would reintroduce the
 stale-undo problem described under Triggers.
 
+Moves are computed from the same walk. `movement_options(items, node,
+direction)` lists what up or down can mean next to folders (skip a
+sibling, enter a folder, leave one) and `move` detaches the node and
+reinserts it; a folder carries its content because the content hangs off
+the folder. `tree.move_layer_node` runs a move as one compile and expands
+the folders around the result, as `insert_layer_node` does after an add.
+
 `context.parse_context(context)` resolves the object, material, tree,
 channel, active layer and its stack item in one place (PS-030).
+
+The layer list (`panels/layers_panels.py`) is a UIList over `tree.nodes`
+itself. `filter_items` hides nodes outside the stack and rows under a
+collapsed folder and orders the rest by the walk; `active_layer_index` is
+a get/set property over `nodes.active`. Nothing about the list is stored,
+so undo, load and hand edits cannot leave it out of date. Layer types are
+listed by `nodes/layers/registry.py`, which feeds the Add Layer menu, the
+add operator's enum and the node editor categories.
 
 ## Triggers
 
@@ -146,6 +161,7 @@ BLENDER=/path/to/blender tests/run.sh   # another Blender build
 `check`/`section`/`finish` plus Cycles bake helpers for pixel checks.
 `test_compile.py` covers the compiler, `test_blend.py` the blend math,
 `test_stack.py` the stack walk, folders, stack edits and `PSContext`,
+`test_layers.py` the layer list, moves and the layer type registry,
 `test_smoke_loop.py` the operators end to end with save, reload and undo,
 `test_api_surface.py` asserts that every Blender class, property and
 operator the addon depends on still exists, and `test_ui_draw.py` draws

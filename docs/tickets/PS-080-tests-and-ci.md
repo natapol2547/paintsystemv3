@@ -32,6 +32,10 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   Script-called operators pass `('EXEC_DEFAULT', True)` to get the undo
   push the UI would make, and background sessions need one explicit
   `ed.undo_push()` before undo works.
+- `tests/test_layers.py` covers the layer list rows and filter, the
+  active layer index, the move option table and every move's result with
+  one compile each, the move operators and undo, and the layer type
+  registry through the add operator (PS-011, PS-012, PS-029).
 - `tests/test_api_surface.py` lists every Blender class, RNA property,
   RNA function, operator and `gpu` entry point the addon relies on
   (including the `bl_ui.properties_paint_common` panels the sidebar
@@ -41,11 +45,13 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   references and resolves each of them, so a new dependency is checked
   without editing the list.
 - `tests/test_ui_draw.py` runs windowed (Xvfb on CI). It wraps the
-  `draw`, `draw_header`, `draw_item` and `poll` methods of every class the
-  addon registers with same-signature recorders, builds a painted cube,
-  opens the 3D view, node editor and image editor sidebars, moves the
-  addon's sidebar panels onto the active tab, opens popover panels
-  through `wm.call_panel` and fails on any exception. Blender swallows
+  `draw`, `draw_header`, `draw_item`, `filter_items` and `poll` methods of
+  every class the addon registers with same-signature recorders, builds a
+  painted cube with nested, locked and disabled layers, opens the 3D view,
+  node editor and image editor sidebars, moves the addon's sidebar panels
+  onto the active tab, opens popover panels through `wm.call_panel`, menus
+  through `wm.call_menu` and the move layer popup, and fails on any
+  exception. Blender swallows
   draw exceptions, so this is the only test that catches a broken panel.
 - `tests/run.sh [--ui] [test files]` drives all of the above.
   `BLENDER` selects the executable; `XVFB=1` forces the UI test through

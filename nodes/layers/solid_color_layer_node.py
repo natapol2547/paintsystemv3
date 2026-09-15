@@ -14,6 +14,12 @@ class PaintSystemSolidColorLayerNode(PaintSystemLayerNode, Node):
     bl_label = 'Solid Color'
     bl_icon = 'COLOR'
 
+    ps_type = 'SOLID_COLOR'
+    ps_label = "Solid Color"
+    ps_description = "Flat color layer"
+    ps_icon = ('STRIP_COLOR_03', 'SEQUENCE_COLOR_03')
+    ps_menu_section = 'CONTENT'
+
     fill_color: FloatVectorProperty(
         name="Color", subtype='COLOR', size=4, min=0.0, max=1.0,
         default=(0.8, 0.8, 0.8, 1.0), update=mark_tree_dirty,
@@ -24,10 +30,13 @@ class PaintSystemSolidColorLayerNode(PaintSystemLayerNode, Node):
         self.use_custom_color = True
         self.color = SOLID_LAYER_COLOR
 
-    def draw_buttons(self, context, layout):
-        self.draw_layer_settings(context, layout)
+    def draw_row_icon(self, layout):
+        swatch = layout.row(align=True)
+        swatch.ui_units_x = 1.5
+        swatch.prop(self, "fill_color", text="")
+
+    def draw_source_settings(self, context, layout):
         layout.prop(self, "fill_color", text="")
-        self.draw_cache_settings(context, layout)
 
     def emit_source(self, ctx):
         r, g, b, a = self.fill_color

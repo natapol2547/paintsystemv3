@@ -2,6 +2,29 @@
 
 Epic B. Size M. Milestone M1.
 
+## Status
+
+Done (M0 slice 4), without the mirror collection the design below
+describes:
+
+- `PAINTSYSTEM_UL_layers` (`panels/layers_panels.py`) lists `tree.nodes`
+  directly. `filter_items` hides nodes outside the stack and rows under a
+  collapsed folder, and sorts by stack position. Nothing derived is
+  stored, so there is nothing to rebuild on undo, load or channel switch,
+  and nothing a compile would write after its undo step.
+- `layer_rows(tree)` is the row model (`order`, `level`, `visible`,
+  `parent_enabled`), computed from `stack()` on every redraw.
+- `PaintSystemNodeTree.active_layer_index` is a get/set property over
+  `nodes.active`; the setter selects the node and calls
+  `context.update_active_image`, which for now only points the canvas at
+  an image layer's image (the full rules are PS-060).
+- Rows inside a disabled folder are greyed with `UILayout.active`, not
+  disabled as in v2, so a disabled folder still expands and its layers
+  can still be renamed or toggled.
+
+Acceptance is covered by `tests/test_layers.py` (rows, filter, active
+index) and `tests/test_ui_draw.py`.
+
 ## v2 behaviour
 
 `MAT_PT_UL_LayerList` (`panels/layers_panels.py:58-138`) draws from the

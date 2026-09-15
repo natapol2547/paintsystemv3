@@ -6,6 +6,7 @@ from bpy.utils import register_classes_factory
 
 from .base_layer_node import PaintSystemLayerNode, emit_image_texture
 from ..base_node import mark_tree_dirty
+from ...compiler.bake import create_managed_image
 
 
 IMAGE_LAYER_COLOR = (0.235291, 0.215529, 0.170224)
@@ -15,6 +16,13 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
     bl_idname = 'PaintSystemImageLayerNode'
     bl_label = 'Image Layer'
     bl_icon = 'IMAGE_DATA'
+
+    ps_type = 'IMAGE'
+    ps_label = "Image"
+    ps_description = "Paintable image layer"
+    ps_icon = ('image',)
+    ps_menu_section = 'CONTENT'
+    ps_add_options = ('resolution',)
 
     image: PointerProperty(
         type=bpy.types.Image,
@@ -33,15 +41,21 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
         self.use_custom_color = True
         self.color = IMAGE_LAYER_COLOR
 
-    def draw_buttons(self, context, layout):
-        self.draw_layer_settings(context, layout)
+    @classmethod
+    def create(cls, tree, target=None, resolution='2048', **options):
+        # *resolution* is the identifier of the operator's resolution enum.
+        size = int(resolution)
+        node = super().create(tree, target=target)
+        node.image = create_managed_image(f"{tree.name} {node.name}", size, size)
+        return node
+
+    def draw_source_settings(self, context, layout):
         layout.template_ID(self, "image", new="image.new", open="image.open")
-        obj = context.object
+        obj = getattr(context, 'object', None)
         if obj is not None and obj.type == 'MESH':
             layout.prop_search(self, "uv_map", obj.data, "uv_layers", text="UV")
         else:
             layout.prop(self, "uv_map")
-        self.draw_cache_settings(context, layout)
 
     def draw_label(self):
         if self.image:

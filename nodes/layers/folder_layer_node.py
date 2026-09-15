@@ -3,6 +3,7 @@ from bpy.props import BoolProperty
 from bpy.utils import register_classes_factory
 
 from .base_layer_node import PaintSystemLayerNode
+from ...common import icon_kwargs
 
 
 FOLDER_LAYER_COLOR = (0.235291, 0.196, 0.121)
@@ -18,6 +19,12 @@ class PaintSystemFolderLayerNode(PaintSystemLayerNode, Node):
     bl_idname = 'PaintSystemFolderLayerNode'
     bl_label = 'Folder'
     bl_icon = 'FILE_FOLDER'
+
+    ps_type = 'FOLDER'
+    ps_label = "Folder"
+    ps_description = "Group layers and blend them as one"
+    ps_icon = ('folder',)
+    ps_menu_section = 'STRUCTURE'
 
     is_folder = True
 
@@ -35,9 +42,9 @@ class PaintSystemFolderLayerNode(PaintSystemLayerNode, Node):
         self.use_custom_color = True
         self.color = FOLDER_LAYER_COLOR
 
-    def draw_buttons(self, context, layout):
-        self.draw_layer_settings(context, layout)
-        self.draw_cache_settings(context, layout)
+    def draw_row_icon(self, layout):
+        icon = 'folder_open' if self.is_expanded else 'folder'
+        layout.prop(self, "is_expanded", text="", emboss=False, icon_only=True, **icon_kwargs(icon))
 
     def emit_source(self, ctx):
         return (ctx.input_source(self.inputs['Content Color']),

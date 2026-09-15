@@ -27,7 +27,7 @@ if bpy.app.background:
 
 register_addon()
 
-DRAW_METHODS = ("draw", "draw_header", "draw_header_preset", "draw_item", "poll")
+DRAW_METHODS = ("draw", "draw_header", "draw_header_preset", "draw_item", "filter_items", "poll")
 errors = []
 calls = {}
 
@@ -153,11 +153,15 @@ def setup_scene(window):
     with bpy.context.temp_override(window=window, area=view3d, region=region, object=cube):
         bpy.ops.paint_system.setup_material()
         bpy.ops.paint_system.add_layer(layer_type='IMAGE')
-        bpy.ops.paint_system.add_layer(layer_type='SOLID')
-        # A folder with a locked layer inside draws the nested, locked rows.
+        bpy.ops.paint_system.add_layer(layer_type='SOLID_COLOR')
+        # A disabled folder with a locked layer inside draws the nested,
+        # greyed and locked rows.
         bpy.ops.paint_system.add_layer(layer_type='FOLDER')
-        bpy.ops.paint_system.add_layer(layer_type='SOLID')
-        cube.active_material.paint_system.tree.nodes.active.lock_layer = True
+        tree = cube.active_material.paint_system.tree
+        folder = tree.nodes.active
+        bpy.ops.paint_system.add_layer(layer_type='SOLID_COLOR')
+        tree.nodes.active.lock_layer = True
+        folder.enabled = False
         if "paint" in PARTS:
             bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
     return cube
@@ -196,6 +200,28 @@ def open_popover(window, view3d, cls):
         errors.append((cls.__name__, "call_panel", traceback.format_exc()))
 
 
+def open_menu(window, view3d, cls):
+    region = window_region(view3d)
+    try:
+        with bpy.context.temp_override(window=window, area=view3d, region=region):
+            bpy.ops.wm.call_menu(name=cls.bl_idname)
+    except Exception:
+        errors.append((cls.__name__, "call_menu", traceback.format_exc()))
+
+
+def open_move_popup(window, view3d, tree):
+    """Invoke a layer move with several options on offer, which opens a menu of them."""
+    region = window_region(view3d)
+    tree.nodes.active = next(item.node for item in tree.stack()
+                             if item.level == 0 and not item.node.is_folder)
+    try:
+        with bpy.context.temp_override(window=window, area=view3d, region=region):
+            result = bpy.ops.paint_system.move_layer_up('INVOKE_DEFAULT')
+        check(result == {'INTERFACE'}, f"a move with several options opens a menu {result}")
+    except Exception:
+        errors.append(("PAINTSYSTEM_OT_move_layer_up", "invoke", traceback.format_exc()))
+
+
 class Steps:
     """Timer-driven test: each step returns the delay before the next."""
 
@@ -203,8 +229,9 @@ class Steps:
         self.window = bpy.context.window_manager.windows[0]
         self.classes = addon_ui_classes()
         self.view3d = None
+        self.tree = None
         self.areas = []
-        self.popovers = []
+        self.popups = []
         self.state = 0
 
     def step_setup(self):
@@ -219,9 +246,11 @@ class Steps:
         cube = setup_scene(self.window)
         tree = cube.active_material.paint_system.tree
         check(tree is not None, "material has a Paint System tree")
+        self.tree = tree
         self.areas = setup_areas(self.window, tree)
         self.view3d = self.areas[0]
-        self.popovers = popover_panels(self.classes)
+        self.popups = ([(open_popover, cls) for cls in popover_panels(self.classes)]
+                       + [(open_menu, cls) for cls in self.classes if issubclass(cls, bpy.types.Menu)])
         tag_redraw(self.window)
         return 0.5
 
@@ -232,9 +261,15 @@ class Steps:
         tag_redraw(self.window)
         return 1.0
 
-    def step_popover(self):
-        cls = self.popovers.pop()
-        open_popover(self.window, self.view3d, cls)
+    def step_popup(self):
+        opener, cls = self.popups.pop()
+        opener(self.window, self.view3d, cls)
+        tag_redraw(self.window)
+        return 0.5
+
+    def step_move_popup(self):
+        section("move popup")
+        open_move_popup(self.window, self.view3d, self.tree)
         tag_redraw(self.window)
         return 0.5
 
@@ -242,6 +277,9 @@ class Steps:
         section("results")
         drawn = sorted(name for name, n in calls.items() if n)
         check("PAINTSYSTEM_PT_main_3dview" in calls, "main 3D view panel was drawn")
+        check("PAINTSYSTEM_PT_layers_3dview" in calls, "layers panel was drawn")
+        check("PAINTSYSTEM_UL_layers" in calls, "layer list rows were drawn")
+        check("PAINTSYSTEM_MT_add_layer" in calls, "add layer menu was drawn")
         check(len(drawn) > 0, f"callbacks reached: {', '.join(drawn)}")
         seen = set()
         for cls_name, method, tb in errors:
@@ -262,8 +300,11 @@ class Steps:
             if self.state == 1:
                 self.state = 2
                 return self.step_retab()
-            if self.popovers:
-                return self.step_popover()
+            if self.popups:
+                return self.step_popup()
+            if self.state == 2:
+                self.state = 3
+                return self.step_move_popup()
             self.step_results()
         except Exception:
             traceback.print_exc()

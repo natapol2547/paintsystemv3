@@ -193,7 +193,7 @@ try:
 
     section("operators")
     nested.nodes.active = box
-    check(bpy.ops.paint_system.add_layer(layer_type='SOLID') == {'FINISHED'}, "add with a folder active")
+    check(bpy.ops.paint_system.add_layer(layer_type='SOLID_COLOR') == {'FINISHED'}, "add with a folder active")
     added = nested.nodes.active
     check(layout(nested)[1][0] == added.name and layout(nested)[1][2] == "Box", "adds at the top of the folder")
     check(bpy.ops.paint_system.add_layer(layer_type='FOLDER') == {'FINISHED'}, "add a folder with a layer active")

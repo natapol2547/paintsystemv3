@@ -2,6 +2,32 @@
 
 Epic C. Size M. Milestone M1.
 
+## Status
+
+Partly done (M0 slice 4) for Folder, Solid Color and Image:
+
+- `nodes/layers/registry.py`: `layer_types()`, `layer_type(ps_type)` and
+  `layer_type_items()`. Layer node classes declare `ps_type` (v2 ids
+  `FOLDER`, `SOLID_COLOR`, `IMAGE`), `ps_label`, `ps_description`,
+  `ps_icon`, `ps_menu_section` and `ps_add_options`.
+- `ps_icon` is a tuple of names tried in order by `common.icon_kwargs`,
+  since Blender renames icons (`SEQUENCE_COLOR_03` became
+  `STRIP_COLOR_03`) and an unknown name makes the layout call raise.
+- `create(tree, target=None, **options)` takes no context; the operator
+  syncs the canvas afterwards. Options are the add operator's properties
+  named in `ps_add_options` (image: `resolution`), which the operator asks
+  for in a dialog.
+- One `paint_system.add_layer` operator takes `layer_type` from the
+  registry. `GROUP` is no longer offered there; the group layer node stays
+  in the node editor's Layers category, which is derived from the
+  registry.
+- `draw_row_icon(layout)` per type replaces `draw_layer_icon`: folder
+  expand toggle, solid colour swatch, image icon. Image previews are not
+  shown yet.
+- `PAINTSYSTEM_MT_add_layer`: Folder, separator, Solid Color, Image. The
+  search entry, the image sub-menu and the other types are open, as is the
+  menu fixture test.
+
 ## v2 behaviour
 
 `LAYER_TYPE_ENUM` (`data.py:99`), `draw_layer_icon`

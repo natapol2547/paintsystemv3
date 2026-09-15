@@ -119,7 +119,7 @@ try:
     check_artifact("after redo setup")
 
     section("add layers through operators")
-    check(run(bpy.ops.paint_system.add_layer, layer_type='SOLID'), "add solid layer")
+    check(run(bpy.ops.paint_system.add_layer, layer_type='SOLID_COLOR'), "add solid layer")
     active_tree().nodes.active.fill_color = RED
     check(run(bpy.ops.paint_system.add_layer, layer_type='IMAGE', resolution='1024'), "add image layer")
     tree = active_tree()
@@ -154,7 +154,7 @@ try:
     bpy.context.view_layer.objects.active = cube()
     init_undo()
     before = layer_names()
-    check(run(bpy.ops.paint_system.add_layer, layer_type='SOLID'), "add another solid layer")
+    check(run(bpy.ops.paint_system.add_layer, layer_type='SOLID_COLOR'), "add another solid layer")
     check(len(layer_names()) == len(before) + 1, f"layer added {layer_names()}")
     names = layer_names()
     check(len(set(names)) == len(names) and all(active_tree().nodes.get(n) for n in names),
@@ -179,7 +179,12 @@ try:
     section("undo and redo remove layer")
     image_layer = next(item.node.name for item in active_tree().stack()
                        if item.node.bl_idname == 'PaintSystemImageLayerNode')
-    check(run(bpy.ops.paint_system.set_active_layer, node_name=image_layer), "select image layer")
+    # Clicking a row in the layer list sets the index and pushes an undo step.
+    tree = active_tree()
+    tree.active_layer_index = tree.nodes.find(image_layer)
+    bpy.ops.ed.undo_push(message="Select image layer")
+    del tree
+    check(active_tree().nodes.active.name == image_layer, "select image layer")
     check(run(bpy.ops.paint_system.remove_layer), "remove image layer")
     check(image_layer not in layer_names(), "image layer removed")
     check_artifact("after remove")

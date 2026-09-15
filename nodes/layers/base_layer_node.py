@@ -2,6 +2,7 @@ import bpy
 from bpy.props import BoolProperty, FloatProperty, EnumProperty, PointerProperty, StringProperty
 
 from ..base_node import PaintSystemBaseNode, mark_tree_dirty
+from ...common import icon_kwargs
 from ...compiler.library import layer_blend_group
 
 
@@ -32,9 +33,24 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
 
     Subclasses implement ``emit_source(ctx)`` returning ``(color, alpha)``
     where each is an IR ref or a constant. Blending is shared.
+
+    Types offered in the Add Layer menu fill in the ``ps_*`` attributes and
+    are listed in ``nodes/layers/registry.py``.
     """
     bl_width_default = 200
     is_layer_node = True
+
+    # v2 layer type identifier, which migration maps v2 layers through.
+    ps_type = ''
+    ps_label = ''
+    ps_description = ''
+    # Icon names for ``common.icon_kwargs``, newest Blender name first.
+    ps_icon: tuple[str, ...] = ('BLANK1',)
+    # Menu entries of different sections are separated.
+    ps_menu_section = ''
+    # ``paint_system.add_layer`` properties ``create`` reads; adding a type
+    # that has any asks for them in a dialog first.
+    ps_add_options: tuple[str, ...] = ()
 
     opacity: FloatProperty(name="Opacity", default=1.0, min=0.0, max=1.0,
                            subtype='FACTOR', update=mark_tree_dirty)
@@ -74,7 +90,28 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         self.outputs.new('NodeSocketColor', "Color")
         self.outputs.new('NodeSocketFloat', "Alpha")
 
+    @classmethod
+    def create(cls, tree, target=None, **options):
+        """Add a layer of this type to *tree*'s active channel and return it.
+
+        *target* places it as in ``PaintSystemNodeTree.insert_layer_node``;
+        *options* carries the ``ps_add_options`` values by name.
+        """
+        return tree.insert_layer_node(cls.bl_idname, target=target)
+
     # -- ui ---------------------------------------------------------------------
+
+    def draw_buttons(self, context, layout):
+        self.draw_layer_settings(context, layout)
+        self.draw_source_settings(context, layout)
+        self.draw_cache_settings(context, layout)
+
+    def draw_row_icon(self, layout):
+        """The type icon at the start of this layer's row in the layer list."""
+        layout.label(text="", **icon_kwargs(*self.ps_icon))
+
+    def draw_source_settings(self, context, layout):
+        """Settings of this layer's own content, shared by the node and the Layer Settings panel."""
 
     def draw_layer_settings(self, context, layout):
         row = layout.row(align=True)

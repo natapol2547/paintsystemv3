@@ -216,6 +216,11 @@ def insert_above(tree, node, target) -> None:
         tree.links.new(target.outputs['Alpha'], node.inputs['Alpha'])
 
 
+def insert_below(tree, node, target) -> None:
+    """Place *node* directly below *target*, at the same level."""
+    attach(tree, node, below_slot(target))
+
+
 def insert_into(tree, folder, node, *, at_top: bool = True) -> None:
     """Place *node* inside *folder*, at the top or the bottom of its content."""
     content = [] if at_top else list(_layers_down_from(folder.inputs['Content Color'], set()))
@@ -229,6 +234,105 @@ def remove(tree, node) -> None:
     for child in content:
         tree.nodes.remove(child)
     tree.nodes.remove(node)
+
+
+# ── Moving ───────────────────────────────────────────────────────────
+
+
+@dataclass(eq=False)
+class MoveOption:
+    """One way to move a layer a row up or down.
+
+    The layer is placed ``ABOVE``, ``BELOW``, ``INTO_TOP`` or ``INTO_BOTTOM``
+    of *target*. *folder* is the folder the option is named after: the one
+    entered or left, or the one ``MOVE_ADJACENT`` lands in (None for the
+    top level).
+    """
+    action: str
+    target: bpy.types.Node
+    placement: str
+    folder: bpy.types.Node | None
+
+
+def movement_options(items: list[StackItem], node, direction: str) -> list[MoveOption]:
+    """The moves one row ``'UP'`` or ``'DOWN'`` offers *node* in the stack *items*.
+
+    Up, from directly below its folder: only out of it, above the folder
+    (``MOVE_OUT``). Otherwise: into an empty folder on the row above, at
+    its bottom (``MOVE_INTO``); into the folder holding the row above, when
+    that is not the node's own (``MOVE_ADJACENT``); and above the previous
+    sibling (``SKIP``).
+
+    Down, the first row after the node's content decides. With no such row
+    and a folder around the node: only out of it, below the folder
+    (``MOVE_OUT_BOTTOM``). Otherwise: into that row at its top when it is a
+    folder (``MOVE_INTO_TOP``); below it when it is the next sibling
+    (``SKIP``); else out of the node's folder, below the folder
+    (``MOVE_OUT_BOTTOM``), and when the row is further out than that,
+    straight to its level above it (``MOVE_ADJACENT``).
+
+    These are v2's options, except that v2 offered a ``SKIP`` that did
+    nothing when there was no next sibling, and reached the next row's
+    level directly with ``MOVE_ADJACENT`` where this also offers leaving
+    one folder at a time.
+    """
+    position = next((i for i, item in enumerate(items) if item.node == node), None)
+    if position is None:
+        return []
+    item = items[position]
+    parent = item.parent.node if item.parent is not None else None
+    options: list[MoveOption] = []
+
+    if direction == 'UP':
+        if position == 0:
+            return options
+        above = items[position - 1]
+        if above.node == parent:
+            return [MoveOption('MOVE_OUT', parent, 'ABOVE', parent)]
+        if is_folder(above.node):
+            options.append(MoveOption('MOVE_INTO', above.node, 'INTO_BOTTOM', above.node))
+        if above.parent is not item.parent:
+            options.append(MoveOption('MOVE_ADJACENT', above.node, 'BELOW',
+                                      above.parent.node if above.parent is not None else None))
+        siblings = [other for other in items if other.parent is item.parent]
+        previous = siblings[item.index_in_parent - 1]
+        options.append(MoveOption('SKIP', previous.node, 'ABOVE', None))
+        return options
+
+    end = position + 1
+    while end < len(items) and items[end].level > item.level:
+        end += 1
+    following = items[end] if end < len(items) else None
+    if following is None:
+        if parent is not None:
+            options.append(MoveOption('MOVE_OUT_BOTTOM', parent, 'BELOW', parent))
+        return options
+    if is_folder(following.node):
+        options.append(MoveOption('MOVE_INTO_TOP', following.node, 'INTO_TOP', following.node))
+    if following.parent is item.parent:
+        options.append(MoveOption('SKIP', following.node, 'BELOW', None))
+        return options
+    options.append(MoveOption('MOVE_OUT_BOTTOM', parent, 'BELOW', parent))
+    if following.parent is not item.parent.parent:
+        options.append(MoveOption('MOVE_ADJACENT', following.node, 'ABOVE',
+                                  following.parent.node if following.parent is not None else None))
+    return options
+
+
+def move(tree, channel_name: str, node, direction: str, action: str) -> bool:
+    """Make the *action* move ``movement_options`` offers *node*; False if it offers no such move."""
+    option = next((option for option in movement_options(stack(tree, channel_name), node, direction)
+                   if option.action == action), None)
+    if option is None:
+        return False
+    detach(tree, node)
+    if option.placement == 'ABOVE':
+        insert_above(tree, node, option.target)
+    elif option.placement == 'BELOW':
+        insert_below(tree, node, option.target)
+    else:
+        insert_into(tree, option.target, node, at_top=option.placement == 'INTO_TOP')
+    return True
 
 
 def repair_alpha_links(tree) -> int:

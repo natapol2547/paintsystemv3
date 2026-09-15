@@ -2,6 +2,25 @@
 
 Epic D. Size L. Milestone M1.
 
+## Status
+
+Partly done (M0 slice 4): `panels/layers_panels.py` has the Layers panel
+for the 3D view and the node editor, each a top-level panel in the Paint
+System tab as in v2:
+
+- the active layer box with lock, blend mode and opacity, split on wide
+  sidebars (`is_clip` comes with PS-013, `lock_alpha` with PS-060);
+- the list (PS-011) at `rows=min(max(6, n), 7)` and `scale_y` 1.5;
+- the sidebar: Add Layer menu, new folder, remove, move up and down;
+- the Layer Settings `layout.panel` (PS-035).
+
+The main panel keeps the channel list and moves the compiled shader info
+into a collapsed "Compiled Shader" sub-panel.
+
+Open: `MAT_MT_LayerMenu` (copy, paste and merge are M2), the "not
+connected" warning, the warnings box (PS-019), the bake box, the header
+preset, the delete confirmation dialog and screenshot parity.
+
 ## v2 behaviour
 
 `MAT_PT_Layers` (`panels/layers_panels.py:494-674`), poll: not multiuser,

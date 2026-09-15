@@ -2,6 +2,33 @@
 
 Epic B. Size M. Milestone M1.
 
+## Status
+
+Done for the demo (M0 slice 4) except the clip relationship, which waits
+for PS-013. `stack_ops.movement_options` returns `MoveOption(action,
+target, placement, folder)` and `stack_ops.move` performs one;
+`PaintSystemNodeTree.move_layer_node` wraps it in one compile and expands
+the folders around the moved layer. Deviations:
+
+- The operators are `paint_system.move_layer_up` and `move_layer_down`,
+  matching the channel operators; their poll greys a button with nothing
+  on offer.
+- A single option runs without a menu. v2 only skipped the menu for a
+  lone `SKIP`.
+- `SKIP` is offered only when there is a sibling to skip. v2 always
+  offered it and it did nothing without one.
+- Down from the last layer of a folder offers `MOVE_OUT_BOTTOM` (leave
+  that folder only). `MOVE_ADJACENT` is offered as well when the next
+  row is further out, where it leaves several folders at once as in v2.
+  Without this the lone `MOVE_ADJACENT` would run without asking and
+  jump out of every folder.
+- Menu labels name the layer or folder: "Skip over 'X'", "Move into
+  'X'", "Move out of 'X'", "Move to top level".
+
+`tests/test_layers.py` has the option table for a stack with nested, empty
+and root folders, every action's result with folders carrying their
+content, one compile per move, the operators and undo.
+
 ## v2 behaviour
 
 `paint_system.move_up` / `move_down` (`operators/layers_operators.py:658,
