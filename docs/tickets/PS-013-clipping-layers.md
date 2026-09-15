@@ -34,7 +34,10 @@ group.
   downstream neighbour is not a layer (bottom of chain, or a folder
   content root) compiles as unclipped, matching v2's "exit clip run"
   rule.
-- Blend group gains the `Clip` input (PS-001).
+- The blend group's `Clip` input exists (PS-001): Clip 1 is
+  source-atop, output alpha = backdrop alpha, colour
+  `mix(cb, B(cb, cs), es)`, for every blend mode. Clipped layers no
+  longer need to be forced onto MIX.
 - Adjustment layers set `is_clip` True and hide the toggle (PS-023).
 - Moving a layer (PS-012) does not touch `is_clip`; the compile simply
   re-evaluates which base it clips to.

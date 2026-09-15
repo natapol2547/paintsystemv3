@@ -1,62 +1,90 @@
-# PS-001 Layer blend math: W3C compositing in generated library groups
+# PS-001 Layer blend math: Porter-Duff compositing in generated library groups
 
 Epic A. Size M. Milestone M1.
+
+## Status
+
+Done for the demo (M0 slice 2): `compiler/library.py::_build_layer_blend`
+and `tests/test_blend.py`. The v2 parity fixtures are still open.
 
 ## Goal
 
 One generated `.PS Lib Layer Blend [<BLEND>]` group per blend mode that
-composites straight-alpha layers with the W3C compositing formula. MIX
-matches v2 pixel for pixel. Other modes match v2 wherever the backdrop
-is opaque and intentionally differ where it is transparent.
+composites straight-alpha layers correctly over any backdrop, including
+transparent and partly transparent ones, clipped or not.
 
 ## v2 behaviour
 
 `create_mixing_graph` (`paintsystem/graph/common.py:116-143`) composes
 three groups per layer:
 
-- `.PS Pre Mix` (inputs Over Alpha, Opacity; output Over Alpha). Effective
-  alpha of the layer.
+- `.PS Pre Mix` (inputs Over Alpha, Opacity; output Over Alpha):
+  `oa = alpha * opacity`.
 - `ShaderNodeMix` RGBA with the layer blend type, Factor 1, A = previous
-  colour, B = layer colour.
-- `.PS Post Mix` or `.PS Porter-Duff Over` (inputs Clip, Color, Alpha,
-  Blended Color, Over Color, Over Alpha; outputs Color, Alpha).
-  Porter-Duff is used when `blend_mode not in {MIX, PASSTHROUGH}` and the
-  layer is not clipped (`common.py:118-120`).
+  colour, B = layer colour: `B(cb, cs)`.
+- `.PS Porter-Duff Over` for non-MIX unclipped layers, `.PS Post Mix`
+  for everything else (`common.py:118-120`).
 
-Post Mix premultiplies both sides, does an over, and unpremultiplies:
+Porter-Duff Over, premultiplied, with Clip wired in:
 
 ```
-ao = clip ? ab : ab + oa * (1 - ab)
-co = (cb * ab * (1 - oa) + blended * oa) / ao
+co_p = B * oa * ab  +  cs * oa * (1 - ab) * (1 - clip)  +  cb * ab * (1 - oa)
+ao   = clip ? ab : ab + oa * (1 - ab)
+co   = co_p / ao
 ```
 
-where `blended` is the Mix node output, which is `B(cb, cs)` everywhere,
-including texels where `ab = 0` and `cb` is meaningless. The
-premultiply / unpremultiply round trip is correct for straight-alpha
-images; the flaw is only that non-MIX modes blend against a backdrop
-that is not there.
+Post Mix drops the middle term's `(1 - ab)` split:
+
+```
+co = (cb * ab * (1 - oa) + B * oa) / ao
+```
+
+For MIX (`B = cs`) unclipped that is the same as Porter-Duff Over. For
+clipped layers over a partly transparent backdrop it is wrong: `oa` is
+not scaled by `ab`, so the colour exceeds 1 as `ab` falls (a clipped
+white layer at full opacity over `ab = 0.5` gives `co = 2`).
 
 Disabled layers bypass the whole graph (`common.py:137-142`).
 
 ## v3 design
 
-Generate the groups in Python (`compiler/library.py::layer_blend_group`)
-with this math, per texel, all colours straight alpha:
+Generated in Python, one group instance per layer. All colours are
+straight alpha. With backdrop `cb, ab` (Prev Color, Prev Alpha), layer
+colour `cs` and layer coverage `es = Alpha * Opacity * Mask` (clamped to
+0..1), each texel splits into three regions:
+
+| Region | Weight | Colour |
+|---|---|---|
+| layer over backdrop | `es * ab` | `B(cb, cs)` |
+| layer alone | `es * (1 - ab) * (1 - clip)` | `cs` |
+| backdrop alone | `ab * (1 - es)` | `cb` |
 
 ```
-eff = as * opacity * mask * (clip ? ab : 1)
-cs' = mix(cs, B(cb, cs), ab)              -- blend only where backdrop exists
-ao  = clip ? ab : ab + eff * (1 - ab)
-co  = (cb * ab * (1 - eff) + cs' * eff) / ao    -- 0 when ao == 0
+ao = sum of the weights
+co = weighted average of the colours      -- cb where ao == 0
 ```
 
-`B` is the per-mode blend function, implemented with a `ShaderNodeMix`
-of that blend type at factor 1 (MIX gives `B = cs`, so `cs' = cs` and
-the whole thing reduces to Porter-Duff over). `cs' = mix(cs, B, ab)` is
-the W3C `Cs' = (1 - αb)·Cs + αb·B(Cb, Cs)` term and is the one
-intentional difference from v2: under non-MIX modes, texels with a
-partially or fully transparent backdrop now show the layer colour
-weighted by `ab` instead of a blend with an undefined colour.
+Unclipped this is the W3C source-over with blending,
+`Cs' = (1 - ab) * cs + ab * B`. Clipped it is source-atop: the result
+alpha is `ab` and the colour is `mix(cb, B, es)`. It equals v2's
+Porter-Duff Over for every input, and v2's Post Mix wherever v2's Post
+Mix is correct (unclipped MIX, or an opaque backdrop).
+
+The W3C spec applies `Cs'` to every operator, which for source-atop
+would reintroduce `cs` weighted by `es * ab * (1 - ab)` in a region where
+the layer has no backdrop. The coverage table above is what v2's
+Porter-Duff Over already does and what the tests assert.
+
+Node layout (MIX skips the blend and source nodes because `B = cs`):
+
+```
+kept          = mix(1, ab, clip)                -- share of the layer that survives
+source_weight = es * kept
+alpha         = source_weight + ab * (1 - es)
+source_share  = source_weight / alpha           -- Math DIVIDE gives 0 for 0
+source        = mix(cs, B, ab / kept)           -- ab unclipped, 1 clipped
+Color         = mix(cb, source, source_share)
+```
 
 - One group per entry in `BLEND_MODE_ITEMS`. Interface: Prev Color,
   Prev Alpha, Color, Alpha, Opacity, Mask, Clip (float 0/1, for PS-013);
@@ -64,28 +92,34 @@ weighted by `ab` instead of a blend with an undefined colour.
 - Convention for every socket on the chain: straight alpha, colour
   undefined where alpha is 0. Consumers must never rely on the colour of
   a transparent texel.
-- Pre Mix, Mix and Post Mix fold into one group instance per layer.
-- Bump `LIBRARY_VERSION`. Non-mixing groups (projection, parallax,
-  aspect, tangent normal, occlusion) are still appended from
-  `library2.blend` per PS-002; the three v2 mixing groups are not.
+- `LIBRARY_VERSION` 2. Groups from an older version are rebuilt in place
+  on first use, keeping interface identifiers. Non-mixing groups
+  (projection, parallax, aspect, tangent normal, occlusion) are still
+  appended from `library2.blend` per PS-002; the three v2 mixing groups
+  are not.
 
 ## Acceptance
 
-- Headless parity test renders a 3-layer stack through v2 (old addon)
-  and v3 for every blend mode at opacity 1.0 and 0.4, clipped and
-  unclipped, over an opaque backdrop. Max channel difference < 1/255.
-- Same test for MIX over a transparent and half-transparent backdrop.
-  Max channel difference < 1/255.
-- W3C property test for every non-MIX mode: a layer over a fully
-  transparent backdrop renders as the layer alone; over a half-alpha
-  backdrop the result equals `mix(cs, B(cb, cs), 0.5)` composited over.
-- `tests/smoke_compile.py` still passes.
-- Interface identifiers of regenerated groups are stable across rebuilds.
+- Done: `tests/test_blend.py` bakes every blend mode at opacity 1.0 and
+  0.4 and checks the closed form for each backdrop: over a transparent
+  backdrop the layer alone; over an opaque one `mix(cb, B, es)`, clipped
+  or not; over a half-transparent one `mix(cs, B, 0.5)` composited over,
+  or clipped `mix(cb, B, es)` at alpha 0.5; alpha and mask scaling; no
+  NaN where the result is transparent. `B` comes from a bare Mix node
+  bake, so the test checks compositing, not Blender's blend functions.
+- Done: interface identifiers and nodes are stable across rebuilds; an
+  older group is rebuilt with the Clip input.
+- Open: headless parity test that renders a 3-layer stack through v2
+  (old addon) and v3 for every blend mode at opacity 1.0 and 0.4,
+  clipped and unclipped, over an opaque backdrop. Max channel difference
+  < 1/255. Same for unclipped MIX over transparent and half-transparent
+  backdrops.
 
 ## Notes
 
 The disabled-layer bypass is already expressed as Opacity 0. Keep it that
 way so toggling `enabled` is a value patch, not a graph change.
 
-PS-070 migration notes should mention the transparent-region change so
+PS-070 migration notes should mention that clipped layers over partly
+transparent pixels render differently from v2 (v2 overshoots there), so
 users comparing v2 and v3 renders of the same file know it is expected.

@@ -17,6 +17,9 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   compare and print colours.
 - `tests/test_compile.py` covers the compiler core, including
   synchronous compiles, `suspend_compile` batching and blocking.
+- `tests/test_blend.py` bakes the layer blend group of every blend mode
+  over transparent, half-transparent and opaque backdrops, clipped and
+  not, against closed forms (PS-001).
 - `tests/test_smoke_loop.py` drives the operators end to end: setup,
   add layers, painted pixels through the compiled group, save and reload
   with packing, undo and redo of setup, add and remove (including the

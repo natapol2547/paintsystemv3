@@ -14,7 +14,7 @@ import bpy
 from ..nodes.builder import NodeTreeBuilder
 
 
-LIBRARY_VERSION = 1
+LIBRARY_VERSION = 2
 LIBRARY_PREFIX = ".PS Lib "
 _VERSION_KEY = "ps_lib_version"
 
@@ -41,15 +41,18 @@ def is_library_group(tree: bpy.types.NodeTree) -> bool:
 
 # ShaderNodeMix socket indices (name lookup is ambiguous: "A"/"B" repeat per data type).
 MIX_IN_FACTOR = 0
+MIX_IN_A_FLOAT = 2
+MIX_IN_B_FLOAT = 3
 MIX_IN_A_COLOR = 6
 MIX_IN_B_COLOR = 7
+MIX_OUT_FLOAT = 0
 MIX_OUT_COLOR = 2
 
 
 def layer_blend_group(blend_type: str) -> bpy.types.NodeTree:
     """Group that composites one layer over the previous stack result.
 
-    Inputs: Prev Color, Prev Alpha, Color, Alpha, Opacity, Mask.
+    Inputs: Prev Color, Prev Alpha, Color, Alpha, Opacity, Mask, Clip.
     Outputs: Color, Alpha.
     """
     return get_library_group(
@@ -59,6 +62,21 @@ def layer_blend_group(blend_type: str) -> bpy.types.NodeTree:
 
 
 def _build_layer_blend(tree: bpy.types.NodeTree, blend_type: str) -> None:
+    """Porter-Duff compositing of a straight-alpha layer with a blend mode.
+
+    With backdrop ``cb, ab`` (Prev), source ``cs`` and source coverage
+    ``es = Alpha * Opacity * Mask``, a texel splits into three regions:
+
+    - source over backdrop, weight ``es * ab``, colour ``B(cb, cs)``
+    - source alone, weight ``es * (1 - ab)``, colour ``cs``; dropped when
+      clipped
+    - backdrop alone, weight ``ab * (1 - es)``, colour ``cb``
+
+    The output alpha is the sum of the weights and the output colour their
+    weighted average (the backdrop colour where the alpha is 0). Unclipped
+    this is W3C source-over with a blend mode; clipped it is source-atop.
+    MIX has ``B = cs`` and skips the blend nodes.
+    """
     b = NodeTreeBuilder(tree)
     b.add_socket('INPUT', 'NodeSocketColor', 'Prev Color', default_value=(0.0, 0.0, 0.0, 0.0))
     b.add_socket('INPUT', 'NodeSocketFloat', 'Prev Alpha', default_value=0.0,
@@ -70,40 +88,79 @@ def _build_layer_blend(tree: bpy.types.NodeTree, blend_type: str) -> None:
                  min_value=0.0, max_value=1.0, subtype='FACTOR')
     b.add_socket('INPUT', 'NodeSocketFloat', 'Mask', default_value=1.0,
                  min_value=0.0, max_value=1.0)
+    b.add_socket('INPUT', 'NodeSocketFloat', 'Clip', default_value=0.0,
+                 min_value=0.0, max_value=1.0, subtype='FACTOR')
     b.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
     b.add_socket('OUTPUT', 'NodeSocketFloat', 'Alpha')
 
     b.add_node('in', 'NodeGroupInput')
     b.add_node('out', 'NodeGroupOutput')
 
-    # effective alpha = Alpha * Opacity * Mask
-    b.add_node('a_opacity', 'ShaderNodeMath', properties={'operation': 'MULTIPLY'})
-    b.add_node('a_mask', 'ShaderNodeMath', properties={'operation': 'MULTIPLY'})
-    b.link_nodes('in', 'a_opacity', 'Alpha', 0)
-    b.link_nodes('in', 'a_opacity', 'Opacity', 1)
-    b.link_nodes('a_opacity', 'a_mask', 0, 0)
-    b.link_nodes('in', 'a_mask', 'Mask', 1)
+    def link(source, to_identifier, to_socket):
+        b.link_nodes(source[0], to_identifier, source[1], to_socket)
 
-    # color = mix(prev, color, effective alpha)
-    b.add_node('mix', 'ShaderNodeMix', properties={
-        'data_type': 'RGBA', 'blend_type': blend_type,
+    def math(identifier, operation, lhs, rhs, *, clamp=False):
+        """Math node on two operands, each a (node, socket) pair or a constant."""
+        inputs = {}
+        for index, operand in enumerate((lhs, rhs)):
+            if isinstance(operand, tuple):
+                link(operand, identifier, index)
+            else:
+                inputs[index] = {'default_value': operand}
+        b.add_node(identifier, 'ShaderNodeMath', inputs=inputs,
+                   properties={'operation': operation, 'use_clamp': clamp})
+        return (identifier, 0)
+
+    # es: source coverage
+    es = math('source_alpha', 'MULTIPLY',
+              math('opacity', 'MULTIPLY', ('in', 'Alpha'), ('in', 'Opacity')),
+              ('in', 'Mask'), clamp=True)
+
+    # kept: share of the source that survives, 1 unclipped, ab clipped
+    b.add_node('kept', 'ShaderNodeMix', properties={
+        'data_type': 'FLOAT', 'clamp_factor': True,
+    }, inputs={MIX_IN_A_FLOAT: {'default_value': 1.0}})
+    b.link_nodes('in', 'kept', 'Clip', MIX_IN_FACTOR)
+    b.link_nodes('in', 'kept', 'Prev Alpha', MIX_IN_B_FLOAT)
+    kept = ('kept', MIX_OUT_FLOAT)
+
+    source_weight = math('source_weight', 'MULTIPLY', es, kept)
+    backdrop_weight = math('backdrop_weight', 'MULTIPLY', ('in', 'Prev Alpha'),
+                           math('backdrop_keep', 'SUBTRACT', 1.0, es))
+    alpha = math('alpha', 'ADD', source_weight, backdrop_weight)
+    # Math DIVIDE returns 0 for a zero divisor, so a transparent result
+    # takes the backdrop colour instead of NaN.
+    source_share = math('source_share', 'DIVIDE', source_weight, alpha)
+
+    source_color = ('in', 'Color')
+    if blend_type != 'MIX':
+        b.add_node('blend', 'ShaderNodeMix', properties={
+            'data_type': 'RGBA', 'blend_type': blend_type,
+            'clamp_factor': True, 'clamp_result': False,
+        }, inputs={MIX_IN_FACTOR: {'default_value': 1.0}})
+        b.link_nodes('in', 'blend', 'Prev Color', MIX_IN_A_COLOR)
+        b.link_nodes('in', 'blend', 'Color', MIX_IN_B_COLOR)
+        # Share of the surviving source that lies over the backdrop:
+        # ab unclipped, 1 clipped.
+        blended_share = math('blended_share', 'DIVIDE', ('in', 'Prev Alpha'), kept)
+        b.add_node('source', 'ShaderNodeMix', properties={
+            'data_type': 'RGBA', 'blend_type': 'MIX',
+            'clamp_factor': True, 'clamp_result': False,
+        })
+        link(blended_share, 'source', MIX_IN_FACTOR)
+        b.link_nodes('in', 'source', 'Color', MIX_IN_A_COLOR)
+        b.link_nodes('blend', 'source', MIX_OUT_COLOR, MIX_IN_B_COLOR)
+        source_color = ('source', MIX_OUT_COLOR)
+
+    b.add_node('composite', 'ShaderNodeMix', properties={
+        'data_type': 'RGBA', 'blend_type': 'MIX',
         'clamp_factor': True, 'clamp_result': False,
     })
-    b.link_nodes('a_mask', 'mix', 0, MIX_IN_FACTOR)
-    b.link_nodes('in', 'mix', 'Prev Color', MIX_IN_A_COLOR)
-    b.link_nodes('in', 'mix', 'Color', MIX_IN_B_COLOR)
-    b.link_nodes('mix', 'out', MIX_OUT_COLOR, 'Color')
+    link(source_share, 'composite', MIX_IN_FACTOR)
+    b.link_nodes('in', 'composite', 'Prev Color', MIX_IN_A_COLOR)
+    link(source_color, 'composite', MIX_IN_B_COLOR)
 
-    # alpha = prev + eff * (1 - prev)
-    b.add_node('inv', 'ShaderNodeMath', properties={'operation': 'SUBTRACT'},
-               inputs={0: {'default_value': 1.0}})
-    b.add_node('a_mul', 'ShaderNodeMath', properties={'operation': 'MULTIPLY'})
-    b.add_node('a_add', 'ShaderNodeMath', properties={'operation': 'ADD'})
-    b.link_nodes('in', 'inv', 'Prev Alpha', 1)
-    b.link_nodes('a_mask', 'a_mul', 0, 0)
-    b.link_nodes('inv', 'a_mul', 0, 1)
-    b.link_nodes('in', 'a_add', 'Prev Alpha', 0)
-    b.link_nodes('a_mul', 'a_add', 0, 1)
-    b.link_nodes('a_add', 'out', 0, 'Alpha')
+    b.link_nodes('composite', 'out', MIX_OUT_COLOR, 'Color')
+    link(alpha, 'out', 'Alpha')
 
     b.build()
