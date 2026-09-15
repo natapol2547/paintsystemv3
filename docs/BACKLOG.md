@@ -37,11 +37,42 @@ Guiding constraints for every ticket:
 
 | Milestone | Goal | Tickets |
 |---|---|---|
+| M0 Playable demo | A thin slice of M1 that can be opened and painted with. See "Playable demo" below | 001 010 011 012 013 019 029 030 033 034 035 056 060 061 080 (parts, see below) |
 | M1 Paint again | Image, solid and folder layers with clipping and the full sidebar UI, templates, painting workflow | 001 002 003 008 009 010 011 012 013 014 019 020 021 029 030 031 032 033 034 035 036 040 041 042 056 060 061 062 080 |
 | M2 All layer types | Remaining layer types, masks, linked layers, clipboard, actions, vector channels | 004 005 006 015 016 017 018 022 023 024 025 026 027 028 037 038 039 063 064 065 066 |
 | M3 Tools | GPU image filters, quick edit, export, channel bake, performance | 007 043 050 051 052 053 054 055 081 |
 | M3b Selection tools | Pixel undo, selection, transform and fill tools in both editors | 090 091 092 093 094 095 |
 | M4 Migration | Load v2 files into v3 | 070 071 072 082 |
+
+## Playable demo
+
+The first goal is a demo that can be opened and painted with, built as
+a vertical slice through M1 rather than by finishing whole epics.
+Remaining parts of each ticket stay open under M1.
+
+Demo bar: on a cube, Setup Paint System; add image layers, solid layers
+and a folder; reorder them, set blend mode, opacity and clipping; enter
+paint mode from the panel; pick brush and colour in the sidebar; paint
+and see the layers composite correctly; save, reopen and undo without
+breaking anything. Green on every Blender in the CI matrix (4.2+).
+
+Slices, in order. Each ends playable, is committed, and keeps CI green.
+
+| Slice | Scope | Tickets (demo part only) |
+|---|---|---|
+| 1 Smoke the existing loop | Paint updates the viewport through the compiled group; pixels survive save and reload; undo after add/remove layer leaves a valid artifact. Fix what breaks | – |
+| 2 Correct compositing | W3C blend groups with the Clip input; pixel sampling helper in `tests/harness.py`; MIX over transparent and half-transparent backdrops and the W3C property test. v2 comparison fixtures come later | 001 |
+| 3 Stack model | `stack()` walk, `nodetree/stack_ops.py`, folder node; `PSContext`; `lock_layer` and `lock_alpha` (no warnings API yet) | 010, 030, 019 |
+| 4 Layers panel | Row view model with indentation and folder collapse; move up/down with folders; registry and Add Layer menu for Folder, Image, Solid; layer settings for blend, opacity and image | 011, 012, 029, 034, 035 |
+| 5 Clipping | `is_clip`, compile-time clip runs, list toggle and icon. Acceptance uses a self-contained pixel test instead of the v2 comparison | 013 |
+| 6 Painting workflow | Active layer sets canvas and UV map (also from the node editor); toggle paint mode (no channel isolate); brush and colour panels on both the 4.2 brush and 4.3+ asset brush paths; image save and pack policy | 060, 061, 033, 056 |
+| 7 Demo acceptance test | `tests/test_demo_flow.py` scripts the demo bar: setup, layers, folder, move, clip, a written pixel checked at a texel of the compiled output, save, reload, undo. Runs in the CI matrix | 080 |
+
+Deferred until after the demo: library imports (002), parameter nodes
+(003), coordinate mixin and non-UV coordinates (008), UDIM (009),
+pass-through folders (014), header presets and groups popover (031),
+the full channels panel (032), right-click popover (036), multiple
+groups and templates (040-042), colour history (062).
 
 ## Epic A. Compositing core and compiler extensions
 
