@@ -38,7 +38,8 @@ so it cannot drift: any doubt, rebuild it.
 ## Acceptance
 
 - Collapsing a folder hides its descendants; expanding restores them.
-- Renaming a layer in the list renames the node (`name` set_transform).
+- Renaming a layer in the list renames the node (built-in `Node.name`,
+  which Blender keeps unique; nodes must not redefine `name`).
 - Selecting a row makes the node active and sets the paint canvas.
 - Undo after adding a layer leaves the list consistent (rows rebuilt in
   `on_undo_post`).

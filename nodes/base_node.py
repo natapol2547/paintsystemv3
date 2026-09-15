@@ -2,16 +2,7 @@ import uuid
 
 from bpy.props import StringProperty
 
-from ..common import transform_unique_name, unique_name_kwargs
 from ..compiler.core import mark_dirty
-
-
-def _set_name_transform(self, new_value, curr_value, is_set):
-    return transform_unique_name(self, self.id_data, 'nodes', new_value, curr_value, is_set)
-
-
-# Before Blender 5.0 there is no set_transform; node names are still unique
-# because Blender itself de-duplicates names inside a node tree.
 
 
 def mark_tree_dirty(self, context=None):
@@ -26,8 +17,11 @@ class PaintSystemBaseNode:
     they implement ``emit(ctx)`` which describes their shader graph in the IR.
     """
     uuid: StringProperty(name="UUID")
-    name: StringProperty(name="Name", default="",
-                         **unique_name_kwargs(_set_name_transform))
+
+    # Layer names are the built-in Node.name, which Blender keeps unique
+    # within the tree on every version. Do not redefine ``name`` here: a
+    # Python property shadows it and drifts from the name ``nodes.get``
+    # looks up before Blender 5.2.
 
     is_layer_node = False
 
@@ -36,7 +30,6 @@ class PaintSystemBaseNode:
         return ntree.bl_idname == 'PaintSystemNodeTree'
 
     def init(self, context):
-        self.name = self.bl_label
         self.uuid = str(uuid.uuid4())
 
     def copy(self, node):
