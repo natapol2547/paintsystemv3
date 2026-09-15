@@ -41,6 +41,12 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   runs of several layers, disabled layers, the base's blend mode, the
   ends of a folder or channel, folders as bases and clipped, moves,
   recompiles and caches (PS-013).
+- `tests/test_painting.py` checks the canvas, image paint mode, active UV
+  map and brush alpha as the active layer, its locks, the active object
+  and the material slot change, and across paint mode, undo and reload,
+  without recompiling (PS-060, PS-061). Its `run` helper evaluates the
+  depsgraph after each operator, as the window loop does, so the
+  depsgraph handlers see every step.
 - `tests/test_api_surface.py` lists every Blender class, RNA property,
   RNA function, operator and `gpu` entry point the addon relies on
   (including the `bl_ui.properties_paint_common` panels the sidebar
@@ -58,6 +64,9 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   through `wm.call_menu` and the move layer popup, and fails on any
   exception. Blender swallows
   draw exceptions, so this is the only test that catches a broken panel.
+  It also checks the painting triggers only a window loop runs: a node
+  made active in the node editor and a material slot switch reported
+  through the message bus both move the canvas (PS-060).
 - `tests/run.sh [--ui] [test files]` drives all of the above.
   `BLENDER` selects the executable; `XVFB=1` forces the UI test through
   `xvfb-run` with Mesa software rendering and the OpenGL backend.

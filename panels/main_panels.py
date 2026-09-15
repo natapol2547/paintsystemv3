@@ -2,8 +2,9 @@ import bpy
 from bpy.types import UIList
 
 from .common import get_icon, PaintSystemPanel
+from ..common import icon_kwargs
 from ..compiler.core import artifact_fingerprint
-from ..context import get_active_tree
+from ..context import get_active_tree, parse_context
 
 
 class PAINTSYSTEM_UL_channels(UIList):
@@ -38,6 +39,15 @@ def _draw_channel_list(layout, node_tree):
     col.separator()
     col.operator("paint_system.move_channel_up", icon='TRIA_UP', text="")
     col.operator("paint_system.move_channel_down", icon='TRIA_DOWN', text="")
+
+
+def _draw_paint_mode_row(layout, context):
+    row = layout.row(align=True)
+    row.scale_x = 1.7
+    row.scale_y = 1.7
+    row.operator("paint_system.toggle_paint_mode", text="Toggle Paint Mode",
+                 depress=context.mode == 'PAINT_TEXTURE', **icon_kwargs('paintbrush'))
+    row.operator("wm.save_mainfile", text="", **icon_kwargs('save'))
 
 
 def _draw_compiled_info(layout, tree):
@@ -84,6 +94,8 @@ class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
         if tree is None:
             return
 
+        if parse_context(context).ps_object is not None:
+            _draw_paint_mode_row(layout, context)
         layout.separator()
         layout.label(text="Channels")
         _draw_channel_list(layout, tree)

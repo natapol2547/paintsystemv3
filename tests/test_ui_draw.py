@@ -274,6 +274,49 @@ class Steps:
         tag_redraw(self.window)
         return 0.5
 
+    def image_layer(self, tree):
+        return next(item.node for item in tree.stack() if item.node.bl_idname == 'PaintSystemImageLayerNode')
+
+    def step_node_click(self):
+        section("painting follows the selection")
+        if len(self.areas) < 2:
+            print("  (no node editor; node click not checked)")
+            return 0.1
+        # What clicking a node does: no update, only a redraw of the editor.
+        self.tree.nodes.active = self.image_layer(self.tree)
+        bpy.context.scene.tool_settings.image_paint.canvas = None
+        tag_redraw(self.window)
+        return 0.5
+
+    def step_add_material(self):
+        canvas = bpy.context.scene.tool_settings.image_paint.canvas
+        if len(self.areas) >= 2:
+            check(canvas == self.image_layer(self.tree).image, f"clicking a node paints on its layer ({canvas})")
+        cube = bpy.data.objects['Cube']
+        region = window_region(self.view3d)
+        with bpy.context.temp_override(window=self.window, area=self.view3d, region=region, object=cube):
+            cube.data.materials.append(None)
+            cube.active_material_index = 1
+            bpy.ops.paint_system.setup_material()
+            bpy.ops.paint_system.add_layer(layer_type='IMAGE')
+        tag_redraw(self.window)
+        return 0.5
+
+    def step_switch_material(self):
+        cube = bpy.data.objects['Cube']
+        second = self.image_layer(cube.active_material.paint_system.tree).image
+        canvas = bpy.context.scene.tool_settings.image_paint.canvas
+        check(canvas == second, f"a new material's layer is the canvas ({canvas})")
+        # A slot click is no depsgraph update; only the message bus reports it.
+        cube.active_material_index = 0
+        tag_redraw(self.window)
+        return 0.5
+
+    def step_check_material(self):
+        canvas = bpy.context.scene.tool_settings.image_paint.canvas
+        check(canvas == self.image_layer(self.tree).image, f"switching material slots paints on that layer ({canvas})")
+        return 0.1
+
     def step_results(self):
         section("results")
         drawn = sorted(name for name, n in calls.items() if n)
@@ -303,9 +346,11 @@ class Steps:
                 return self.step_retab()
             if self.popups:
                 return self.step_popup()
-            if self.state == 2:
-                self.state = 3
-                return self.step_move_popup()
+            steps = (self.step_move_popup, self.step_node_click, self.step_add_material,
+                     self.step_switch_material, self.step_check_material)
+            if self.state - 2 < len(steps):
+                self.state += 1
+                return steps[self.state - 3]()
             self.step_results()
         except Exception:
             traceback.print_exc()

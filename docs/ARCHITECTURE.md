@@ -92,6 +92,19 @@ so undo, load and hand edits cannot leave it out of date. Layer types are
 listed by `nodes/layers/registry.py`, which feeds the Add Layer menu, the
 add operator's enum and the node editor categories.
 
+## Painting (`context.py`, `handlers/paint_handlers.py`)
+
+Texture painting follows the active layer. `update_active_image(context)`
+points the image paint canvas at the layer's `paint_image`, makes the UV
+map the layer is placed with the mesh's active UV map, and turns brush
+alpha off when the layer locks it. It edits tool settings and mesh data,
+never the tree, so it never compiles. Everything that changes the active
+layer calls it, and three triggers cover selection changes that do not go
+through the addon: `depsgraph_update_post` for another active object, a
+message bus subscription on `Object.active_material_index` for another
+material slot, and a node editor draw callback plus a timer for a node
+clicked in the node editor, which Blender reports in no other way.
+
 ## Triggers
 
 Compiles run synchronously, inside the edit that caused them, so the
@@ -173,10 +186,12 @@ BLENDER=/path/to/blender tests/run.sh   # another Blender build
 `test_stack.py` the stack walk, folders, stack edits and `PSContext`,
 `test_layers.py` the layer list, moves and the layer type registry,
 `test_clip.py` clipping by pixel,
+`test_painting.py` the canvas, UV map and brush following the selection,
 `test_smoke_loop.py` the operators end to end with save, reload and undo,
 `test_api_surface.py` asserts that every Blender class, property and
 operator the addon depends on still exists, and `test_ui_draw.py` draws
-every panel in a real window (Xvfb on CI) and fails on draw exceptions.
+every panel in a real window (Xvfb on CI) and fails on draw exceptions;
+it also checks the selection triggers that only a window loop runs.
 `.github/workflows/test.yml` runs all of this against the latest patch of
 every supported Blender series, lints with ruff (`uvx ruff check .`
 locally) and validates the built package with the strict

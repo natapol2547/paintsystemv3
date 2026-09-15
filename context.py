@@ -127,10 +127,37 @@ def parse_context(context) -> PSContext:
 
 
 def update_active_image(context) -> None:
-    """Paint on the active layer's image, when it has one."""
-    image = getattr(parse_context(context).layer, 'image', None)
-    if image is None:
+    """Point texture painting at the active layer (PS-060).
+
+    The canvas becomes the layer's ``paint_image``, or none for a locked
+    layer or one without an image, and the mesh's active UV map the one the
+    layer's image is placed with. In texture paint mode the brush keeps
+    alpha when the layer locks it. Called whenever the active layer, tree
+    or object changes; never by the compiler. Writes only what differs.
+    """
+    ps = parse_context(context)
+    if ps.tree is None:
         return
-    settings = context.scene.tool_settings.image_paint
-    settings.mode = 'IMAGE'
-    settings.canvas = image
+    layer = ps.layer
+    image_paint = context.scene.tool_settings.image_paint
+    if image_paint.mode == 'MATERIAL':
+        image_paint.mode = 'IMAGE'
+    image = layer.paint_image if layer is not None and not layer.lock_layer else None
+    if image_paint.canvas != image:
+        image_paint.canvas = image
+
+    if image is not None and ps.ps_object is not None:
+        uv_layers = ps.ps_object.data.uv_layers
+        uv_name = getattr(layer, 'uv_map', '')
+        # An empty UV map name renders with the active render UV map, so
+        # paint through that one too.
+        uv_layer = (uv_layers.get(uv_name) if uv_name
+                    else next((uv for uv in uv_layers if uv.active_render), None))
+        if uv_layer is not None and uv_layers.active != uv_layer:
+            uv_layers.active = uv_layer
+
+    if layer is not None and context.mode == 'PAINT_TEXTURE':
+        brush = image_paint.brush
+        use_alpha = not layer.lock_alpha
+        if brush is not None and brush.use_alpha != use_alpha:
+            brush.use_alpha = use_alpha

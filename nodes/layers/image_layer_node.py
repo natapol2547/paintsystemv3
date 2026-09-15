@@ -4,8 +4,7 @@ from bpy.types import Node
 from bpy.props import PointerProperty, StringProperty
 from bpy.utils import register_classes_factory
 
-from .base_layer_node import PaintSystemLayerNode, emit_image_texture
-from ..base_node import mark_tree_dirty
+from .base_layer_node import PaintSystemLayerNode, emit_image_texture, update_tree_and_painting
 from ...compiler.bake import create_managed_image
 
 
@@ -28,13 +27,17 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
         type=bpy.types.Image,
         name="Image",
         description="Image painted on by this layer",
-        update=mark_tree_dirty,
+        update=update_tree_and_painting,
     )
     uv_map: StringProperty(
         name="UV Map",
         description="UV map used to place the image (empty: active render UV map)",
-        update=mark_tree_dirty,
+        update=update_tree_and_painting,
     )
+
+    @property
+    def paint_image(self):
+        return self.image
 
     def init(self, context):
         super().init(context)

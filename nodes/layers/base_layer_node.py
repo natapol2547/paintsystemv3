@@ -4,7 +4,18 @@ from bpy.props import BoolProperty, FloatProperty, EnumProperty, PointerProperty
 from ..base_node import PaintSystemBaseNode, mark_tree_dirty
 from ...common import icon_kwargs
 from ...compiler.library import layer_blend_group
+from ...context import update_active_image
 from ...nodetree.stack_ops import clip_base, feeds_clip_run
+
+
+def update_painting(self, context):
+    """``update=`` callback for settings that change where painting on a layer goes."""
+    update_active_image(context)
+
+
+def update_tree_and_painting(self, context):
+    mark_tree_dirty(self, context)
+    update_active_image(context)
 
 
 BLEND_MODE_ITEMS = []
@@ -63,9 +74,9 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         description="Show this layer only where the layer below it is visible")
 
     # Editing state only; the compiler ignores both (core._HASH_EXCLUDED_PROPS).
-    lock_layer: BoolProperty(name="Lock Layer", default=False,
+    lock_layer: BoolProperty(name="Lock Layer", default=False, update=update_painting,
                              description="Prevent changes to this layer's settings")
-    lock_alpha: BoolProperty(name="Lock Alpha", default=False,
+    lock_alpha: BoolProperty(name="Lock Alpha", default=False, update=update_painting,
                              description="Paint without changing this layer's transparency")
 
     # Cache (hybrid bake). When valid, the compiler replaces this node and its
@@ -79,6 +90,11 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     cache_uv_map: StringProperty(name="Cache UV Map", update=mark_tree_dirty)
     cache_stale: BoolProperty(name="Cache Stale", default=False,
                               options={'SKIP_SAVE'})
+
+    @property
+    def paint_image(self):
+        """The image texture painting on this layer draws into, or None."""
+        return None
 
     def init(self, context):
         super().init(context)

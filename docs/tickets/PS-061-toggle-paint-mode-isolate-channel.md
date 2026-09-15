@@ -2,6 +2,16 @@
 
 Epic G. Size M. Milestone M1.
 
+## Status
+
+Partly done (M0 slice 6): `ops/paint_ops.py` ports `toggle_paint_mode`
+for meshes. It makes the object active and selected, leaves any other mode
+for Object mode, and otherwise enters Texture Paint. Entering sets 3D view
+shading to Rendered, or Material Preview under Cycles, then calls
+`update_active_image` (PS-060). There is no grease pencil variant. The main
+panel draws it as in v2: a large toggle, depressed in Texture Paint, and a
+save button beside it. Channel isolate is deferred until after the demo.
+
 ## v2 behaviour
 
 - `toggle_paint_mode` (`operators/utils_operators.py:27`): OBJECT <->

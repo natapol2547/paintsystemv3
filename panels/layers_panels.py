@@ -112,7 +112,7 @@ class PAINTSYSTEM_MT_add_layer(Menu):
 
 
 def draw_layer_properties(layout, context, node):
-    """Clip, lock, blend mode and opacity of the active layer, on one row when the sidebar is wide enough."""
+    """Clip, lock alpha, lock, blend mode and opacity of the active layer, on one row when the sidebar is wide enough."""
     ui_scale = context.preferences.view.ui_scale
     region = getattr(context, 'region', None)
     wide = region is not None and region.width - 70 * ui_scale > 170 * ui_scale
@@ -123,6 +123,8 @@ def draw_layer_properties(layout, context, node):
     clip = row.row(align=True)
     clip.enabled = not node.lock_layer
     clip.prop(node, "is_clip", text="", icon='SELECT_INTERSECT')
+    if node.paint_image is not None:
+        clip.prop(node, "lock_alpha", text="", icon='TEXTURE')
     row.prop(node, "lock_layer", text="", icon='VIEW_LOCKED')
     blend = row.row(align=True)
     blend.enabled = not node.lock_layer

@@ -10,8 +10,8 @@ fingerprint and cache hashes), and `lock_layer` disables the enabled
 toggle, opacity and blend on the node, opacity and blend in the Layers
 panel box, and the layer's source settings. The layer list shows a lock icon; its visibility toggle
 stays usable on a locked layer, as in v2.
-`is_folder` is a class attribute. Clearing the canvas and driving the
-brush's `use_alpha` wait for PS-060; `external_image`,
+`is_folder` is a class attribute. PS-060 (slice 6) clears the canvas for
+a locked layer and drives the brush's `use_alpha` from `lock_alpha`; `external_image`,
 `edit_external_mode`, `modifies_color_data` and the warnings API are
 open. `is_clip` came with PS-013.
 
