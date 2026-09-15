@@ -15,6 +15,8 @@ register_addon()
 
 _core = import_from("compiler.core")
 compile_tree = _core.compile_tree
+artifact_fingerprint = _core.artifact_fingerprint
+suspend_compile = _core.suspend_compile
 flush = _core.flush
 mark_dirty = _core.mark_dirty
 normalize_tree = _core.normalize_tree
@@ -50,7 +52,7 @@ try:
     art = tree.compiled
     check(art is not None and art.bl_idname == 'ShaderNodeTree', "artifact created")
     check(art.get('ps_owner') == tree.uuid, "artifact tagged with owner uuid")
-    check(tree.compiled_hash == fp1, "fingerprint stored")
+    check(art.get('ps_fingerprint') == fp1, "fingerprint stored on the artifact")
     blends = compiled_nodes(tree, 'ShaderNodeGroup')
     check(len(blends) == 2, f"two blend group instances ({len(blends)})")
     check(all(library.is_library_group(n.node_tree) for n in blends), "blends use static library group")
@@ -128,10 +130,14 @@ try:
     check(child.compiled is not None, "child compiled on demand")
     ginst = next(n for n in art.nodes if n.get("ps_identifier") == f"{group.uuid}:group")
     check(ginst.node_tree == child.compiled, "parent instances child's artifact")
-    child_solid.fill_color = (0.0, 0.0, 1.0, 1.0)
-    child_fp = child.compiled_hash
-    compile_tree(tree)
-    check(child.compiled_hash != child_fp, "child recompiled when parent compiles")
+    child_fp = artifact_fingerprint(child)
+    child_solid.fill_color = (1.0, 1.0, 0.0, 1.0)
+    check(artifact_fingerprint(child) != child_fp, "child edit compiles the child immediately")
+    with suspend_compile(child):
+        child_solid.fill_color = (0.0, 0.0, 1.0, 1.0)
+        child_fp = artifact_fingerprint(child)
+        compile_tree(tree)
+        check(artifact_fingerprint(child) != child_fp, "parent compile brings a stale child up to date")
     child.create_channel('Mask', 'FLOAT')
     check('Mask' in [s.name for s in group.outputs], "child channel change propagates to parent group node sockets")
 
@@ -142,12 +148,42 @@ try:
     check(dup.uuid != solid.uuid, "duplicate node uuid repaired")
     tree.nodes.remove(dup)
 
-    section("dirty scheduling")
-    tree.compiled_hash = ""
-    mark_dirty(tree)
-    check(bpy.app.timers.is_registered(flush), "timer registered")
-    flush()
-    check(tree.compiled_hash != "", "flush compiled the tree")
+    section("synchronous compile")
+    compiles = []
+    real_compile_tree = _core.compile_tree
+
+    def counting_compile_tree(t, **kwargs):
+        compiles.append(t.name)
+        return real_compile_tree(t, **kwargs)
+
+    _core.compile_tree = counting_compile_tree
+    try:
+        fp = artifact_fingerprint(tree)
+        solid.opacity = 0.25
+        check(artifact_fingerprint(tree) != fp, "property edit compiles immediately")
+        check(not bpy.app.timers.is_registered(flush), "no fallback timer when writing is allowed")
+
+        fp = artifact_fingerprint(tree)
+        compiles.clear()
+        with suspend_compile(tree):
+            solid.opacity = 0.5
+            solid.blend_mode = 'SCREEN'
+            check(artifact_fingerprint(tree) == fp, "edits inside suspend_compile wait")
+        check(artifact_fingerprint(tree) != fp, "suspend_compile exit compiles")
+        check(compiles.count(tree.name) == 1, f"batched edits compile once ({compiles})")
+
+        fp = artifact_fingerprint(tree)
+        _core.block_compile()
+        solid.opacity = 0.75
+        check(artifact_fingerprint(tree) == fp, "edits wait while blocked (file load, undo)")
+        _core.unblock_compile()
+        mark_dirty()
+        check(artifact_fingerprint(tree) != fp, "unblock then mark_dirty compiles")
+    finally:
+        _core.compile_tree = real_compile_tree
+        _core.unblock_compile()
+    solid.blend_mode = 'MIX'
+    solid.opacity = 1.0
 
     section("material + bake")
     cube = bpy.data.objects.get('Cube')

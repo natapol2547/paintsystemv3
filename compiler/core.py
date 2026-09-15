@@ -4,8 +4,9 @@ Data flows one way. The Paint System tree is the document; the compiled shader
 tree is a build artifact owned by the tree (``tree.compiled``). Nodes never own
 shader datablocks. They implement ``emit(ctx)`` which appends to the IR.
 
-Rebuilds are coalesced: callers mark trees dirty and a timer flushes them once
-Blender is idle. A tree is only rewritten when its IR fingerprint changes.
+Edits compile synchronously (see "Scheduling" below for why not on a timer).
+Batches of edits run inside ``suspend_compile`` and compile once at the end.
+An artifact is only rewritten when its IR fingerprint changes.
 """
 from __future__ import annotations
 
@@ -22,6 +23,9 @@ log = logging.getLogger(__name__)
 
 PS_TREE_ID = 'PaintSystemNodeTree'
 ARTIFACT_OWNER_KEY = "ps_owner"
+# The fingerprint lives on the artifact, not on the tree, so it always
+# describes the nodes it sits next to whichever copy undo restores.
+ARTIFACT_FINGERPRINT_KEY = "ps_fingerprint"
 BAKE_TREE_NAME = ".PS Bake Target"
 
 _BASE_NODE_PROPS = {p.identifier for p in bpy.types.Node.bl_rna.properties}
@@ -75,7 +79,6 @@ def normalize_all_trees() -> None:
         if tree.uuid in seen:
             tree.uuid = str(_uuid.uuid4())
             tree.compiled = None
-            tree.compiled_hash = ""
         seen.add(tree.uuid)
 
 
@@ -309,7 +312,6 @@ def ensure_artifact(tree) -> bpy.types.NodeTree:
         art = bpy.data.node_groups.new(artifact_name(tree), 'ShaderNodeTree')
         art[ARTIFACT_OWNER_KEY] = tree.uuid
         tree.compiled = art
-        tree.compiled_hash = ""
     name = artifact_name(tree)
     if art.name != name:
         art.name = name
@@ -330,32 +332,67 @@ def cleanup_orphan_artifacts() -> int:
     return removed
 
 
+def artifact_fingerprint(tree) -> str:
+    """Fingerprint of the IR the artifact was last built from ("" if none)."""
+    art = tree.compiled
+    return art.get(ARTIFACT_FINGERPRINT_KEY, "") if art is not None else ""
+
+
 def compile_tree(tree, *, force: bool = False) -> str:
     """Bring ``tree.compiled`` up to date. Returns the IR fingerprint."""
     normalize_tree(tree)
     ir = build_ir(tree)
     fingerprint = ir.fingerprint()
     artifact = ensure_artifact(tree)
-    if force or tree.compiled_hash != fingerprint:
+    if force or artifact.get(ARTIFACT_FINGERPRINT_KEY) != fingerprint:
         ir.apply(artifact)
-        tree.compiled_hash = fingerprint
+        artifact[ARTIFACT_FINGERPRINT_KEY] = fingerprint
     return fingerprint
 
 
-# ── Dirty scheduling ─────────────────────────────────────────────────
+# ── Scheduling ───────────────────────────────────────────────────────
+#
+# Edits compile synchronously, before Blender pushes the undo step for
+# them. Memfile undo takes every datablock that is byte-identical in two
+# consecutive steps straight from memory instead of re-reading it. An
+# artifact patched after its step was pushed (from a timer, say) can
+# therefore survive an undo with nodes for layers that no longer exist
+# and pointers to images the undo just freed.
+#
+# Three situations cannot compile on the spot:
+# - inside ``suspend_compile``: the outermost exit compiles once;
+# - while a file loads or an undo step decodes (Blender calls
+#   ``NodeTree.update`` on half-restored data): the post handler compiles;
+# - while ``bpy.data`` is restricted (addon registration) or writing is
+#   forbidden (drawing): a timer compiles as soon as Blender allows it.
 
 _dirty_uuids: set[str] = set()
 _dirty_all = False
 _suspended = 0
+_blocked = False
+_flushing = False
+
+# Compiling a tree can dirty others (parents of a group layer). Settle in
+# a few rounds; anything left after that waits for the next edit.
+_MAX_FLUSH_ROUNDS = 8
 
 
 def mark_dirty(tree=None) -> None:
-    """Schedule a recompile of *tree* (or every tree when None)."""
+    """Recompile *tree* (every tree when None) now, or as soon as allowed."""
     global _dirty_all
     if tree is None:
         _dirty_all = True
     else:
         _dirty_uuids.add(ensure_tree_uuid(tree))
+    if _suspended or _flushing or _blocked:
+        return
+    if not isinstance(bpy.data, bpy.types.BlendData):
+        _schedule()
+        return
+    flush()
+
+
+def _schedule() -> None:
     if not bpy.app.timers.is_registered(flush):
         try:
             bpy.app.timers.register(flush, first_interval=0.0)
@@ -364,35 +401,74 @@ def mark_dirty(tree=None) -> None:
             log.debug("could not schedule compile flush", exc_info=True)
 
 
-def flush() -> None:
-    """Timer callback: compile every dirty tree once."""
-    global _dirty_all
-    if _suspended:
+def flush():
+    """Compile every dirty tree. Doubles as the fallback timer callback."""
+    global _dirty_all, _flushing
+    if _suspended or _blocked:
         return 0.05
-    normalize_all_trees()
-    if _dirty_all:
-        targets = list(ps_trees())
-    else:
-        targets = [t for t in ps_trees() if t.uuid in _dirty_uuids]
-    _dirty_all = False
-    _dirty_uuids.clear()
-    for tree in targets:
-        try:
-            compile_tree(tree)
-        except Exception:
-            log.exception("failed to compile '%s'", tree.name)
+    if _flushing:
+        return None
+    _flushing = True
+    try:
+        for _round in range(_MAX_FLUSH_ROUNDS):
+            if not (_dirty_all or _dirty_uuids):
+                break
+            normalize_all_trees()
+            if _dirty_all:
+                targets = list(ps_trees())
+            else:
+                targets = [t for t in ps_trees() if t.uuid in _dirty_uuids]
+            _dirty_all = False
+            _dirty_uuids.clear()
+            if not _compile_targets(targets):
+                break
+        else:
+            if _dirty_all or _dirty_uuids:
+                log.warning("compile did not settle after %d rounds", _MAX_FLUSH_ROUNDS)
+    finally:
+        _flushing = False
     return None
 
 
+def _compile_targets(targets) -> bool:
+    """Compile *targets*; False when writing is forbidden and a timer takes over."""
+    for index, tree in enumerate(targets):
+        try:
+            compile_tree(tree)
+        except AttributeError as exc:
+            if "not allowed" not in str(exc):
+                log.exception("failed to compile '%s'", tree.name)
+                continue
+            for rest in targets[index:]:
+                _dirty_uuids.add(rest.uuid)
+            _schedule()
+            return False
+        except Exception:
+            log.exception("failed to compile '%s'", tree.name)
+    return True
+
+
 def flush_now() -> None:
-    """Synchronous flush (operators that need the artifact immediately)."""
+    """Compile pending trees immediately and drop any fallback timer."""
     if bpy.app.timers.is_registered(flush):
         bpy.app.timers.unregister(flush)
     flush()
 
 
+def block_compile() -> None:
+    """Hold compiles while Blender restores data (file load, undo, redo)."""
+    global _blocked
+    _blocked = True
+
+
+def unblock_compile() -> None:
+    """End a ``block_compile``. The caller then marks what needs compiling."""
+    global _blocked
+    _blocked = False
+
+
 class suspend_compile:
-    """Context manager: batch many edits, compile once at the end."""
+    """Context manager: batch many edits, compile once at the outermost exit."""
 
     def __init__(self, tree=None):
         self.tree = tree
@@ -410,9 +486,11 @@ class suspend_compile:
 
 
 def reset_state() -> None:
-    global _dirty_all, _suspended
+    global _dirty_all, _suspended, _blocked, _flushing
     _dirty_uuids.clear()
     _dirty_all = False
     _suspended = 0
+    _blocked = False
+    _flushing = False
     if bpy.app.timers.is_registered(flush):
         bpy.app.timers.unregister(flush)

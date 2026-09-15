@@ -4,7 +4,7 @@ from bpy.props import EnumProperty, StringProperty
 from bpy.utils import register_classes_factory
 
 from ..context import get_active_tree
-from ..compiler.core import compile_tree, flush_now, ensure_artifact
+from ..compiler.core import compile_tree, flush_now, ensure_artifact, suspend_compile
 from ..compiler.bake import create_managed_image
 
 
@@ -137,17 +137,18 @@ class PAINTSYSTEM_OT_add_layer(Operator):
         below = context.active_node if (context.area and context.area.type == 'NODE_EDITOR') else None
         if below is not None and not getattr(below, 'is_layer_node', False):
             below = None
-        if self.layer_type == 'IMAGE':
-            node = tree.insert_layer_node('PaintSystemImageLayerNode', below=below)
-            size = int(self.resolution)
-            image = create_managed_image(f"{tree.name} {node.name}", size, size)
-            node.image = image
-            _set_paint_canvas(context, image)
-        elif self.layer_type == 'SOLID':
-            node = tree.insert_layer_node('PaintSystemSolidColorLayerNode', below=below)
-        else:
-            node = tree.nodes.new('PaintSystemGroupLayerNode')
-            node.node_tree = _new_tree(f"{tree.name} Group")
+        with suspend_compile(tree):
+            if self.layer_type == 'IMAGE':
+                node = tree.insert_layer_node('PaintSystemImageLayerNode', below=below)
+                size = int(self.resolution)
+                image = create_managed_image(f"{tree.name} {node.name}", size, size)
+                node.image = image
+                _set_paint_canvas(context, image)
+            elif self.layer_type == 'SOLID':
+                node = tree.insert_layer_node('PaintSystemSolidColorLayerNode', below=below)
+            else:
+                node = tree.nodes.new('PaintSystemGroupLayerNode')
+                node.node_tree = _new_tree(f"{tree.name} Group")
         return {'FINISHED'}
 
     def invoke(self, context, event):
@@ -199,15 +200,16 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
     def execute(self, context):
         tree = get_active_tree(context)
         node = tree.nodes.active
-        for in_name in ('Color', 'Alpha'):
-            src_socket = node.inputs.get(in_name)
-            out_socket = node.outputs.get(in_name)
-            if src_socket is None or out_socket is None or not src_socket.links:
-                continue
-            from_socket = src_socket.links[0].from_socket
-            for link in list(out_socket.links):
-                tree.links.new(from_socket, link.to_socket)
-        tree.nodes.remove(node)
+        with suspend_compile(tree):
+            for in_name in ('Color', 'Alpha'):
+                src_socket = node.inputs.get(in_name)
+                out_socket = node.outputs.get(in_name)
+                if src_socket is None or out_socket is None or not src_socket.links:
+                    continue
+                from_socket = src_socket.links[0].from_socket
+                for link in list(out_socket.links):
+                    tree.links.new(from_socket, link.to_socket)
+            tree.nodes.remove(node)
         return {'FINISHED'}
 
 

@@ -2,6 +2,7 @@ import bpy
 from bpy.types import UIList
 
 from .common import get_icon, PaintSystemPanel
+from ..compiler.core import artifact_fingerprint
 from ..context import get_active_tree
 
 
@@ -74,7 +75,7 @@ def _draw_compiled_info(layout, tree):
     else:
         box.label(text=compiled.name, icon='NODETREE')
         box.label(text=f"{len(compiled.nodes)} nodes, {len(compiled.links)} links, "
-                       f"fingerprint {tree.compiled_hash[:8]}")
+                       f"fingerprint {artifact_fingerprint(tree)[:8]}")
     box.operator("paint_system.compile_tree", icon='FILE_REFRESH')
 
 

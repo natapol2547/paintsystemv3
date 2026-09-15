@@ -8,7 +8,7 @@ from bpy_extras.node_utils import connect_sockets
 
 from ..props.channel import PaintSystemChannel, channel_socket_specs, channel_alpha_name
 from ..props.collection_manager import CollectionManager
-from ..compiler.core import mark_dirty
+from ..compiler.core import mark_dirty, suspend_compile
 
 
 GROUP_INPUT_ID = 'PaintSystemGroupInputNode'
@@ -84,7 +84,6 @@ class PaintSystemNodeTree(NodeTree):
         name="Compiled Shader Group",
         description="Shader node group compiled from this tree",
     )
-    compiled_hash: StringProperty(name="Compiled Fingerprint")
 
     group_node_name: StringProperty(
         name="Group Node Name",
@@ -95,8 +94,9 @@ class PaintSystemNodeTree(NodeTree):
     # -- Blender callbacks ------------------------------------------------
 
     def update(self):
-        # Called on link changes, node add/remove, and during file load.
-        # Never mutate the tree here; the compiler's normalize pass repairs invariants.
+        # Called on link changes, node add/remove, and during file load and
+        # undo (where the compiler holds off until the post handler).
+        # Never mutate this tree here; the compiler's normalize pass repairs invariants.
         mark_dirty(self)
 
     # -- lifecycle --------------------------------------------------------
@@ -109,10 +109,10 @@ class PaintSystemNodeTree(NodeTree):
         """Populate a brand-new tree: io nodes, a Color channel, passthrough link."""
         if not self.uuid:
             self.uuid = str(uuid.uuid4())
-        self.ensure_io_nodes()
-        if len(self.channels) == 0:
-            self.create_channel('Color', 'COLOR')
-        mark_dirty(self)
+        with suspend_compile(self):
+            self.ensure_io_nodes()
+            if len(self.channels) == 0:
+                self.create_channel('Color', 'COLOR')
 
     def ensure_io_nodes(self):
         if self.get_input_node() is None:
@@ -142,9 +142,11 @@ class PaintSystemNodeTree(NodeTree):
         return None
 
     def on_channels_changed(self):
-        self.sync_group_node_sockets()
-        sync_group_nodes_referencing(self)
-        mark_dirty(self)
+        # Socket renames fire tree updates one socket at a time; compile
+        # once all of them match the channels again.
+        with suspend_compile(self):
+            self.sync_group_node_sockets()
+            sync_group_nodes_referencing(self)
 
     def sync_group_node_sockets(self):
         specs = channel_socket_specs(self.channels)
@@ -155,13 +157,14 @@ class PaintSystemNodeTree(NodeTree):
                 sync_sockets(node.inputs, specs)
 
     def create_channel(self, name: str = "Channel", type: str = 'COLOR'):
-        channel = self.channels_manager.add(properties={'name': name, 'type': type})
-        channel.ensure_uuid()
-        input_node = self.get_input_node()
-        output_node = self.get_output_node()
-        if input_node and output_node:
-            for sock_name in (channel.name, channel_alpha_name(channel.name)):
-                connect_sockets(input_node.outputs[sock_name], output_node.inputs[sock_name])
+        with suspend_compile(self):
+            channel = self.channels_manager.add(properties={'name': name, 'type': type})
+            channel.ensure_uuid()
+            input_node = self.get_input_node()
+            output_node = self.get_output_node()
+            if input_node and output_node:
+                for sock_name in (channel.name, channel_alpha_name(channel.name)):
+                    connect_sockets(input_node.outputs[sock_name], output_node.inputs[sock_name])
         return channel
 
     def delete_channel(self, index: int):
@@ -225,6 +228,10 @@ class PaintSystemNodeTree(NodeTree):
         if channel_name is None:
             ch = self.active_channel
             channel_name = ch.name if ch else None
+        with suspend_compile(self):
+            return self._splice_layer_node(bl_idname, channel_name, below)
+
+    def _splice_layer_node(self, bl_idname, channel_name, below):
         output = self.get_output_node()
         node = self.nodes.new(bl_idname)
 
@@ -275,14 +282,20 @@ def on_ps_nodetree_name_change():
 _register, _unregister = register_classes_factory(classes)
 
 
-def register():
-    _register()
+def subscribe_name_changes():
+    """(Re)subscribe to tree renames. Loading a file drops every subscription."""
+    bpy.msgbus.clear_by_owner(owner)
     bpy.msgbus.subscribe_rna(
         key=(PaintSystemNodeTree, "name"),
         owner=owner,
         args=(),
         notify=on_ps_nodetree_name_change,
     )
+
+
+def register():
+    _register()
+    subscribe_name_changes()
 
 
 def unregister():
