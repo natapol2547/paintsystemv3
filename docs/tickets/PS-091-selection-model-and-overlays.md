@@ -1,68 +1,107 @@
-# PS-091 Selection mask model and overlays
+# PS-091 Selection model and overlays
 
-Epic J. Size M. Milestone M3.
+Epic J. Size L. Milestone M3b.
 
 ## Goal
 
-A per-image texel selection that limits every scripted image tool
-(filters, fill, transform, brush painter) and is shown in both the image
-editor and the 3D view.
+A soft selection on the active layer's image that limits scripted image
+tools (transform, fill, filters) and clips native brush strokes, shown
+in the 3D view and the image editor.
 
-## Reference
+## Model: the selection is compiled, like the material
 
-Pixel Art Studio (`ps_canvas.py:425-439`, `ps_select.py:16-40, 828-862`,
-`ps_overlay.py:380-416, 615-648, 789-858`):
+The selection is document data; its mask is derived from it, the same
+way the artifact is derived from the tree.
 
-- `cv.sel` is a numpy bool (H, W) array or `None`; an all-False mask
-  normalises to `None`. `sel_version` keys caches; `combine()` does
-  ADD / REMOVE / REPLACE.
-- Outline segments come from a numpy XOR of the mask against its
-  column- and row-shifted copies, computed only inside the bbox.
-- 2D marching ants: segments split into alternating black/white groups
-  by `int(time.time() * 6)`, redrawn by a 6 Hz timer only while a
-  selection exists.
-- 3D: a "wash" shader tints selected texels on the mesh by sampling a
-  `GPUTexture` of the mask at the UV.
+- `PaintSystemSelection` on the tree: `image` (the layer image it
+  applies to), `feather` and `antialias` defaults, and `ops`, an
+  ordered collection of operations:
+  - `kind`: `BOX`, `ELLIPSE`, `LASSO`, `FACES`, `RASTER`, `TRANSFORM`,
+    `INVERT`, `ALL`.
+  - `mode`: `REPLACE`, `ADD`, `SUBTRACT`, `INTERSECT`.
+  - `space`: `UV` (image editor) or `VIEW` (3D view).
+  - Shape data: `points` (region or UV coordinates), and for `VIEW` the
+    region size and the view and projection matrices at the time, so the
+    op can be rasterised again after undo or reload.
+  - `feather` in pixels, `antialias`, `through` (ignore occlusion, like
+    X-ray in mesh selection).
+  - `RASTER` points at a write-once greyscale `Image` (magic wand and
+    other pixel-derived results). It is never modified, so undo only
+    needs the pointer.
+  - `TRANSFORM` carries the matrix of a committed move (PS-094) so the
+    selection follows the content without copying pixels.
+- Because the ops are document data, selection undo is Blender's undo,
+  and the selection is saved with the file like mesh selection. An op
+  that replaces everything drops the ops before it.
 
-## v3 design
+## Rasterisation (`selection/raster.py`)
 
-- `selection/model.py`:
-  - `Selection` keyed by `(image_name, tile)`: `mask` numpy bool,
-    `version`, cached `bbox`, cached `GPUTexture` (R8) rebuilt lazily
-    when `version` changes.
-  - `set(mask, mode='REPLACE'|'ADD'|'SUBTRACT'|'INTERSECT')`, `clear()`,
-    `invert()`, `all()`. Every mutation pushes a selection-only entry
-    through PS-090 so selection changes undo with Ctrl+Z.
-  - `limit_texture()` returns the mask texture for GPU passes;
-    `limit_array()` the numpy view for CPU passes. Tools treat `None`
-    as "everything".
-  - Selection is transient: not saved in the file, cleared on
-    `load_post`, and dropped when the image is resized or deleted.
-- `selection/overlay.py`:
-  - One `SpaceImageEditor` `POST_PIXEL` handler draws ants for the
-    image shown in that editor when it belongs to a Paint System layer.
-    Segments are cached per `version`; ant phase from a timer that runs
-    only while any selection exists.
-  - One `SpaceView3D` `POST_VIEW` handler draws the wash: the active
-    object's evaluated mesh with a `GPUShaderCreateInfo` shader that
-    samples the mask at the active UV map and outputs a translucent
-    tint, depth-tested `LESS_EQUAL` with depth writes off. Batch cached
-    per mesh token (vertex count, UV layer name, object name) and
-    dropped from `depsgraph_update_post`.
-  - Both handlers restore `gpu.state` in a `finally`.
-- Native brush strokes cannot be clipped by the selection (Blender's
-  paint has no external stencil). Offer "Selection to Layer Mask" as
-  the workaround: PS-015 mask image filled from the selection. A quick
-  mask mode is a separate ticket.
-- Preferences: ants colours, wash colour and opacity, "show selection in
-  3D view" toggle.
+GPU passes (PS-050 framework) build the mask at the image's size.
+
+- Every op renders to its own coverage texture, combined in order with
+  soft set operations: add is `max`, subtract is `min(m, 1 - op)`,
+  intersect is `min`. Op textures are cached by a hash of the op, so
+  adding an op only runs that op and the combine.
+- Box and ellipse are analytic distance fields. Lasso and polygon are
+  filled by accumulating winding numbers from a triangle fan, and their
+  distance to the outline comes from a jump flooding pass seeded on the
+  outline texels. `antialias` smooths the edge over one pixel; `feather`
+  maps the distance through a smoothstep of that radius.
+- `UV` ops rasterise in texel space. `VIEW` ops rasterise the shape in
+  screen space at region size (feather measured in screen pixels, as the
+  user drew it), then reach texels through the texel map (PS-092): each
+  texel is projected with the stored matrices, sampled from the screen
+  shape, and kept only when it faces the view and passes the depth test
+  unless `through` is set.
+- `FACES` draws the UV triangles of the mesh's selected faces
+  (`use_paint_mask` face selection) in texel space.
+- The combined mask is kept as a `GPUTexture` for passes and overlays and
+  written to a derived greyscale `Image` (`.PS Selection <tree>`, no fake
+  user) when a tool finishes, for the stencil below. PS-096 spike 4
+  measures that write.
+
+## Clipping native strokes
+
+- 3D view: while a selection exists in texture paint mode, the derived
+  mask image is the Stencil Mask (`use_stencil_layer`, `stencil_image`,
+  `mesh.uv_layer_stencil` set to the layer's UV map). Every Blender brush
+  is clipped with soft edges. Clearing the selection restores the
+  previous stencil settings. Depends on PS-096 spike 2.
+- Image editor: Blender's 2D painting has no stencil. The fallback keeps a
+  GPU copy of the layer image; after each stroke (image update seen in
+  `depsgraph_update_post`) one pass writes `mix(copy, image, mask)` back
+  and refreshes the copy. Paint outside the selection shows until the
+  stroke ends. Decided when the image editor tools are built.
+
+## Overlays (`selection/overlay.py`)
+
+Draw handlers only, so showing or hiding a selection never changes the
+material and never recompiles a shader.
+
+- One fragment shader draws the selection in both editors: a light wash
+  inside, and marching ants along the 0.5 iso-line of the mask, found
+  with screen-space derivatives and dashed by screen position and a time
+  uniform. Soft masks and any zoom level work without extracting
+  outline segments.
+- 3D view (`POST_VIEW`): the evaluated mesh of the paint object, sampling
+  the mask at the layer's UV map, depth-tested `LESS_EQUAL` without depth
+  writes. The batch is cached per mesh and dropped in
+  `depsgraph_update_post`.
+- Image editor (`POST_PIXEL`): a quad over the displayed image, mapped
+  with `region.view2d`.
+- A timer redraws the ants at 8 Hz only while a selection exists.
+- Handlers restore `gpu.state` in a `finally`.
+- Preferences: wash colour and opacity, ant colours, show in the 3D view.
 
 ## Acceptance
 
-- Set a rect selection on a 4K image; ants appear in the image editor
-  and the wash on the mesh within one redraw.
-- Add, subtract and invert compose correctly; undo restores the previous
-  mask.
-- Apply a blur with a selection active: pixels outside the mask are
-  bit-identical to before.
-- With no selection, no timer runs and the overlays cost nothing.
+- A lasso on a 4K image shows the wash and ants in both editors within
+  one redraw after release.
+- Add, subtract, intersect and invert combine as the soft set operations
+  above; undo restores the previous mask exactly.
+- A feathered box has mask values rising from 0 to 1 over the feather
+  width.
+- A native stroke across the selection edge in the 3D view leaves texels
+  with mask 0 unchanged.
+- With no selection, no timer runs and the draw handlers return at once.
+- Reopening the file rebuilds the same mask from the saved ops.

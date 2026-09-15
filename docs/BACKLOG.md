@@ -41,7 +41,7 @@ Guiding constraints for every ticket:
 | M1 Paint again | Image, solid and folder layers with clipping and the full sidebar UI, templates, painting workflow | 001 002 003 008 009 010 011 012 013 014 019 020 021 029 030 031 032 033 034 035 036 040 041 042 056 060 061 062 080 |
 | M2 All layer types | Remaining layer types, masks, linked layers, clipboard, actions, vector channels | 004 005 006 015 016 017 018 022 023 024 025 026 027 028 037 038 039 063 064 065 066 |
 | M3 Tools | GPU image filters, quick edit, export, channel bake, performance | 007 043 050 051 052 053 054 055 081 |
-| M3b Selection tools | Pixel undo, selection, transform and fill tools in both editors | 090 091 092 093 094 095 |
+| M3b Selection tools | Spikes, pixel undo, selection, transform and fill tools, 3D view first | 090 091 092 093 094 095 096 |
 | M4 Migration | Load v2 files into v3 | 070 071 072 082 |
 
 ## Playable demo
@@ -188,20 +188,42 @@ groups and templates (040-042), colour history (062).
 
 ## Epic J. Selection, transform and fill tools
 
-Inspired by Pixel Art Studio (`~/Downloads/pixel_art_studio_blender_v1.2.1-0`,
-GPL-3.0-or-later, same licence as Paint System). Its numpy raster core
-and integer-isometry seam engine are not ported; its tool design, undo
-model, fill and portal table are. Tickets cite its files by
-`file:line`.
+Selections and transforms are built on the compiler, the same way layers
+are:
+
+- A selection is a list of operations stored in the document. A GPU
+  rasteriser derives a soft mask from it, as the compiler derives the
+  material from the tree, so selection undo and saving come from Blender.
+- A transform is a floating layer drawn by the compiled material. Dragging
+  handles changes node values, so the preview runs at shader speed; Enter
+  writes pixels once.
+- Work done in the 3D view reaches the image through a cached texel
+  position map (world position per texel). Floods run in screen space.
+  No tool needs UV seam or mesh adjacency code.
+- Handles are Blender gizmos; overlays are draw handlers.
+- A pixel undo stack is only needed for the few operations that write
+  pixels: commit, fill, filters, cut.
+
+Decisions of 2026-09-16:
+
+- Enter merges a transform into its layer (no new layer is left behind).
+- Selections are soft, with feather and an anti-alias toggle.
+- The 3D view in texture paint mode gets the tools first; the image editor
+  follows with the same operators.
+
+Pixel Art Studio (`~/Downloads/pixel_art_studio_blender_v1.2.1-0`,
+GPL-3.0-or-later) sets the bar for how the tools should feel. None of its
+data structures or algorithms are ported.
 
 | ID | Title | Size | Depends on |
 |---|---|---|---|
-| [PS-090](tickets/PS-090-pixel-undo-stack.md) | Pixel undo stack for scripted image edits | M | – |
-| [PS-091](tickets/PS-091-selection-model-and-overlays.md) | Selection mask model and overlays | M | 090 |
-| [PS-092](tickets/PS-092-screen-to-uv-projection-pass.md) | Screen-to-UV projection pass | M | 050 |
-| [PS-093](tickets/PS-093-selection-tools.md) | Selection tools: box, ellipse, lasso, wand, by face | M | 091 092 095 |
-| [PS-094](tickets/PS-094-transform-tool.md) | Transform and move tool, pixel clipboard | L | 050 091 092 |
-| [PS-095](tickets/PS-095-fill-tool.md) | Fill tool with seam-aware flood | M | 050 091 |
+| [PS-096](tickets/PS-096-selection-transform-spikes.md) | Spikes for selection and transform | S | – |
+| [PS-090](tickets/PS-090-pixel-undo-stack.md) | Pixel undo for scripted image edits | M | 096 |
+| [PS-092](tickets/PS-092-texel-position-map.md) | Texel position map | M | 050 096 |
+| [PS-091](tickets/PS-091-selection-model-and-overlays.md) | Selection model and overlays | L | 050 092 096 |
+| [PS-093](tickets/PS-093-selection-tools.md) | Selection tools: box, ellipse, lasso, wand, faces | M | 091 092 |
+| [PS-094](tickets/PS-094-transform-tool.md) | Transform tool and pixel clipboard | L | 008 081 090 091 092 |
+| [PS-095](tickets/PS-095-fill-tool.md) | Fill tool | M | 050 090 091 092 |
 
 ## Deferred
 
