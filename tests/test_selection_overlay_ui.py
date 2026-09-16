@@ -6,7 +6,9 @@ regions back from a draw handler added after the overlay's, so a pop-up
 over the window (the splash screen) does not get in the way. What that
 handler reads is the region's overlay layer, without the scene or the
 image under it; opaque pixels that are pure black or white, the default
-dash colours, are counted as ants.
+dash colours, are counted as ants. In the 3D view that layer also holds
+the Stencil Mask display, which darkens what is not selected, so the 3D
+checks draw the ants in pure red and green and count those instead.
 
 Draws are counted by wrapping `overlay._uniforms`, which only a draw that
 gets as far as the GPU calls, and batch builds by wrapping
@@ -87,6 +89,23 @@ def ants(pixels):
     """
     rgb = pixels[..., :3]
     return ((rgb < 30).all(-1) | (rgb > 225).all(-1)) & (pixels[..., 3] > 250)
+
+
+RED_GREEN_ANTS = {
+    "selection_ant_color_a": (1.0, 0.0, 0.0),
+    "selection_ant_color_b": (0.0, 1.0, 0.0),
+    "selection_wash_opacity": 0.0,
+}
+"""Overlay settings for the 3D checks: dash colours the Stencil Mask display cannot produce, and no wash."""
+
+
+def red_green_ants(pixels):
+    """Opaque pure red or pure green pixels, the dashes drawn with `RED_GREEN_ANTS`."""
+    high = pixels[..., :3] > 225
+    low = pixels[..., :3] < 30
+    red = high[..., 0] & low[..., 1] & low[..., 2]
+    green = low[..., 0] & high[..., 1] & low[..., 2]
+    return (red | green) & (pixels[..., 3] > 250)
 
 
 def window():
@@ -179,9 +198,11 @@ def steps():
     with override(view3d):
         bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
     yield from wait_for(lambda: session.current().paint_mode)
+    default_style = {name: overlay.DEFAULTS[name] for name in RED_GREEN_ANTS}
+    overlay.DEFAULTS.update(RED_GREEN_ANTS)
     yield from settle()
     baseline = yield from capture(view3d)
-    baseline_ants = int(ants(baseline).sum()) if baseline is not None else -1
+    baseline_ants = int(red_green_ants(baseline).sum()) if baseline is not None else -1
 
     section("the 3D view draws a partial selection and marches the ants")
     select_box(0.3, 0.3, 0.7, 0.7)
@@ -195,7 +216,7 @@ def steps():
     yield 0.6
     check(draws["view3d"] - before >= 2, f"the timer keeps redrawing the view ({draws['view3d'] - before} draws in 0.6 s)")
     pixels = yield from capture(view3d)
-    partial_ants = int(ants(pixels).sum()) if pixels is not None else -1
+    partial_ants = int(red_green_ants(pixels).sum()) if pixels is not None else -1
     check(baseline_ants >= 0 and partial_ants > baseline_ants + 200,
           f"the ants show on the surface ({partial_ants} ant pixels, {baseline_ants} without a selection)")
 
@@ -211,10 +232,11 @@ def steps():
     yield from wait_for(lambda: session.current().digest != digest)
     yield from settle()
     pixels = yield from capture(view3d)
-    seam_ants = int(ants(pixels).sum()) if pixels is not None else -1
+    seam_ants = int(red_green_ants(pixels).sum()) if pixels is not None else -1
     check(pixels is not None and abs(seam_ants - baseline_ants) <= 20,
           f"the islands' own outline stays hidden ({seam_ants} ant pixels, {baseline_ants} without a selection, "
           f"box {low.tolist()} to {high.tolist()})")
+    overlay.DEFAULTS.update(default_style)
 
     section("strokes reuse the batch; a modifier rebuilds it")
     select_box(0.3, 0.3, 0.7, 0.7)
