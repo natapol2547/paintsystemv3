@@ -15,15 +15,10 @@ def register() -> None:
     km_name = 'Image Paint'
     space = 'EMPTY'
 
-    add_keymap_entry(
-        kc,
-        name=km_name,
-        space_type=space,
-        idname='wm.call_panel',
-        key='RIGHTMOUSE',
-        value='PRESS',
-        properties={'name': 'MAT_PT_TexPaintRMBMenu'},
-    )
+    # No mouse button is bound here. Blender's Image Paint keymap gives
+    # RIGHTMOUSE to paint.grab_clone and brush.stencil_control, with and
+    # without every modifier, and an addon item would be matched first and
+    # take them away. Stencil control is also what PS-091 paints through.
 
     # Color Sampler ('I') and Toggle Erase Alpha ('E')
     add_keymap_entry(

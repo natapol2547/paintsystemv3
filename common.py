@@ -1,7 +1,6 @@
 import logging
 import re
 import bpy
-import pathlib
 import os
 
 from .custom_icons import get_icon
@@ -48,24 +47,6 @@ def get_icon_from_socket_type(socket_type: str) -> int:
         'FLOAT': 'float_socket',
     }
     return get_icon(type_to_icon.get(socket_type, 'color_socket'))
-
-
-def get_image_editor_icon(current_image_editor: str) -> int:
-    if not current_image_editor:
-        return None
-    editor_path = pathlib.Path(current_image_editor)
-    app_name = editor_path.name.lower()
-    if "clipstudiopaint" in app_name:
-        return get_icon("clip_studio_paint")
-    elif "photoshop" in app_name:
-        return get_icon("photoshop")
-    elif "gimp" in app_name:
-        return get_icon("gimp")
-    elif "krita" in app_name:
-        return get_icon("krita")
-    elif "affinity" in app_name:
-        return get_icon("affinity")
-    return get_icon("image")
 
 
 # Path
