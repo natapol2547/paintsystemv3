@@ -3,7 +3,6 @@ from bpy.props import BoolProperty, FloatProperty, EnumProperty
 from bpy.utils import register_classes_factory
 
 from .common import ADDON_ID
-from .keymaps.common import find_keymap
 
 
 class PaintSystemPreferences(AddonPreferences):
@@ -105,31 +104,6 @@ class PaintSystemPreferences(AddonPreferences):
         default=True
     )
 
-    def draw_shortcut(self, layout, kmi, text):
-        row = layout.row(align=True)
-        row.prop(kmi, "active", text="", emboss=False)
-        row.label(text=text)
-        row.prop(kmi, "map_type", text="")
-        map_type = kmi.map_type
-        if map_type == 'KEYBOARD':
-            row.prop(kmi, "type", text="", full_event=True)
-        elif map_type == 'MOUSE':
-            row.prop(kmi, "type", text="", full_event=True)
-        elif map_type == 'NDOF':
-            row.prop(kmi, "type", text="", full_event=True)
-        elif map_type == 'TWEAK':
-            subrow = row.row()
-            subrow.prop(kmi, "type", text="")
-            subrow.prop(kmi, "value", text="")
-        elif map_type == 'TIMER':
-            row.prop(kmi, "type", text="")
-        else:
-            row.label()
-
-        if (not kmi.is_user_defined) and kmi.is_user_modified:
-            row.operator("preferences.keyitem_restore",
-                         text="", icon='BACK').item_id = kmi.id
-
     def draw(self, context):
         layout = self.layout
 
@@ -155,15 +129,6 @@ class PaintSystemPreferences(AddonPreferences):
                          text="Show Active Palette")
         popover_box.prop(self, "show_brush_settings_popover",
                          text="Show Brush Controls")
-
-        box = layout.box()
-        box.label(text="Paint System Shortcuts:")
-        kmi = find_keymap('paint_system.color_sample')
-        if kmi:
-            self.draw_shortcut(box, kmi, "Color Sampler Shortcut")
-        kmi = find_keymap('paint_system.toggle_brush_erase_alpha')
-        if kmi:
-            self.draw_shortcut(box, kmi, "Toggle Eraser")
 
 
 classes = (

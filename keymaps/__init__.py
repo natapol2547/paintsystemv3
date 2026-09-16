@@ -12,29 +12,12 @@ def register() -> None:
     if not kc:
         return
 
-    km_name = 'Image Paint'
-    space = 'EMPTY'
-
-    # No mouse button is bound here. Blender's Image Paint keymap gives
-    # RIGHTMOUSE to paint.grab_clone and brush.stencil_control, with and
-    # without every modifier, and an addon item would be matched first and
-    # take them away. Stencil control is also what PS-091 paints through.
-
-    # Color Sampler ('I') and Toggle Erase Alpha ('E')
-    add_keymap_entry(
-        kc,
-        name=km_name,
-        space_type=space,
-        idname='paint_system.color_sample',
-        key='I',
-    )
-    add_keymap_entry(
-        kc,
-        name=km_name,
-        space_type=space,
-        idname='paint_system.toggle_brush_erase_alpha',
-        key='E',
-    )
+    # No mouse button is bound in Image Paint. Blender's Image Paint keymap
+    # gives RIGHTMOUSE to paint.grab_clone and brush.stencil_control, with
+    # and without every modifier, and an addon item would be matched first
+    # and take them away. Stencil control is also what PS-091 paints
+    # through. The colour sampler (I) and erase toggle (E) are added by
+    # PS-036 together with their operators.
 
     # Node editor: enter/exit group (TAB).
     add_keymap_entry(

@@ -30,12 +30,17 @@ rule against removing or shadowing default entries, and stencil control
 is what PS-091 paints selections through. The v3 keymap therefore binds
 no mouse button, and the comment in `keymaps/__init__.py` says so.
 
-Two keyboard items stay. `I` and `E` are unbound in the default Image
-Paint keymap, and Image Paint is checked before the 3D View and Screen
-keymaps that own the letters generally, so those two shadow nothing while
-texture painting. Any key added later gets the same check against
-`blender_default.py` first; background Blender reports an empty default
-keyconfig, so this is a read of that file and not a test.
+Two keyboard items come back with this ticket. `I` and `E` are unbound in
+the default Image Paint keymap (only Alt+E is taken, on 4.2 and 5.2), and
+Image Paint is checked before the 3D View and Screen keymaps that own the
+letters generally, so those two shadow nothing while texture painting.
+They were registered ahead of their operators and removed again: an item
+naming an operator that does not exist is leftover code, and the shortcut
+rows in the preferences went with them. This ticket adds the operators,
+the two items and the shortcut rows together. Any key added later gets
+the same check against `blender_default.py` first; background Blender
+reports an empty default keyconfig, so this is a read of that file and
+not a test.
 
 ## v3 design
 
