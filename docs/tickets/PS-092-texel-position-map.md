@@ -21,12 +21,13 @@ Four things the plan had wrong or had not reached:
   rather than repeating the nearest island texel; for a four texel margin
   the two are visually the same, and the continuation is the better value
   for a tool to read.
-- **Background Blender can run GPU passes from 5.0.** `gpu.init()` builds
+- **Background Blender can run GPU passes from 5.2.** `gpu.init()` builds
   a context with no display at all - it found the real GPU on this
   machine with `DISPLAY` unset - so the GPU tests run in the ordinary
-  headless job on 5.2. 4.2 has no equivalent and `gpu_available()`
-  returns False there, so `tests/run.sh --ui` now runs the texel map test
-  windowed as well to keep 4.2 covered.
+  headless job on 5.2. 4.2 to 5.1 have no equivalent (checked on 4.5.13,
+  5.0.1 and 5.1.2) and `gpu_available()` returns False there, so
+  `tests/run.sh --ui` runs the texel map test windowed as well to keep
+  them covered.
 - **GPU objects must be given back before Python shuts down.** Freeing a
   texture during interpreter teardown segfaults a background Blender, so
   `gpu_passes` registers only to get an `unregister` that calls
@@ -59,10 +60,11 @@ instead of once per operation.
 
 - `gpu_passes/core.py`: what every pass needs, and what PS-050's filter
   framework will sit on. `gpu_available()` probes the context once and
-  runs `gpu.init()` in a 5.x background session; `read_color()` reads a
-  framebuffer slot back through a one-dimensional `gpu.types.Buffer`
-  passed as `read_color(..., data=buf)`, because a multi-dimensional
-  buffer reports reversed strides on 4.2 (PS-096 spike 4).
+  runs `gpu.init()` in a background session from 5.2; `read_color()`
+  reads a framebuffer slot back through a one-dimensional
+  `gpu.types.Buffer` passed as `read_color(..., data=buf)`, because a
+  multi-dimensional buffer reports reversed strides on 4.2 (PS-096
+  spike 4).
 - `gpu_passes/texel_map.py`:
   - `build_texel_map(obj, uv_map, width, height, tile=1001, margin=4)`
     draws the evaluated mesh's loop triangles into a `GPUFrameBuffer`
@@ -97,9 +99,11 @@ instead of once per operation.
   fails, while the one-dimensional buffer is copy-free on both versions
   (PS-096 spike 4). On 4.2 `GPUFrameBuffer.viewport_set` takes no
   arguments.
-- GPU tests run in the ordinary headless job on 5.x and in the windowed
-  one (Mesa under Xvfb) for 4.2, which has no background GPU context.
-  PS-096 spike 4 ran every pass on llvmpipe; the Xvfb job is PS-080's.
+- GPU tests run headless from 5.2, once on the default backend and once
+  on Vulkan through Mesa's lavapipe, and in the windowed job (Mesa under
+  Xvfb) on every series, which is the only GPU coverage 4.2 to 5.1 get.
+  PS-096 spike 4 ran every pass on llvmpipe; the Xvfb and lavapipe steps
+  are PS-080's.
 
 Measured in PS-096 spike 4 at 4K (factory cube / 1M-triangle grid):
 draw 1.2 / 6.1 ms on an RTX 2060 (5.2 and 4.2), 19 / 55 ms on Intel

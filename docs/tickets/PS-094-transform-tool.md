@@ -65,6 +65,11 @@ opacity, clipping and blend:
 
 The mask is the selection's derived image (PS-091). This is exactly what
 the commit writes, so the preview and the merge match by construction.
+PS-091 writes that image only while something needs it, so starting a
+transform session asks for the write as the stencil does. A committed
+move appends a `TRANSFORM` op, which PS-091 rejects with `UNSUPPORTED`
+until this ticket adds its pass: the previous mask sampled through the
+inverse matrix with manual bilinear filtering.
 The floating nodes (the second sample of the layer and the mask, the
 attribute node and the affine math) are added to the active layer's
 artifact when the tool activates and removed when it deactivates: one

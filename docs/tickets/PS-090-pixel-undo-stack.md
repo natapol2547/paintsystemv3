@@ -81,8 +81,10 @@ pixels, and the addon only registers its writes with it.
     is its own step, pushed before the write with `ed.undo_push`, so
     each Ctrl+Z has a visible effect.
   - Nothing infers pixel state from document state after undo. Owners of
-    derived images rebuild them from their inputs in `undo_post` and
-    `redo_post` (PS-091 for the selection mask).
+    derived images rebuild them from their inputs after undo and redo.
+    PS-091 keys the selection mask by a digest of the ops, so the
+    restored ops find or rebuild theirs, and its stencil image is
+    rewritten when its recorded digest no longer matches.
   - Fetch datablocks by name or `session_uid` after undo; Python
     references may dangle.
 - Cost: 75–120 ms and about 90 MB per registration on a 4K byte image

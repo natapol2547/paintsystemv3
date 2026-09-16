@@ -20,14 +20,30 @@ paint mode comes first; the image editor follows with the same operators.
 - Each operator only appends an op to the selection (PS-091) and asks
   for a rebuild. The rasteriser does the rest, so an operator stays a
   few dozen lines and every tool shares feather, antialias and undo.
+  Outlines go in through `add_op(points=...)` or `set_points`, which
+  store a flat float array. A list of pairs written straight to
+  `op['points']` is malformed, and PS-091 reports the op as
+  `UNSUPPORTED`.
 - Mode keys match Blender's mesh select tools: Shift adds, Ctrl
   subtracts, Shift+Ctrl intersects, plain replaces. The keymap is the
   addon's own tool keymap.
-- Tool settings in the header: mode, feather, antialias, and in the 3D
-  view `through` (select hidden texels too, like X-ray).
+- Tool settings in the header: mode, feather (0 to 1024 pixels),
+  antialias, and in the 3D view `through` (select hidden texels too,
+  like X-ray).
 - While dragging, the shape is drawn in screen space by a `POST_PIXEL`
   handler with the same dashed shader as the ants. The mask is built once
   on release.
+- A shape that encloses nothing is cancelled, not stored: a box or
+  ellipse with zero width or height, and a lasso with fewer than three
+  distinct points or with every point on one line. With anti-alias or
+  feather such a lasso would still draw a faint line.
+- Operators check `availability()` in `poll` or `invoke` and call
+  `get_mask` inside `try/except MaskUnavailable`, reporting its message.
+  An empty `availability()` is not a promise: it runs no self-test and
+  starts no background GPU context, because `gpu.init()` crashes Blender
+  instead of raising when EGL cannot start. `GPU_ERROR` is transient, so
+  a later try can succeed; `SELF_TEST` lasts for the session, and
+  `availability()` reports it from then on.
 - Box and ellipse accept Shift after the drag starts for a square or
   circle and Alt for drawing from the centre, the way Blender's add
   object tool does. The polygon lasso closes on Enter, double click or a
@@ -64,6 +80,36 @@ That keeps it off seams and islands entirely.
 - `paint_system.select_all(action='SELECT'|'DESELECT'|'INVERT')`, with
   the addon's keymap using Blender's defaults (A, Alt+A, Ctrl+I) inside the
   selection tools only, so texture paint shortcuts elsewhere are unchanged.
+  `SELECT` appends `ALL` with `REPLACE`, `DESELECT` clears the ops, and
+  `INVERT` appends an `INVERT` op, which PS-091 stores with mode `ADD`.
+
+### Rasterising the new kinds
+
+PS-091's rasteriser raises `UNSUPPORTED` for `FACES`, `RASTER` and
+outlined `VIEW` ops. This ticket adds their passes to
+`selection/raster.py` and moves the kinds into `SUPPORTED_KINDS`.
+PS-091's self-test does not reach these passes, so it cannot catch a
+driver that draws them wrongly.
+
+- `FACES` stores the object, the UV map name and the selected face
+  indices, and draws the UV triangles of the evaluated mesh, like the
+  texel map.
+- `FACES` and `VIEW` digests include a per-object epoch that
+  `depsgraph_update_post` bumps on a geometry update of the mesh or a
+  transform update of the object, and that `undo_post` and `redo_post`
+  bump for every object. Hashing the UVs instead costs 47–62 ms at 4M
+  loops. On 4.2 in texture paint mode undo fires only `undo_post`.
+- `VIEW` shapes are built by the same passes in screen space at region
+  size, then sampled at each texel's projected position through the
+  texel map (PS-092), as PS-091 describes. Two `MAT4` alone fill the
+  128 bytes of push constants Vulkan guarantees, so the matrices go
+  through a uniform buffer or are applied in numpy.
+- `RASTER` images are float, written with alpha 1 and packed right
+  after the write: a packed float image with alpha 0.5 came back
+  premultiplied after an undo past its creation and a redo. They are
+  uploaded through `foreach_get` into a `Buffer`-backed texture, never
+  `gpu.texture.from_image`, which segfaults a background 5.2. Their
+  `session_uid` survives undo and redo and is part of the digest.
 
 ## Acceptance
 
@@ -75,5 +121,7 @@ That keeps it off seams and islands entirely.
 - Wand with tolerance 0 on a flat colour region selects exactly that
   region; a higher tolerance grows it to near colours.
 - Select by UV island selects every texel of the island and nothing else.
-- A 200-point lasso on a 4K image is ready in under 50 ms after release.
+- A 200-point lasso on a 4K image is ready in under 50 ms after release
+  on a hardware GPU, not counting the first build of a session (shader
+  compile and self-test). CI runs llvmpipe and asserts only 2 s.
 - The image editor tools pass the same checks in texel space.

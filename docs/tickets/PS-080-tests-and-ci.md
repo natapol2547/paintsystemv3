@@ -91,8 +91,12 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   test-only panel draws them in texture paint mode (PS-033).
 - `tests/run.sh [--ui] [test files]` drives all of the above.
   `BLENDER` selects the executable; `XVFB=1` forces the UI test through
-  `xvfb-run` with Mesa software rendering and the OpenGL backend.
-  `--python-exit-code 1` makes an uncaught script exception fail the run.
+  `xvfb-run` with Mesa software rendering and the OpenGL backend;
+  `GPU_BACKEND` passes `--gpu-backend` to the headless tests. Blender
+  falls back to OpenGL silently when the backend asked for cannot start,
+  so with `PS_EXPECT_GPU_BACKEND` set the texel map and selection raster
+  tests fail on any other backend. `--python-exit-code 1` makes an
+  uncaught script exception fail the run.
 
 ## CI
 
@@ -107,10 +111,12 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   platform rules (no threading, no promo links, no updater, no dev files,
   no stray properties on `bpy.types` IDs, manifest hygiene). One `test`
   job per Blender version: download (cached per release), headless tests,
-  UI draw test under Xvfb, then `extension validate`, `build`,
-  `install-file` and an enable check of the built package. Experimental
-  builds may fail without failing the workflow. A weekly failure opens or
-  updates an issue labelled `ci-compat`.
+  from 5.2 the GPU tests again headless on Vulkan through Mesa's lavapipe
+  (the OpenGL steps miss Vulkan-only faults), windowed tests under Xvfb,
+  then `extension validate`, `build`, `install-file` and an enable check
+  of the built package. Experimental builds may fail without failing the
+  workflow. A weekly failure opens or updates an issue labelled
+  `ci-compat`.
 - `.github/workflows/release.yml` (manual) reuses the test workflow, then
   runs the same action with `create-release` on, which builds, validates
   strictly and drafts a GitHub release tagged from the manifest version.
