@@ -195,14 +195,14 @@ are:
   rasteriser derives a soft mask from it, as the compiler derives the
   material from the tree, so selection undo and saving come from Blender.
 - A transform is a floating layer drawn by the compiled material. Dragging
-  handles changes node values, so the preview runs at shader speed; Enter
-  writes pixels once.
+  handles changes a view-layer attribute the material reads, so the
+  preview runs at shader speed; Enter writes pixels once.
 - Work done in the 3D view reaches the image through a cached texel
   position map (world position per texel). Floods run in screen space.
   No tool needs UV seam or mesh adjacency code.
-- Handles are Blender gizmos; overlays are draw handlers.
-- A pixel undo stack is only needed for the few operations that write
-  pixels: commit, fill, filters, cut.
+- Handles are custom Python gizmos; overlays are draw handlers.
+- The few operations that write pixels (commit, fill, filters, cut)
+  register with Blender's own image undo; there is no separate stack.
 
 Decisions of 2026-09-16:
 
@@ -210,6 +210,11 @@ Decisions of 2026-09-16:
 - Selections are soft, with feather and an anti-alias toggle.
 - The 3D view in texture paint mode gets the tools first; the image editor
   follows with the same operators.
+- After the PS-096 spikes: the transform handles are a custom
+  `bpy.types.Gizmo` (the built-in cage ignores Ctrl and Shift and misses
+  corners in the image editor); a commit is one image undo step and the
+  floating state is session state, not document data; surface moves use a
+  UV lookup decal at 2x density; write-once images are packed.
 
 Pixel Art Studio (`~/Downloads/pixel_art_studio_blender_v1.2.1-0`,
 GPL-3.0-or-later) sets the bar for how the tools should feel. None of its
@@ -218,7 +223,7 @@ data structures or algorithms are ported.
 | ID | Title | Size | Depends on |
 |---|---|---|---|
 | [PS-096](tickets/PS-096-selection-transform-spikes.md) | Spikes for selection and transform | S | – |
-| [PS-090](tickets/PS-090-pixel-undo-stack.md) | Pixel undo for scripted image edits | M | 096 |
+| [PS-090](tickets/PS-090-pixel-undo-stack.md) | Pixel undo for scripted image edits | S | 096 |
 | [PS-092](tickets/PS-092-texel-position-map.md) | Texel position map | M | 050 096 |
 | [PS-091](tickets/PS-091-selection-model-and-overlays.md) | Selection model and overlays | L | 050 092 096 |
 | [PS-093](tickets/PS-093-selection-tools.md) | Selection tools: box, ellipse, lasso, wand, faces | M | 091 092 |

@@ -35,7 +35,8 @@ Seams are handled by where the flood runs, not by mesh adjacency.
   - `PIXELS`: flood from the clicked colour.
   - `SELECTION`: fill the selection mask, no flood.
   - `FACES`: fill the UV polygons of the selected faces.
-- Pixels are written inside `record()` (PS-090), one undo entry per fill.
+- Pixels are written with `write_pixels` (PS-090), one undo step per
+  fill; the fill operator has no `UNDO` option.
 
 ## Acceptance
 

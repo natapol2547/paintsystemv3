@@ -29,6 +29,12 @@ Done for the demo (M0 slice 6).
   with a path stays packed and its file is not written, a generated image
   the addon did not create is packed, an image no Paint System node uses
   and an image without changes are left alone.
+- Open (PS-096 finding, 2026-09-16): a float image with alpha below 1,
+  packed and reloaded, has its colour channels multiplied by alpha again
+  (0.8 reloads as 0.4 at alpha 0.5) on 5.2 and 4.2; byte images reload
+  unchanged. Before Epic J writes float layers, the pack path for float
+  images needs a fix (alpha mode on pack, or save to EXR instead) and a
+  test that packs and reloads a half-transparent float image.
 
 ## v2 behaviour
 

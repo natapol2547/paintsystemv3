@@ -51,8 +51,8 @@ That keeps it off seams and islands entirely.
 - Contiguous or global. The first version floods on the CPU with numpy
   over a GPU match mask; a jump flooding connectivity pass replaces it if
   profiling asks for it (PS-081).
-- The result is written once to a greyscale `Image` and stored as a
-  `RASTER` op, so undo and reload need no pixel history.
+- The result is written once to a greyscale `Image`, packed (PS-091),
+  and stored as a `RASTER` op, so undo and reload need no pixel history.
 - The wand selects visible surface only. Texels hidden from the view are
   not reached; the tool settings say so.
 

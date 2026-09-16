@@ -27,12 +27,19 @@ way the artifact is derived from the tree.
     X-ray in mesh selection).
   - `RASTER` points at a write-once greyscale `Image` (magic wand and
     other pixel-derived results). It is never modified, so undo only
-    needs the pointer.
+    needs the pointer. It is packed right after the write: PS-096 found
+    that an unpacked generated image comes back black after an undo past
+    its creation and a redo.
   - `TRANSFORM` carries the matrix of a committed move (PS-094) so the
     selection follows the content without copying pixels.
 - Because the ops are document data, selection undo is Blender's undo,
   and the selection is saved with the file like mesh selection. An op
-  that replaces everything drops the ops before it.
+  that replaces everything drops the ops before it. Memfile undo never
+  restores pixels (PS-096), so the derived mask image carries a hash of
+  the ops it was built from in an ID property, and `undo_post` and
+  `redo_post` rebuild it when the hash no longer matches the ops. On 4.2
+  in texture paint mode document changes are not undoable (PS-090), so
+  selection undo does nothing there; the docs say so.
 
 ## Rasterisation (`selection/raster.py`)
 
@@ -56,17 +63,23 @@ GPU passes (PS-050 framework) build the mask at the image's size.
 - `FACES` draws the UV triangles of the mesh's selected faces
   (`use_paint_mask` face selection) in texel space.
 - The combined mask is kept as a `GPUTexture` for passes and overlays and
-  written to a derived greyscale `Image` (`.PS Selection <tree>`, no fake
-  user) when a tool finishes, for the stencil below. PS-096 spike 4
-  measures that write.
+  written to a derived float `Image` (`.PS Selection <tree>`, no fake
+  user) when a tool finishes and the stencil below is in use. PS-096
+  spike 4 measured that write at about 150–200 ms at 4K (read back,
+  expansion to RGBA, `foreach_set`), which is why it happens only for the
+  stencil and not on every rebuild.
 
 ## Clipping native strokes
 
 - 3D view: while a selection exists in texture paint mode, the derived
   mask image is the Stencil Mask (`use_stencil_layer`, `stencil_image`,
-  `mesh.uv_layer_stencil` set to the layer's UV map). Every Blender brush
-  is clipped with soft edges. Clearing the selection restores the
-  previous stencil settings. Depends on PS-096 spike 2.
+  `mesh.uv_layer_stencil` set to the layer's UV map, and
+  `invert_stencil=True`, because Blender's stencil protects where the
+  mask is white). Every Blender brush is clipped with soft edges: PS-096
+  spike 2 measured texels at mask 0 unchanged and the painted strength
+  following the mask within 0.01, on 5.2 and 4.2. Clearing the selection
+  restores the previous stencil settings. `sync_canvas` leaves them
+  alone.
 - Image editor: Blender's 2D painting has no stencil. The fallback keeps a
   GPU copy of the layer image; after each stroke (image update seen in
   `depsgraph_update_post`) one pass writes `mix(copy, image, mask)` back
