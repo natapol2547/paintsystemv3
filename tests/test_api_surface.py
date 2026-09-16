@@ -157,6 +157,17 @@ SURFACE = [
     op("paint.image_from_view"),
     op("paint.brush_colors_flip"),
 
+    # Selection stencil (PS-091).
+    rna_prop("ImagePaint", "use_stencil_layer"),
+    rna_prop("ImagePaint", "invert_stencil"),
+    rna_prop("ImagePaint", "stencil_image"),
+    rna_prop("Mesh", "uv_layer_stencil_index"),
+    rna_prop("Mesh", "uv_layer_stencil"),
+    rna_prop("Image", "packed_file"),
+    rna_func("Image", "unpack"),
+    rna_func("Image", "reload"),
+    attr("bpy.types.IMAGE_HT_tool_header"),
+
     # Images.
     rna_prop("Image", "pixels"),
     rna_prop("Image", "tiles"),

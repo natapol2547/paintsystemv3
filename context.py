@@ -2,10 +2,11 @@ from dataclasses import dataclass
 
 import bpy
 
-from bpy.props import PointerProperty
+from bpy.props import CollectionProperty, PointerProperty
 from bpy.utils import register_classes_factory
 
 from .nodetree.stack_ops import StackItem
+from .props.stencil import PaintSystemStencilMeshBackup
 
 
 def is_ps_node_tree_poll(self, node_tree: bpy.types.NodeTree):
@@ -19,6 +20,8 @@ class PaintSystemSceneSettings(bpy.types.PropertyGroup):
         description="Currently active Paint System node tree",
         poll=is_ps_node_tree_poll,
     )
+    # Stencil UV maps the selection replaced (`selection/stencil.py`).
+    stencil_meshes: CollectionProperty(type=PaintSystemStencilMeshBackup)
 
 
 class PaintSystemMaterialSettings(bpy.types.PropertyGroup):
