@@ -22,10 +22,11 @@ the one it last synced and stops there when nothing changed and the mask
 is still cached. Otherwise it builds the mask once, remembering a failure
 per digest so a mask that cannot be built is not tried again on every
 tick, and retrying `GPU_ERROR` a few times. A sync that gets past the
-comparison hands the state on and tags the 3D views and image editors
-for redraw. `notify(force=True)` forgets the last state first, so that
-sync reaches everything even when the state is unchanged: undo, redo and
-a file read restore the ops and Blender's own settings independently.
+comparison hands the state on to `stencil.sync` and tags the 3D views
+and image editors for redraw. `notify(force=True)` forgets the last
+state first, so that sync reaches everything even when the state is
+unchanged: undo, redo and a file read restore the ops and Blender's own
+settings independently.
 """
 import dataclasses
 import logging
@@ -35,7 +36,7 @@ import bpy
 
 from .. import context as ps_context
 from ..gpu_passes import core
-from . import raster
+from . import raster, stencil
 
 log = logging.getLogger(__name__)
 
@@ -207,6 +208,7 @@ def sync(context=None, force: bool = False) -> State:
     if state == _last and not built:
         return state
     _last = state
+    stencil.sync(state, target)
     _tag_redraw(context)
     return state
 

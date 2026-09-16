@@ -28,7 +28,6 @@ core = import_from("gpu_passes.core")
 raster = import_from("selection.raster")
 session = import_from("selection.session")
 stencil = import_from("selection.stencil")
-stencil.register()
 
 LAYER_SIZE = (256, 128)
 USER_STENCIL = "PS Stencil User"
@@ -81,10 +80,8 @@ def user_stencil_back():
 
 
 def apply():
-    """What the session's tick does: resolve the state, then reconcile the stencil."""
-    state = session.sync(force=True)
-    stencil.sync(state, session.resolve_target(bpy.context)[0])
-    return state
+    """What the session's tick does after an undo: a sync that reaches the stencil even when nothing changed."""
+    return session.sync(force=True)
 
 
 def pixels(image):
@@ -204,6 +201,28 @@ def test_apply_and_restore():
     apply()
     check(stencil.is_applied(bpy.context.scene), "and entering it again applies the selection")
     t.selection.clear()
+    apply()
+
+
+def test_session_reaches_the_stencil():
+    section("the session hands each new state to the stencil once")
+    tree().selection.add_op('BOX', points=[(0.3, 0.3), (0.6, 0.6)])
+    apply()
+    calls = []
+    original = stencil.sync
+
+    def counting(state, target):
+        calls.append(state)
+        original(state, target)
+
+    with patched(stencil, "sync", counting):
+        session.sync()
+        check(not calls, "an unchanged state does not reach it")
+        tree().selection.invert()
+        state = session.sync()
+        check(len(calls) == 1 and calls[0] == state,
+              f"an edit reaches it exactly once, with the new state ({len(calls)} calls)")
+    tree().selection.clear()
     apply()
 
 
@@ -430,10 +449,8 @@ def test_file_recovery():
 
 
 def save(path):
-    """Save as the add-on's handlers do: the user's stencil goes into the file, then the selection takes it back."""
-    stencil.restore_all()
+    """Save through the add-on's handlers: the user's stencil goes into the file, then the selection takes it back."""
     bpy.ops.wm.save_as_mainfile(filepath=path)
-    apply()
 
 
 def test_autopack():
@@ -491,8 +508,9 @@ def test_save_and_load():
         saved_images = list(data_from.images)
     check(stencil.IMAGE_NAME not in saved_images, f"the saved file has no stencil image ({saved_images})")
 
+    check(stencil._loaded, "the stencil image has loaded a mask file")
     bpy.ops.wm.open_mainfile(filepath=path)
-    stencil.on_file_loaded()
+    check(not stencil._loaded, "the load handler forgets the loaded file paths")
     shutil.rmtree(directory)
 
 
@@ -526,6 +544,7 @@ def test_unregister():
 
 guarded(test_png_round_trip)
 guarded(test_apply_and_restore)
+guarded(test_session_reaches_the_stencil)
 guarded(test_second_sync_writes_nothing)
 guarded(test_digest_files_are_reused)
 guarded(test_stale_pixels_reload)

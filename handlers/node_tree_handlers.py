@@ -8,6 +8,7 @@ from ..gpu_passes import texel_map
 from ..nodetree.tree import subscribe_name_changes
 from ..selection import raster as selection_raster
 from ..selection import session as selection_session
+from ..selection import stencil as selection_stencil
 from ..undo import pixels
 
 
@@ -69,6 +70,9 @@ def on_load_post(*args):
     # Masks are keyed by content and would still be right, but nothing in
     # the new file is likely to ask for them; give the memory back.
     selection_raster.invalidate()
+    # A file saved without `on_save_pre`, as an autosave, can still point
+    # the stencil at the previous session's mask file.
+    selection_stencil.on_file_loaded()
     # The file's selection and active layer arrive together; reconcile
     # everything derived from them, and try masks that failed before
     # again (PS-091).
@@ -111,8 +115,19 @@ def on_undo_post(*args):
 @bpy.app.handlers.persistent
 def on_save_pre(*args):
     """Save or pack painted layer images so their pixels survive reload (PS-056)."""
+    # The file keeps the user's stencil settings and no reference to the
+    # selection's stencil image, which then has no users and is not
+    # written (PS-091). `on_save_post` applies the selection again.
+    selection_stencil.restore_all()
     for image in paint_system_images():
         save_image(image)
+
+
+@bpy.app.handlers.persistent
+def on_save_post(*args):
+    # Synchronously rather than on the next tick, so no stroke paints
+    # unclipped in between (PS-091).
+    selection_session.sync(force=True)
 
 
 _handlers = [
@@ -125,6 +140,7 @@ _handlers = [
     (bpy.app.handlers.redo_pre, on_restore_pre),
     (bpy.app.handlers.redo_post, on_undo_post),
     (bpy.app.handlers.save_pre, on_save_pre),
+    (bpy.app.handlers.save_post, on_save_post),
 ]
 
 

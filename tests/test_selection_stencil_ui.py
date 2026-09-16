@@ -29,19 +29,6 @@ register_addon()
 session = import_from("selection.session")
 raster = import_from("selection.raster")
 stencil = import_from("selection.stencil")
-stencil.register()
-
-# Until the session hands its state to the stencil, do it where a sync
-# that reaches the consumers tags the redraw.
-_tag_redraw = session._tag_redraw
-
-
-def _tag_redraw_and_sync_stencil(context):
-    stencil.sync(session._last, session.resolve_target(context)[0])
-    _tag_redraw(context)
-
-
-session._tag_redraw = _tag_redraw_and_sync_stencil
 
 USER_STENCIL = "PS Stencil UI User"
 
