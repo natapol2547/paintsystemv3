@@ -9,6 +9,7 @@ from bpy_extras.node_utils import connect_sockets
 from . import stack_ops
 from ..props.channel import PaintSystemChannel, channel_socket_specs, channel_alpha_name
 from ..props.collection_manager import CollectionManager
+from ..props.selection import PaintSystemSelection
 from ..compiler.core import mark_dirty, suspend_compile, tree_updated
 
 
@@ -92,6 +93,11 @@ class PaintSystemNodeTree(NodeTree):
     channels: CollectionProperty(type=PaintSystemChannel)
     active_channel_index: IntProperty(name="Active Channel", default=0)
     uuid: StringProperty(name="UUID")
+
+    # The selection on the active layer image, as the operations that built
+    # it (PS-091). Document data, so Blender's undo covers it and it is
+    # saved with the file; the mask is derived and never stored.
+    selection: PointerProperty(type=PaintSystemSelection)
 
     # The layer list shows ``nodes`` directly; its active row is the active
     # node, so nothing is stored that could disagree with the graph.
