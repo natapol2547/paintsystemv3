@@ -2,6 +2,22 @@
 
 Epic D. Size S. Milestone M2.
 
+## Status
+
+PS-091 added a "Selection" box to `PaintSystemPreferences.draw` with
+five properties the selection overlay reads: `show_selection_3d`,
+`selection_wash_color`, `selection_wash_opacity`,
+`selection_ant_color_a` and `selection_ant_color_b` (colours are
+`COLOR_GAMMA`). They are not v2 preferences; the port keeps the box.
+
+`common.ADDON_ID` is now `__package__` instead of the literal
+`"paint_system"`. Installed as an extension, the add-on's module is
+`bl_ext.<repository>.paint_system`, so the literal never matched:
+`PaintSystemPreferences` never attached and
+`context.preferences.addons["paint_system"]` did not exist. Code that
+reads the preferences looks them up with `ADDON_ID`. The CI enable step
+asserts that the preferences attach to the installed package.
+
 ## v2 behaviour
 
 `panels/preferences_panels.py:9-113` draws the preferences listed in

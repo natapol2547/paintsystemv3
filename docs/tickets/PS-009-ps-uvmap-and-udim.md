@@ -33,6 +33,15 @@ Epic A. Size S. Milestone M1.
 - `create_managed_image` grows `tiles: list[int] | None` and creates UDIM
   tiles with `image.tiles.new`.
 
+## Selections on UDIM layers
+
+PS-091 clips native strokes through Blender's Stencil Mask, which takes
+one image and samples a tiled one from tile 1001 only. A selection on a
+UDIM layer therefore reports "UDIM layers are not supported yet" and
+blocks painting. The rasteriser and the overlay already take a tile, so
+what is missing is per-tile clipping. It needs its own design once UDIM
+layers can be created here.
+
 ## Acceptance
 
 - Adding an AUTO image layer on a cube with no UVs creates `PS_UVMap` and

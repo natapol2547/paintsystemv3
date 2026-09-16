@@ -36,6 +36,22 @@ Four things the plan had wrong or had not reached:
   against 128). World transforms are applied with numpy while the vertex
   arrays are built, which leaves 24 bytes of push constants.
 
+Open for PS-093, found while building PS-091 milestone 1:
+
+- `_triangle_arrays` falls back to the mesh's active UV map when the
+  named one is missing. `VIEW` selection ops must not: a silent fallback
+  changes the selection without telling the user. PS-093 adds
+  `fallback_to_active=False` for them and reports `SURFACE` instead.
+- Maps are dropped on every geometry update, and undo, redo and a stroke
+  undo all report one, as does entering texture paint mode. On 5.3 alpha
+  every native stroke reports an Object geometry update too, so the map
+  is dropped after each stroke there. PS-093's surface fingerprint
+  (`gpu_passes/surface.py`) could key the maps instead, so a map
+  survives when the mesh content is unchanged.
+- The selection stencil writes `mesh.uv_layer_stencil_index`, which is a
+  geometry update and drops the object's maps. It writes only when the
+  index differs, so this happens once per holding, not per sync.
+
 Also settled: `GPUFrameBuffer.viewport_set` takes no arguments at all on
 4.2, not even keywords. It is never called, because binding a framebuffer
 already sets the viewport to its own size on both versions.

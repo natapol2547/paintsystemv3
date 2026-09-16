@@ -109,6 +109,23 @@ message bus subscription on `Object.active_material_index` for another
 material slot, and a node editor draw callback plus a timer for a node
 clicked in the node editor, which Blender reports in no other way.
 
+A selection (PS-091) is document data too: ops on the tree, compiled
+into a GPU mask the way the tree is compiled into a material. Only one
+is live, the active tree's, and it applies to the active layer.
+`selection/session.py` keeps what is derived from it in step. Writers
+call `session.notify()`, which schedules one timer tick; the tick
+resolves a `State` for the active layer, builds the mask if the state
+changed (remembering failures per digest and retrying GPU errors), and
+hands the state to its two consumers in order. `selection/stencil.py`
+points Blender's Stencil Mask at a PNG of the mask so native strokes
+are clipped, blocks painting when a selection exists but cannot be
+used, and backs up the user's stencil settings where undo treats them
+like the settings themselves. `selection/overlay.py` draws the tint and
+marching ants from draw handlers that only read the cached mask, and
+calls `notify()` when what they would draw is out of step. Nothing but
+the tick builds a mask. The selection edits no material and never
+compiles.
+
 Painted pixels live in memory until the file is saved. `save_pre`
 (`handlers/node_tree_handlers.py`) passes every image a Paint System node
 points at, and every image the addon created, to `common.save_image`: a
@@ -152,6 +169,35 @@ to images the undo just freed. `tests/test_smoke_loop.py` covers this.
 Scripts that edit links directly and need the artifact at once call
 `flush_now()` or make the edits inside `suspend_compile`.
 
+The selection session is the exception to synchronous work: nothing it
+derives is document data, so it syncs on a timer. Its triggers:
+
+- `selection.session.notify()` from the selection operators,
+  `update_active_image` (every active layer, tree, object or material
+  change), the message bus subscriptions on `Object.mode` and
+  `Window.scene` in `handlers/paint_handlers.py`, an Object geometry
+  update in `depsgraph_update_post` (a renamed or removed UV map), and
+  the overlay's draw callbacks when the mask or image size is out of
+  step.
+- `notify(force=True)` from `undo_post` and `redo_post`, `load_post` and
+  `load_post_fail` (after `session.forget_failures()`), and the stencil's
+  own message bus subscriptions on `ImagePaint.use_stencil_layer`,
+  `invert_stencil`, `stencil_image` and `Mesh.uv_layer_stencil_index`,
+  so a user edit to settings the selection holds is set back.
+- `depsgraph_update_post` also drops the overlay's batch of an object
+  with a geometry update; `load_post` and `load_post_fail` drop them all.
+- `load_post` calls `stencil.on_file_loaded()` before the forced notify:
+  it forgets the old backups, resets a stencil a file saved without
+  `save_pre` still holds, and subscribes again.
+- `save_pre` calls `stencil.restore_all()` before it saves images, so the
+  file keeps the user's stencil settings and no reference to the mask
+  image; `save_post` runs `session.sync(force=True)` synchronously so
+  the stencil is back before the next stroke.
+
+Scripts that write the ops, or remove a UV map with
+`mesh.uv_layers.remove()` (which reports no depsgraph update), call
+`notify()` themselves.
+
 What Blender does around `NodeTree.update`, checked on 4.2 and 5.2:
 
 - It calls `Node.update` for every node of the tree, then `NodeTree.update`
@@ -187,7 +233,7 @@ color and alpha into the cache image, then stores the subtree hash.
 
 ```
 tests/run.sh                        # headless tests (tests/test_*.py)
-tests/run.sh --ui                   # plus the windowed UI draw test
+tests/run.sh --ui                   # plus the windowed tests (ui_tests in run.sh)
 BLENDER=/path/to/blender tests/run.sh   # another Blender build
 ```
 
@@ -205,6 +251,17 @@ BLENDER=/path/to/blender tests/run.sh   # another Blender build
 operator the addon depends on still exists, and `test_ui_draw.py` draws
 every panel in a real window (Xvfb on CI) and fails on draw exceptions;
 it also checks the selection triggers that only a window loop runs.
+The Epic J tests cover the texel map (`test_texel_map.py`), pixel undo
+(`test_pixel_undo.py`) and the selection: `test_selection_model.py`,
+`test_selection_outline.py` and `test_selection_raster.py` for the ops
+and the mask, `test_selection_session.py`, `test_selection_stencil.py`
+and `test_selection_overlay.py` for the session and its consumers, and
+the windowed `test_selection_session_ui.py`,
+`test_selection_stencil_ui.py` and `test_selection_overlay_ui.py` for
+message bus triggers, native strokes through the stencil and the
+overlay in real editors. GPU checks run headless from Blender 5.2 and
+windowed under `--ui` on every version, since 4.2 to 5.1 have no
+background GPU context.
 `.github/workflows/test.yml` runs all of this against the latest patch of
 every supported Blender series, lints with ruff (`uvx ruff check .`
 locally) and validates the built package with the strict

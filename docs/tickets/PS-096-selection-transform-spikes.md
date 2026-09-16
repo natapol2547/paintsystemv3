@@ -120,6 +120,26 @@ its own and the splash screen covers the viewport at startup.
 - The image editor ignores the stencil, as expected. `sync_canvas` in
   `handlers/paint_handlers.py` does not touch the stencil settings.
 
+Follow-ups from the PS-091 milestone 1 probes (5.2.1 and 4.2.23, and 5.3
+alpha on Vulkan where noted):
+
+- Texture paint reads the stencil at 8 bits. A feathered mask painted
+  through it matches the float mask within 0.002, the step of one
+  level; a float stencil image gains nothing. Same on 5.3 alpha.
+- A tiled (`<UDIM>`) stencil image is sampled from tile 1001 only: UVs
+  in 1002 read 1001's pixels. One stencil cannot clip per tile, so PS-091
+  blocks painting on UDIM layers with a selection.
+- Memfile undo keeps tool settings (`use_stencil_layer`,
+  `invert_stencil`, `canvas`, `stencil_color`) at their current values,
+  but restores mesh data (`uv_layer_stencil_index`) and scene data. A
+  `stencil_image` that survives the undo keeps its current value; one the
+  undo frees falls back to the step's value rather than dangling. So a
+  backup of tool settings on the scene is wrong after an undo, and
+  PS-091 keeps it on the window manager.
+- A generated stencil image written with `foreach_set` is dirty: saving
+  packs it and quitting asks to save it. A FILE image read from a PNG
+  stays clean.
+
 ### Pixel undo (spikes 2 and 5; changes PS-090)
 
 - Memfile undo restores ID properties and RNA values and keeps every

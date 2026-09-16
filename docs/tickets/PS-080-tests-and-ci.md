@@ -89,14 +89,38 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   redraw, and wait for redraws instead of a fixed delay. The Brush and
   Color section bodies start closed and a script cannot open them, so a
   test-only panel draws them in texture paint mode (PS-033).
-- `tests/run.sh [--ui] [test files]` drives all of the above.
-  `BLENDER` selects the executable; `XVFB=1` forces the UI test through
-  `xvfb-run` with Mesa software rendering and the OpenGL backend;
-  `GPU_BACKEND` passes `--gpu-backend` to the headless tests. Blender
-  falls back to OpenGL silently when the backend asked for cannot start,
-  so with `PS_EXPECT_GPU_BACKEND` set the texel map and selection raster
-  tests fail on any other backend. `--python-exit-code 1` makes an
-  uncaught script exception fail the run.
+- Epic J adds GPU and selection tests. `test_texel_map.py` (PS-092),
+  `test_pixel_undo.py` (PS-090), `test_selection_model.py`,
+  `test_selection_outline.py` and `test_selection_raster.py` (PS-091
+  slices 1 and 2). PS-091 milestone 1 adds `test_selection_session.py`
+  (the session's target, state, failure memo and retry, `select_all`,
+  undo flags and the depsgraph notify), `test_selection_stencil.py` (the
+  PNG round trip, apply and restore, block mode, save and load, crash
+  recovery, autopack, scene copies and removal, unregister),
+  `test_selection_overlay.py` (the overlay shaders by pixel, the colour
+  conversion, the clip offset, batches and the draw safety net), and
+  three windowed files: `test_selection_session_ui.py` (message bus
+  triggers, undo in texture paint and the Selection section),
+  `test_selection_stencil_ui.py` (native strokes through the stencil,
+  undo and policy) and `test_selection_overlay_ui.py` (ants in the 3D
+  view and the image editor, the redraw timer, batch rebuilds and the
+  resize safety net). Checks that need a GPU run headless from 5.2 and
+  are skipped headless before that; the rest of each file still runs.
+  Background tests give GPU objects back (`session.release()`,
+  `raster.release()` or the module's `unregister`) before they exit,
+  because a texture freed after the GPU context has gone segfaults 5.2.
+- `tests/run.sh [--ui] [test files]` drives all of the above. Two arrays
+  at the top list the special files: `window_only` files need a window
+  and are skipped by the headless loop, and `ui_tests` are run again
+  windowed under `--ui`, which includes the GPU tests because 4.2 to
+  5.1 have no background GPU context. `BLENDER` selects the executable;
+  `XVFB=1` forces the windowed tests through `xvfb-run` with Mesa
+  software rendering and the OpenGL backend; `GPU_BACKEND` passes
+  `--gpu-backend` to the headless tests. Blender falls back to OpenGL
+  silently when the backend asked for cannot start, so with
+  `PS_EXPECT_GPU_BACKEND` set the GPU tests fail on any other backend.
+  `--python-exit-code 1` makes an uncaught script exception fail the
+  run.
 
 ## CI
 
@@ -112,9 +136,15 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   no stray properties on `bpy.types` IDs, manifest hygiene). One `test`
   job per Blender version: download (cached per release), headless tests,
   from 5.2 the GPU tests again headless on Vulkan through Mesa's lavapipe
-  (the OpenGL steps miss Vulkan-only faults), windowed tests under Xvfb,
-  then `extension validate`, `build`, `install-file` and an enable check
-  of the built package. Experimental builds may fail without failing the
+  (`test_selection_raster.py`, `test_texel_map.py`,
+  `test_selection_session.py`, `test_selection_stencil.py` and
+  `test_selection_overlay.py`; the OpenGL steps miss Vulkan-only faults),
+  windowed tests under Xvfb, then `extension validate`, `build`,
+  `install-file` and an enable check of the built package that also
+  asserts its add-on preferences attach. The native stroke and overlay
+  pixel checks have not been run on llvmpipe under Xvfb yet; if they
+  flake there, those checks get a software GL gate and the logic checks
+  stay. Experimental builds may fail without failing the
   workflow. A weekly failure opens or updates an issue labelled
   `ci-compat`.
 - `.github/workflows/release.yml` (manual) reuses the test workflow, then

@@ -34,6 +34,11 @@ Partly done (M0 slice 6):
     last drew and registers a timer that syncs, since drawing cannot write
     data.
 - `load_post` syncs.
+- `update_active_image` calls `selection.session.notify()` as its first
+  statement, before it knows whether there is a tree, so every caller
+  above also brings the live selection (PS-091) in step with a new
+  active layer, tree, object or material, including a change to one
+  with no tree. The session syncs on a timer after the function returns.
 - The Layers panel box shows the `lock_alpha` toggle for layers with a
   paint image, as v2 did for image layers.
 - Open: switching channels is no caller, because the active layer is the
