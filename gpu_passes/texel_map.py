@@ -169,12 +169,6 @@ def _triangle_arrays(obj: bpy.types.Object, uv_map: str,
     }
 
 
-def _tile_offset(tile: int) -> tuple[float, float]:
-    """The UV-space origin of a UDIM tile number (1001 is the 0..1 square)."""
-    index = tile - 1001
-    return float(index % 10), float(index // 10)
-
-
 class TexelMap:
     """The position and normal textures for one object, image size and tile.
 
@@ -250,7 +244,7 @@ def build_texel_map(obj: bpy.types.Object, uv_map: str, width: int, height: int,
         gpu.state.face_culling_set('NONE')
         with framebuffer.bind():
             framebuffer.clear(color=(0.0, 0.0, 0.0, 0.0))
-            shader.uniform_float("tile_offset", _tile_offset(tile))
+            shader.uniform_float("tile_offset", core.tile_offset(tile))
             shader.uniform_float("texel_size", (1.0 / width, 1.0 / height))
             # The margin first, so the real triangles cover it.
             shader.uniform_float("margin", float(margin))

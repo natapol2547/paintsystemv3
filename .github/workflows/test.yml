@@ -99,7 +99,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends \
-            xvfb libgl1 libegl1 libgl1-mesa-dri libglu1-mesa \
+            xvfb libgl1 libegl1 libgl1-mesa-dri libglu1-mesa mesa-vulkan-drivers \
             libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libice6
 
       - name: Blender version
@@ -110,9 +110,35 @@ jobs:
           BLENDER: ${{ env.BLENDER_DIR }}/blender
         run: paint_system/tests/run.sh
 
+      # Blender 5.2 and later start a background GPU context, so the GPU
+      # tests also run on Vulkan through Mesa's lavapipe. The OpenGL jobs
+      # cannot catch Vulkan-only faults such as an R32F texture read back
+      # as bytes or an unbound sampler. PS_EXPECT_GPU_BACKEND makes the
+      # tests fail if Blender falls back to OpenGL instead.
+      - name: Headless GPU tests on Vulkan (lavapipe)
+        env:
+          BLENDER: ${{ env.BLENDER_DIR }}/blender
+          SERIES: ${{ matrix.series }}
+          GPU_BACKEND: vulkan
+          PS_EXPECT_GPU_BACKEND: VULKAN
+        run: |
+          # sort -V -C succeeds only when 5.2 sorts at or before the series,
+          # which admits 5.3, 5.10 and 6.x as well.
+          if printf '%s\n' 5.2 "$SERIES" | sort -V -C; then
+            # The lavapipe manifest is lvp_icd.x86_64.json on Mesa 24 and
+            # lvp_icd.json on later releases. If neither exists the loader
+            # finds no driver and PS_EXPECT_GPU_BACKEND fails the step.
+            icds=(/usr/share/vulkan/icd.d/lvp_icd*.json)
+            export VK_ICD_FILENAMES="${icds[0]}"
+            paint_system/tests/run.sh test_selection_raster.py test_texel_map.py
+          else
+            echo "Blender $SERIES has no background GPU context; skipping"
+          fi
+
       # Runs the windowed tests only: the named file is skipped by the
       # headless loop, and --ui runs every windowed test. test_texel_map.py
-      # is in there because 4.2 has no GPU context in background mode.
+      # and test_selection_raster.py are in there because 4.2 to 5.1 have
+      # no GPU context in background mode.
       - name: Windowed tests (Xvfb)
         env:
           BLENDER: ${{ env.BLENDER_DIR }}/blender

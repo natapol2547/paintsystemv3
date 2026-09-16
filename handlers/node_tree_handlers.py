@@ -6,6 +6,7 @@ from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty
                              unblock_compile)
 from ..gpu_passes import texel_map
 from ..nodetree.tree import subscribe_name_changes
+from ..selection import raster as selection_raster
 from ..undo import pixels
 
 
@@ -58,6 +59,9 @@ def on_load_post(*args):
     pixels.forget_undo_state()
     # Cached maps belong to objects of the file that was open (PS-092).
     texel_map.invalidate()
+    # Masks are keyed by content and would still be right, but nothing in
+    # the new file is likely to ask for them; give the memory back.
+    selection_raster.invalidate()
     # Runs before Blender records the file's initial undo step, so the
     # compile result is part of it.
     mark_dirty()
@@ -68,6 +72,7 @@ def on_load_post_fail(*args):
     unblock_compile()
     pixels.forget_undo_state()
     texel_map.invalidate()
+    selection_raster.invalidate()
 
 
 @bpy.app.handlers.persistent
@@ -81,6 +86,9 @@ def on_undo_post(*args):
     # An undo can restore different geometry under the same world matrix,
     # which the cache key alone would not notice (PS-092).
     texel_map.invalidate()
+    # Selection masks stay: they are keyed by a digest of the ops and the
+    # size, so the restored ops find their mask, if it is cached, without
+    # a rebuild (PS-091).
 
 
 @bpy.app.handlers.persistent

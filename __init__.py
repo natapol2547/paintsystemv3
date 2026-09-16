@@ -20,6 +20,7 @@ submodules = (
     "context",
     "compiler",
     "gpu_passes",
+    "selection",
     "nodes",
     "nodetree",
     "ops",

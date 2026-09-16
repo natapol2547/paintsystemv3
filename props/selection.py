@@ -4,8 +4,8 @@ A selection is an ordered list of operations - a box here, a lasso there,
 an inversion - stored on the tree. That makes selection undo Blender's own
 undo and saves the selection with the file, the way mesh selection works,
 and it means nothing has to store the mask: `selection/raster.py` rebuilds
-it from the ops, and `ops_hash` tells it when the mask it holds no longer
-matches them.
+it from the ops, and caches it under `prefix_digests`, a digest of exactly
+what the mask depends on.
 
 Point lists live in an ID property rather than a collection of typed
 point groups. A lasso carries hundreds of points and memfile undo copies
@@ -13,13 +13,18 @@ every step; a `CollectionProperty` would allocate one PropertyGroup per
 point and copy them all on each push, while an ID property holding a flat
 array of floats is one allocation, is written to the file, and is
 restored by undo the same way.
+
+Digests are never written to the file or to an ID property, so changing
+what goes into them needs no versioning; `tests/test_selection_model.py`
+pins a few so the change is at least deliberate.
 """
 import hashlib
-import json
+import struct
+from array import array
 
 import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProperty,
-                       FloatVectorProperty, IntVectorProperty, PointerProperty, StringProperty)
+                       FloatVectorProperty, IntVectorProperty, PointerProperty)
 
 SELECTION_OP_KINDS = [
     ('BOX', "Box", "Rectangle"),
@@ -47,14 +52,41 @@ SELECTION_SPACES = [
 POINTS_KEY = "points"
 """ID property on an op holding its outline as a flat list of x, y floats."""
 
+FEATHER_MAX = 1024.0
+"""Widest soft edge an op can carry, in pixels. The rasteriser clamps to it too."""
+
+REPLACING_KINDS = frozenset(('BOX', 'ELLIPSE', 'LASSO', 'FACES', 'RASTER', 'ALL'))
+"""Kinds that, with mode `REPLACE`, hide every op before them."""
+
+MODELESS_KINDS = frozenset(('INVERT', 'TRANSFORM'))
+"""Kinds that act on the mask before them instead of combining a shape
+with it. Their mode means nothing; `add_op` stores `ADD`."""
+
+SPACELESS_KINDS = frozenset(('ALL', 'INVERT'))
+"""Kinds whose result does not depend on the space they were made in."""
+
+OUTLINELESS_KINDS = frozenset(('ALL', 'INVERT', 'TRANSFORM'))
+"""Kinds with no outline, so points, feather and anti-alias mean nothing."""
+
+KIND_CODES = {item[0]: index for index, item in enumerate(SELECTION_OP_KINDS)}
+MODE_CODES = {item[0]: index for index, item in enumerate(SELECTION_MODES)}
+SPACE_CODES = {item[0]: index for index, item in enumerate(SELECTION_SPACES)}
+"""Stable small integers for the enum items, packed into digests."""
+
+DIGEST_TAG = b"PS-091 selection mask 1"
+"""Version of the digest format; changing it gives every selection new cache keys."""
+
+DIGEST_SIZE = 20
+"""Bytes in each BLAKE2b prefix digest."""
+
 _IDENTITY = (1.0, 0.0, 0.0, 0.0,
              0.0, 1.0, 0.0, 0.0,
              0.0, 0.0, 1.0, 0.0,
              0.0, 0.0, 0.0, 1.0)
 
 
-def _flat(values) -> list[float]:
-    """*values* as a flat list of rounded floats.
+def _matrix_values(values) -> list[float]:
+    """*values* as a flat list of floats.
 
     A `subtype='MATRIX'` property reads back as a `Matrix`, which iterates
     as four `Vector` rows rather than sixteen floats. A `Vector` is a
@@ -64,10 +96,25 @@ def _flat(values) -> list[float]:
     out = []
     for value in values:
         if isinstance(value, (int, float)):
-            out.append(round(float(value), 6))
+            out.append(float(value))
         else:
-            out.extend(round(float(inner), 6) for inner in value)
+            out.extend(float(inner) for inner in value)
     return out
+
+
+def points_view(points) -> memoryview | None:
+    """A points ID property value as a flat numeric buffer, or None when malformed.
+
+    Well formed is an ID property array of even length. A list of pairs,
+    a string, a group, a scalar or an odd length is malformed.
+    """
+    try:
+        view = memoryview(points)
+    except TypeError:
+        return None
+    if view.ndim != 1 or len(view) % 2:
+        return None
+    return view
 
 
 class PaintSystemSelectionOp(bpy.types.PropertyGroup):
@@ -80,7 +127,7 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
     feather: FloatProperty(
         name="Feather",
         description="Width of the soft edge, in pixels of the space the op was drawn in",
-        default=0.0, min=0.0, soft_max=64.0,
+        default=0.0, min=0.0, max=FEATHER_MAX, soft_max=64.0,
     )
     antialias: BoolProperty(
         name="Anti-Alias",
@@ -127,24 +174,49 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
             flat.extend((float(point[0]), float(point[1])))
         self[POINTS_KEY] = flat
 
-    def hash_parts(self) -> list:
-        """Everything that changes what this op rasterises to.
+    def update_digest(self, digest) -> None:
+        """Feed everything that changes what this op rasterises to into *digest*.
 
-        Matrices and the region size only matter for a VIEW op, and the
-        raster image and transform only for their own kinds, so a UV box
-        keeps the same hash whatever the viewport is doing.
+        Values go in at full precision, packed with `struct`; the point
+        list goes in as its float64 buffer without a copy. What cannot
+        change the mask stays out: the mode of an `INVERT` or `TRANSFORM`,
+        the space of `ALL` and `INVERT`, the outline, feather and
+        anti-alias of kinds without an outline, and the view of a `UV` op.
+        A `RASTER` op includes its image's `session_uid`, so an image
+        deleted and replaced by another of the same name is a new mask.
         """
-        parts = [self.kind, self.mode, self.space,
-                 round(self.feather, 4), self.antialias,
-                 [round(value, 6) for pair in self.get_points() for value in pair]]
-        if self.space == 'VIEW':
-            parts.extend([self.through, list(self.region_size),
-                          _flat(self.view_matrix), _flat(self.projection_matrix)])
-        if self.kind == 'RASTER':
-            parts.append(self.raster_image.name_full if self.raster_image else None)
-        if self.kind == 'TRANSFORM':
-            parts.append(_flat(self.transform))
-        return parts
+        kind = self.kind
+        outlined = kind not in OUTLINELESS_KINDS
+        digest.update(struct.pack(
+            '<BBBdB',
+            KIND_CODES[kind],
+            0 if kind in MODELESS_KINDS else MODE_CODES[self.mode],
+            0 if kind in SPACELESS_KINDS else SPACE_CODES[self.space],
+            self.feather if outlined else 0.0,
+            self.antialias if outlined else False))
+        points = self.get(POINTS_KEY) if outlined else None
+        view = points_view(points) if points is not None else None
+        if points is not None and view is None:
+            # Malformed points cannot be built (`selection/raster.py` reports
+            # the op), so a marker count is enough to key the digest.
+            digest.update(struct.pack('<Q', 0xFFFFFFFFFFFFFFFF))
+        else:
+            count = len(view) if view is not None else 0
+            digest.update(struct.pack('<Q', count))
+            if count:
+                # A list assigned with integers is stored as an int array.
+                digest.update(view if view.format == 'd' else array('d', view.tolist()))
+        if outlined and self.space == 'VIEW':
+            digest.update(struct.pack('<B2i', self.through, *self.region_size))
+            digest.update(struct.pack('<32d', *_matrix_values(self.view_matrix),
+                                      *_matrix_values(self.projection_matrix)))
+        if kind == 'RASTER':
+            image = self.raster_image
+            name = image.name_full.encode('utf-8') if image is not None else b""
+            digest.update(struct.pack('<IQ', len(name), image.session_uid if image is not None else 0))
+            digest.update(name)
+        if kind == 'TRANSFORM':
+            digest.update(struct.pack('<16d', *_matrix_values(self.transform)))
 
 
 class PaintSystemSelection(bpy.types.PropertyGroup):
@@ -160,17 +232,13 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
     feather: FloatProperty(
         name="Feather",
         description="Default width of the soft edge for new operations, in pixels",
-        default=0.0, min=0.0, soft_max=64.0,
+        default=0.0, min=0.0, max=FEATHER_MAX, soft_max=64.0,
     )
     antialias: BoolProperty(
         name="Anti-Alias",
         description="Smooth the edge of new operations over one pixel",
         default=True,
     )
-
-    # Set by `selection/raster.py` to the `ops_hash` the mask was built
-    # from, so a stale mask is recognised after undo, redo or a reload.
-    mask_hash: StringProperty(name="Mask Hash", options={'SKIP_SAVE'})
 
     @property
     def is_empty(self) -> bool:
@@ -180,10 +248,15 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
                **values) -> PaintSystemSelectionOp:
         """Append an operation, applying the selection's own defaults.
 
-        A `REPLACE` drops every op before it: nothing earlier can show
-        through, so keeping them would only slow the rebuild down.
+        A `REPLACE` of a kind in `REPLACING_KINDS` drops every op before
+        it: nothing earlier can show through, so keeping them would only
+        slow the rebuild down. `INVERT` and `TRANSFORM` act on what came
+        before them, so they never drop anything and are stored with mode
+        `ADD` whatever *mode* says.
         """
-        if mode == 'REPLACE':
+        if kind in MODELESS_KINDS:
+            mode = 'ADD'
+        elif mode == 'REPLACE' and kind in REPLACING_KINDS:
             self.ops.clear()
         op = self.ops.add()
         op.kind = kind
@@ -200,20 +273,51 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
 
     def clear(self) -> None:
         self.ops.clear()
-        self.mask_hash = ""
+
+    def chain_start(self) -> int:
+        """Index of the last op that replaces everything before it, or 0.
+
+        Ops before it cannot show through, so the rasteriser starts there.
+        `add_op` already drops them; this covers ops added any other way.
+        """
+        start = 0
+        for index, op in enumerate(self.ops):
+            if op.mode == 'REPLACE' and op.kind in REPLACING_KINDS:
+                start = index
+        return start
+
+    def prefix_digests(self, width: int = 0, height: int = 0, tile: int = 0) -> list[bytes]:
+        """One digest per op: of that op and everything that shows through to it.
+
+        Digest ``k`` is the mask after op ``k`` at *width* x *height* for
+        UDIM *tile*, so `selection/raster.py` uses them as cache keys and
+        finds the longest prefix it has already built. A replacing op
+        starts again from the root, which holds only the digest tag, the
+        size and the tile, so ops before it do not change any digest from
+        it on. 20-byte BLAKE2b.
+        """
+        root = hashlib.blake2b(DIGEST_TAG + struct.pack('<III', width, height, tile),
+                               digest_size=DIGEST_SIZE).digest()
+        previous = root
+        out = []
+        for op in self.ops:
+            digest = hashlib.blake2b(digest_size=DIGEST_SIZE)
+            digest.update(root if op.mode == 'REPLACE' and op.kind in REPLACING_KINDS else previous)
+            op.update_digest(digest)
+            previous = digest.digest()
+            out.append(previous)
+        return out
 
     def ops_hash(self) -> str:
-        """A digest of every op, in order. Empty string when there are none.
+        """A digest of the ops that affect the mask, from `chain_start` on, in order.
 
-        The mask is derived from exactly this, so two selections with the
-        same digest have the same mask and a changed digest means the mask
-        has to be rebuilt.
+        Empty string when there are none. The mask is derived from exactly
+        this, so two selections with the same digest have the same mask at
+        any size, and a changed digest means the mask has to be rebuilt.
         """
         if not len(self.ops):
             return ""
-        payload = json.dumps([op.hash_parts() for op in self.ops],
-                             sort_keys=True, separators=(',', ':'))
-        return hashlib.sha1(payload.encode('utf-8')).hexdigest()
+        return self.prefix_digests()[-1].hex()
 
 
 classes = (

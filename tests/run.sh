@@ -5,15 +5,21 @@
 #   tests/run.sh --ui            headless tests plus the windowed ones
 #   tests/run.sh test_compile.py only the named headless test(s)
 #
-# test_ui_draw.py needs a window and is skipped headless. test_texel_map.py
-# runs in both: Blender 5.0's gpu.init() gives a background session a GPU
-# context, but 4.2 has none, so there it only has coverage under --ui.
+# test_ui_draw.py needs a window and is skipped headless.
+# test_texel_map.py and test_selection_raster.py run in both: Blender 5.2's
+# gpu.init() gives a background session a GPU context, but 4.2 to 5.1 have
+# none, so there they only have coverage under --ui.
 #
 # BLENDER  path to the Blender executable (default: local 5.2 LTS install)
 # XVFB=1   force the windowed tests through xvfb-run even when DISPLAY is set
+# GPU_BACKEND=<name>
+#          pass --gpu-backend <name> (opengl or vulkan) to the headless tests;
+#          when unset, Blender picks its default backend
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BLENDER="${BLENDER:-/home/tawan/Desktop/Blender Launcher/stable/blender-5.2.1-lts.9e2066aef7ef/blender}"
+backend_args=()
+[ -n "${GPU_BACKEND:-}" ] && backend_args=(--gpu-backend "$GPU_BACKEND")
 
 run_ui=0
 files=()
@@ -34,13 +40,13 @@ for f in "${files[@]}"; do
     echo "### $name"
     # --python-exit-code makes an uncaught exception in the script fail
     # the process; by default Blender only prints it and exits 0.
-    if ! "$BLENDER" -b --factory-startup --python-exit-code 1 --python "$f"; then
+    if ! "$BLENDER" -b --factory-startup "${backend_args[@]}" --python-exit-code 1 --python "$f"; then
         failed+=("$name")
     fi
 done
 
 if [ "$run_ui" = 1 ]; then
-    for name in test_ui_draw.py test_texel_map.py; do
+    for name in test_ui_draw.py test_texel_map.py test_selection_raster.py; do
         echo "### $name (windowed)"
         cmd=("$BLENDER" --factory-startup --python-exit-code 1 --python "$HERE/$name")
         if [ "${XVFB:-0}" = 1 ] || [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then

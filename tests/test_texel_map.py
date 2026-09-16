@@ -1,15 +1,16 @@
 """The texel position map rasterises a mesh into UV space (PS-092).
 
-These need a GPU context. Blender 5.0 added `gpu.init()`, which builds one
+These need a GPU context. Blender 5.2 added `gpu.init()`, which builds one
 in background mode from EGL without a display, so they run in the ordinary
-headless job there. Background 4.2 has no way to get a context at all and
-every test here skips; the 4.2 coverage comes from the windowed job.
+headless job there. Background 4.2 to 5.1 have no way to get a context and
+every test here skips; that coverage comes from the windowed job.
 """
 import os
 import sys
 import time
 
 import bpy
+import gpu
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -90,18 +91,25 @@ def dilate(mask, steps):
 def available():
     if core.gpu_available():
         return True
-    skip("no GPU context in this session; gpu.init() arrived in Blender 5.0")
+    skip("no GPU context in this session; gpu.init() arrived in Blender 5.2")
     return False
 
 
 def test_availability():
     section("whether this session can draw")
     ready = core.gpu_available()
-    expected = not bpy.app.background or bpy.app.version >= (5, 0)
+    expected = not bpy.app.background or hasattr(gpu, 'init')
     check(ready == expected,
           f"gpu_available() is {ready}, expected {expected} on "
           f"{bpy.app.version_string} background={bpy.app.background}")
-    if not ready:
+    if ready:
+        # CI sets this on the Vulkan job: without an ICD Blender falls back
+        # to OpenGL quietly, and the job would pass without Vulkan coverage.
+        expected_backend = os.environ.get("PS_EXPECT_GPU_BACKEND")
+        if expected_backend:
+            check(gpu.platform.backend_type_get() == expected_backend,
+                  f"the GPU backend is {gpu.platform.backend_type_get()}, expected {expected_backend}")
+    else:
         check(texel_map.get_texel_map(cube(), "", (64, 64)) is None,
               "get_texel_map returns None instead of raising when it cannot draw")
 
@@ -309,9 +317,8 @@ def test_cost():
 
 
 def gpu_renderer():
-    import gpu
     try:
-        return gpu.platform.renderer_get()
+        return f"{gpu.platform.backend_type_get()} {gpu.platform.renderer_get()}"
     except SystemError:
         return "unknown"
 

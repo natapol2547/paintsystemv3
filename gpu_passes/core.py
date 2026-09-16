@@ -3,10 +3,15 @@
 Three things differ between the Blender versions the addon supports, and
 are dealt with here rather than in each pass:
 
-- Background Blender starts with no GPU context. 5.0 added `gpu.init()`,
-  which builds one from EGL and needs no display; 4.2 has no equivalent,
-  so passes are unavailable there and callers get None rather than an
-  exception. A windowed session always has a context.
+- Background Blender starts with no GPU context. 4.2 to 5.1 have no way
+  to get one, so passes are unavailable there and callers get None
+  rather than an exception. 5.2 added `gpu.init()`, which builds one from
+  EGL and needs no display. It is documented to raise `SystemError` when
+  it fails, but on 5.2.1 and 5.3 alpha it terminates Blender with a
+  segmentation fault instead when EGL has no usable driver. So
+  `gpu_available()`, which calls it, is only called from a path that is
+  about to draw; `gpu_known()` answers without starting a context. A
+  windowed session always has a context.
 - `GPUFrameBuffer.read_color` reports reversed strides for a
   multi-dimensional `Buffer` on 4.2, so reads go through a
   one-dimensional buffer and numpy does the reshape (PS-096 spike 4).
@@ -36,7 +41,7 @@ def gpu_available() -> bool:
     if not bpy.app.background:
         _available = True
     elif not hasattr(gpu, 'init'):
-        log.info("Background Blender has no GPU context before 5.0; "
+        log.info("Background Blender has no GPU context before 5.2; "
                  "GPU passes are unavailable")
         _available = False
     else:
@@ -48,6 +53,21 @@ def gpu_available() -> bool:
         else:
             _available = True
     return _available
+
+
+def gpu_known() -> bool | None:
+    """`gpu_available()` without starting a context.
+
+    None in a background session of 5.2 or later that has not called
+    `gpu_available()` yet, where the answer needs `gpu.init()`.
+    """
+    if _available is not None:
+        return _available
+    if not bpy.app.background:
+        return True
+    if not hasattr(gpu, 'init'):
+        return False
+    return None
 
 
 def read_color(framebuffer: gpu.types.GPUFrameBuffer, width: int, height: int,
@@ -62,3 +82,9 @@ def read_color(framebuffer: gpu.types.GPUFrameBuffer, width: int, height: int,
     with framebuffer.bind():
         framebuffer.read_color(0, 0, width, height, 4, slot, 'FLOAT', data=buffer)
     return np.frombuffer(buffer, dtype=np.float32).reshape(height, width, 4).copy()
+
+
+def tile_offset(tile: int) -> tuple[float, float]:
+    """The UV-space origin of a UDIM tile number (1001 is the 0..1 square)."""
+    index = tile - 1001
+    return float(index % 10), float(index // 10)
