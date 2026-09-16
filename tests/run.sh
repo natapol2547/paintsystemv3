@@ -5,10 +5,11 @@
 #   tests/run.sh --ui            headless tests plus the windowed ones
 #   tests/run.sh test_compile.py only the named headless test(s)
 #
-# test_ui_draw.py needs a window and is skipped headless.
-# test_texel_map.py and test_selection_raster.py run in both: Blender 5.2's
-# gpu.init() gives a background session a GPU context, but 4.2 to 5.1 have
-# none, so there they only have coverage under --ui.
+# Files in window_only need a window and are skipped headless. --ui runs
+# every file in ui_tests windowed after the headless loop. That list also
+# holds GPU tests that run headless: Blender 5.2's gpu.init() gives a
+# background session a GPU context, but 4.2 to 5.1 have none, so there
+# they only have coverage under --ui.
 #
 # BLENDER  path to the Blender executable (default: local 5.2 LTS install)
 # XVFB=1   force the windowed tests through xvfb-run even when DISPLAY is set
@@ -17,6 +18,20 @@
 #          when unset, Blender picks its default backend
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Need a window: skipped in the headless loop.
+window_only=(
+    test_ui_draw.py
+    test_selection_session_ui.py
+)
+# Run again windowed under --ui: 4.2 to 5.1 have no background GPU context.
+ui_tests=(
+    test_ui_draw.py
+    test_texel_map.py
+    test_selection_raster.py
+    test_selection_session_ui.py
+)
+
 BLENDER="${BLENDER:-/home/tawan/Desktop/Blender Launcher/stable/blender-5.2.1-lts.9e2066aef7ef/blender}"
 backend_args=()
 [ -n "${GPU_BACKEND:-}" ] && backend_args=(--gpu-backend "$GPU_BACKEND")
@@ -36,7 +51,7 @@ fi
 failed=()
 for f in "${files[@]}"; do
     name="$(basename "$f")"
-    [ "$name" = "test_ui_draw.py" ] && continue
+    [[ " ${window_only[*]} " == *" $name "* ]] && continue
     echo "### $name"
     # --python-exit-code makes an uncaught exception in the script fail
     # the process; by default Blender only prints it and exits 0.
@@ -46,7 +61,7 @@ for f in "${files[@]}"; do
 done
 
 if [ "$run_ui" = 1 ]; then
-    for name in test_ui_draw.py test_texel_map.py test_selection_raster.py; do
+    for name in "${ui_tests[@]}"; do
         echo "### $name (windowed)"
         cmd=("$BLENDER" --factory-startup --python-exit-code 1 --python "$HERE/$name")
         if [ "${XVFB:-0}" = 1 ] || [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then

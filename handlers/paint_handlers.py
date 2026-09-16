@@ -5,10 +5,14 @@ material slot does not, but notifies the message bus. Clicking a node in
 the node editor makes it active without any update, message bus
 notification or handler call, but the editor redraws, so a draw callback
 notices and a timer syncs (drawing cannot write data).
+
+Mode and scene switches also notify the message bus; the selection
+session hears about them here (PS-091).
 """
 import bpy
 
 from ..context import get_ps_object, update_active_image
+from ..selection import session as selection_session
 
 
 # Object and material pointers the canvas was last synced for.
@@ -57,11 +61,25 @@ def on_active_material_index(*args):
     sync_selection()
 
 
+def on_object_mode(*args):
+    # The selection session's state records whether texture paint mode is on (PS-091).
+    selection_session.notify()
+
+
+def on_scene_change(*args):
+    # The selection session's state belongs to one scene (PS-091).
+    selection_session.notify()
+
+
 def subscribe() -> None:
     """(Re)subscribe to the message bus, which forgets subscribers on file load."""
     bpy.msgbus.clear_by_owner(_msgbus_owner)
     bpy.msgbus.subscribe_rna(key=(bpy.types.Object, "active_material_index"),
                              owner=_msgbus_owner, args=(), notify=on_active_material_index)
+    bpy.msgbus.subscribe_rna(key=(bpy.types.Object, "mode"),
+                             owner=_msgbus_owner, args=(), notify=on_object_mode)
+    bpy.msgbus.subscribe_rna(key=(bpy.types.Window, "scene"),
+                             owner=_msgbus_owner, args=(), notify=on_scene_change)
 
 
 @bpy.app.handlers.persistent

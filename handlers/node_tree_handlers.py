@@ -7,6 +7,7 @@ from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty
 from ..gpu_passes import texel_map
 from ..nodetree.tree import subscribe_name_changes
 from ..selection import raster as selection_raster
+from ..selection import session as selection_session
 from ..undo import pixels
 
 
@@ -34,12 +35,18 @@ def on_depsgraph_update_post(scene, depsgraph=None):
     # A cached texel map describes the geometry as it was when it was
     # drawn, and stores world positions, so a moved or edited object needs
     # a new one (PS-092).
+    geometry_changed = False
     for update in depsgraph.updates:
         if not (update.is_updated_geometry or update.is_updated_transform):
             continue
         original = getattr(update.id, 'original', None)
         if isinstance(original, bpy.types.Object):
             texel_map.invalidate(original.session_uid)
+            geometry_changed = geometry_changed or update.is_updated_geometry
+    # Renaming or removing a UV map shows up only as a geometry update, and
+    # the live selection samples a layer's UV map by name (PS-091).
+    if geometry_changed:
+        selection_session.notify()
 
 
 @bpy.app.handlers.persistent
@@ -62,6 +69,11 @@ def on_load_post(*args):
     # Masks are keyed by content and would still be right, but nothing in
     # the new file is likely to ask for them; give the memory back.
     selection_raster.invalidate()
+    # The file's selection and active layer arrive together; reconcile
+    # everything derived from them, and try masks that failed before
+    # again (PS-091).
+    selection_session.forget_failures()
+    selection_session.notify(force=True)
     # Runs before Blender records the file's initial undo step, so the
     # compile result is part of it.
     mark_dirty()
@@ -73,6 +85,8 @@ def on_load_post_fail(*args):
     pixels.forget_undo_state()
     texel_map.invalidate()
     selection_raster.invalidate()
+    selection_session.forget_failures()
+    selection_session.notify(force=True)
 
 
 @bpy.app.handlers.persistent
@@ -88,7 +102,10 @@ def on_undo_post(*args):
     texel_map.invalidate()
     # Selection masks stay: they are keyed by a digest of the ops and the
     # size, so the restored ops find their mask, if it is cached, without
-    # a rebuild (PS-091).
+    # a rebuild. Undo restores the ops and Blender's own settings
+    # independently, so the session reconciles everything derived from the
+    # selection even when its state matches (PS-091).
+    selection_session.notify(force=True)
 
 
 @bpy.app.handlers.persistent

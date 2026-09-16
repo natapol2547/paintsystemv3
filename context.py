@@ -126,6 +126,19 @@ def parse_context(context) -> PSContext:
     )
 
 
+def layer_uv_layer(obj, layer) -> bpy.types.MeshUVLoopLayer | None:
+    """The UV map of *obj*'s mesh that *layer*'s image is placed with, or None when it is missing.
+
+    An empty UV map name renders with the active render UV map, so that
+    one is the layer's.
+    """
+    uv_layers = obj.data.uv_layers
+    uv_name = getattr(layer, 'uv_map', '')
+    if uv_name:
+        return uv_layers.get(uv_name)
+    return next((uv for uv in uv_layers if uv.active_render), None)
+
+
 def update_active_image(context) -> None:
     """Point texture painting at the active layer (PS-060).
 
@@ -134,7 +147,14 @@ def update_active_image(context) -> None:
     layer's image is placed with. In texture paint mode the brush keeps
     alpha when the layer locks it. Called whenever the active layer, tree
     or object changes; never by the compiler. Writes only what differs.
+
+    The live selection applies to the active layer, so this also notifies
+    the selection session, whether or not there is a tree (PS-091).
     """
+    # Imported here: the session imports this module. The sync it
+    # schedules runs after this function returns.
+    from .selection import session
+    session.notify()
     ps = parse_context(context)
     if ps.tree is None:
         return
@@ -148,11 +168,7 @@ def update_active_image(context) -> None:
 
     if image is not None and ps.ps_object is not None:
         uv_layers = ps.ps_object.data.uv_layers
-        uv_name = getattr(layer, 'uv_map', '')
-        # An empty UV map name renders with the active render UV map, so
-        # paint through that one too.
-        uv_layer = (uv_layers.get(uv_name) if uv_name
-                    else next((uv for uv in uv_layers if uv.active_render), None))
+        uv_layer = layer_uv_layer(ps.ps_object, layer)
         if uv_layer is not None and uv_layers.active != uv_layer:
             uv_layers.active = uv_layer
 

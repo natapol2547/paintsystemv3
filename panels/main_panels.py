@@ -6,6 +6,7 @@ from .common import get_icon, PaintSystemPanel
 from ..common import icon_kwargs
 from ..compiler.core import artifact_fingerprint
 from ..context import get_active_tree, parse_context
+from ..selection import session as selection_session
 
 
 class PAINTSYSTEM_UL_channels(UIList):
@@ -49,6 +50,25 @@ def _draw_paint_mode_row(layout, context):
     row.operator("paint_system.toggle_paint_mode", text="Toggle Paint Mode",
                  depress=context.mode == 'PAINT_TEXTURE', **icon_kwargs('paintbrush'))
     row.operator("wm.save_mainfile", text="", **icon_kwargs('save'))
+
+
+def _draw_selection_section(layout, context, tree):
+    """Select all, none and invert, and why the selection cannot be used when it cannot."""
+    header, body = layout.panel("paint_system_selection", default_closed=False)
+    row = header.row()
+    row.label(text="Selection", icon='SELECT_SET')
+    state = selection_session.current()
+    problem = state.tree_uid == tree.session_uid and state.selected and bool(state.reason)
+    if problem:
+        row.label(text="", icon='ERROR')
+    if body is None:
+        return
+    row = body.row(align=True)
+    row.operator("paint_system.select_all", text="All").action = 'SELECT'
+    row.operator("paint_system.select_all", text="None").action = 'DESELECT'
+    row.operator("paint_system.select_all", text="Invert").action = 'INVERT'
+    if problem:
+        body.label(text=selection_session.label(state), icon='ERROR')
 
 
 def _draw_compiled_info(layout, tree):
@@ -101,6 +121,8 @@ class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
         layout.label(text="Channels")
         _draw_channel_list(layout, tree)
         draw_paint_sections(layout, context)
+        if context.mode == 'PAINT_TEXTURE':
+            _draw_selection_section(layout, context, tree)
         _draw_compiled_info(layout, tree)
 
 
