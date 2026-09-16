@@ -6,6 +6,7 @@ from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty
                              unblock_compile)
 from ..gpu_passes import texel_map
 from ..nodetree.tree import subscribe_name_changes
+from ..selection import overlay as selection_overlay
 from ..selection import raster as selection_raster
 from ..selection import session as selection_session
 from ..selection import stencil as selection_stencil
@@ -43,6 +44,8 @@ def on_depsgraph_update_post(scene, depsgraph=None):
         original = getattr(update.id, 'original', None)
         if isinstance(original, bpy.types.Object):
             texel_map.invalidate(original.session_uid)
+            if update.is_updated_geometry:
+                selection_overlay.invalidate_object(original.session_uid)
             geometry_changed = geometry_changed or update.is_updated_geometry
     # Renaming or removing a UV map shows up only as a geometry update, and
     # the live selection samples a layer's UV map by name (PS-091).
@@ -73,6 +76,9 @@ def on_load_post(*args):
     # A file saved without `on_save_pre`, as an autosave, can still point
     # the stencil at the previous session's mask file.
     selection_stencil.on_file_loaded()
+    # The overlay's batches and buffers belong to the old file's objects
+    # and regions.
+    selection_overlay.invalidate_all()
     # The file's selection and active layer arrive together; reconcile
     # everything derived from them, and try masks that failed before
     # again (PS-091).
@@ -89,6 +95,7 @@ def on_load_post_fail(*args):
     pixels.forget_undo_state()
     texel_map.invalidate()
     selection_raster.invalidate()
+    selection_overlay.invalidate_all()
     selection_session.forget_failures()
     selection_session.notify(force=True)
 

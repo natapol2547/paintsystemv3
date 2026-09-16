@@ -401,11 +401,48 @@ def test_target_mask():
         cancel_tick()
 
 
+def test_wiring():
+    section("the session and the depsgraph handler reach the overlay")
+    reaches = []
+    sync = overlay.sync
+
+    def counting_sync(state, target):
+        reaches.append(state)
+        sync(state, target)
+
+    overlay.sync = counting_sync
+    try:
+        session.sync(force=True)
+        cancel_tick()
+        check(len(reaches) == 1, f"a forced sync hands the state to the overlay ({len(reaches)} calls)")
+        session.sync()
+        cancel_tick()
+        check(len(reaches) == 1, f"an unchanged sync does not ({len(reaches)} calls)")
+    finally:
+        overlay.sync = sync
+
+    if not available():
+        return
+    obj = cube()
+    overlay._cached_batch(obj, "UVMap", tree(), bpy.context.evaluated_depsgraph_get())
+    check(any(key[0] == obj.session_uid for key in overlay._batches), "the object has a batch")
+    modifier = obj.modifiers.new("PS Overlay Wiring", 'SUBSURF')
+    try:
+        bpy.context.view_layer.update()
+        check(not any(key[0] == obj.session_uid for key in overlay._batches),
+              "a geometry update of the object drops its batch")
+    finally:
+        obj.modifiers.remove(modifier)
+        bpy.context.view_layer.update()
+        cancel_tick()
+
+
 guarded(test_preferences_and_colours)
 guarded(test_shaders)
 guarded(test_two_passes_draw_no_seam)
 guarded(test_mesh_batch)
 guarded(test_target_mask)
+guarded(test_wiring)
 # Free the shaders, batches and masks while the GPU context is still up;
 # freeing them at interpreter shutdown segfaults a background Blender.
 overlay.batch_for_shader = _batch_for_shader

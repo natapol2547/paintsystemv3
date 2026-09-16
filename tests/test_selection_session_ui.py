@@ -25,6 +25,7 @@ if bpy.app.background:
 register_addon()
 session = import_from("selection.session")
 raster = import_from("selection.raster")
+overlay = import_from("selection.overlay")
 main_panels = import_from("panels.main_panels")
 
 draw_errors = []
@@ -132,10 +133,15 @@ def steps():
           f"the tick rebuilt at the other layer's size ({session.current().size})")
 
     section("a script edit without notify is caught up by the next notify")
+    # The overlay's draw notices a mask built for other ops and notifies;
+    # keep the 3D view from drawing it so only Blender's own events count.
+    overlay.DEFAULTS["show_selection_3d"] = False
+    yield 0.3
     before_digest = session.current().digest
     tree().selection.add_op('BOX', points=[(0.2, 0.2), (0.6, 0.6)], feather=4.0)
     yield 0.5
     check(session.current().digest == before_digest, "nothing in Blender reports the edit on its own")
+    overlay.DEFAULTS["show_selection_3d"] = True
     session.notify()
     yield from wait_for(lambda: session.current().digest != before_digest)
     check(session.current().digest != before_digest and session.current().active, "notify syncs it")
