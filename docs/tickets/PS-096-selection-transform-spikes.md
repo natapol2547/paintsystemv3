@@ -169,8 +169,11 @@ its own and the splash screen covers the viewport at startup.
 - One undo step per drag: `Gizmo.use_undo` (5.2 only) pushed a memfile
   step per drag and each Ctrl+Z restored the exact previous matrix. 4.2
   has no `use_undo`; calling `ed.undo_push` from a timer registered when
-  `is_modal` turns false in `draw_prepare` pushed one step per drag in
-  both editors.
+  `is_modal` turns false in `draw_prepare` gives the same result: one
+  step per drag in both editors, each Ctrl+Z restoring the exact
+  previous matrix and each redo the next, with the other editor's matrix
+  untouched (checked in object mode; in texture paint mode 4.2 would
+  push an empty image step, see the pixel undo findings).
 - Failures, in both editors: the cage's modal ignores the Ctrl and Shift
   tweak flags (no snapping, no aspect lock); rotation never triggered in
   the 3D view and only once in the image editor; corner handles in the
