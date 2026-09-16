@@ -2,6 +2,24 @@
 
 Epic J. Size L. Milestone M3b.
 
+## Status
+
+Built in slices, since the four halves of this ticket are independent.
+
+1. **The document model. Done.** `props/selection.py` and
+   `tests/test_selection_model.py`; `PaintSystemNodeTree.selection` holds
+   it. 33 checks on 5.2.1 and 4.2.23. Outlines turned out to want an ID
+   property rather than a collection of typed point groups: a lasso
+   carries hundreds of points and memfile undo copies every step, so a
+   PropertyGroup per point would be copied on every push. `mask_hash` on
+   the selection is written by slice 2 and has no reader before then.
+2. **Rasterisation** (`selection/raster.py`). Next. Box, ellipse and all
+   are analytic distance fields and can carry feather and anti-alias on
+   their own; lasso needs a winding-number fill and, for feather, the
+   jump flood PS-092 did not need.
+3. **Clipping native strokes** through the brush stencil.
+4. **Overlays**: the wash and the marching ants, in both editors.
+
 ## Goal
 
 A soft selection on the active layer's image that limits scripted image
