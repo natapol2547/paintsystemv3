@@ -54,7 +54,8 @@ class PAINTSYSTEM_OT_select_all(Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.properties['action'].enum_items[properties.action].description
+        # The operator's own properties live on `properties`, not on `cls.bl_rna`.
+        return properties.bl_rna.properties['action'].enum_items[properties.action].description
 
     @classmethod
     def poll(cls, context):

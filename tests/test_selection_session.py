@@ -281,6 +281,14 @@ def test_select_all_operator():
     run(bpy.ops.paint_system.select_all, action='SELECT')
     run(bpy.ops.paint_system.select_all, action='INVERT')
     check(t.selection.is_empty, "inverting all leaves no selection, not one that blocks all painting")
+    properties = bpy.context.window_manager.operator_properties_last("paint_system.select_all")
+    descriptions = {}
+    for action in ('SELECT', 'DESELECT', 'INVERT'):
+        properties.action = action
+        descriptions[action] = selection_ops.PAINTSYSTEM_OT_select_all.description(bpy.context, properties)
+    check(descriptions == {'SELECT': "Select the whole layer", 'DESELECT': "Clear the selection",
+                           'INVERT': "Invert the selection"},
+          f"the tooltip describes the chosen action {descriptions}")
     cancel_tick()
 
 
