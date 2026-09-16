@@ -130,15 +130,16 @@ jobs:
             # finds no driver and PS_EXPECT_GPU_BACKEND fails the step.
             icds=(/usr/share/vulkan/icd.d/lvp_icd*.json)
             export VK_ICD_FILENAMES="${icds[0]}"
-            paint_system/tests/run.sh test_selection_raster.py test_texel_map.py
+            paint_system/tests/run.sh test_selection_raster.py test_texel_map.py \
+              test_selection_session.py test_selection_stencil.py test_selection_overlay.py
           else
             echo "Blender $SERIES has no background GPU context; skipping"
           fi
 
       # Runs the windowed tests only: the named file is skipped by the
-      # headless loop, and --ui runs every windowed test. test_texel_map.py
-      # and test_selection_raster.py are in there because 4.2 to 5.1 have
-      # no GPU context in background mode.
+      # headless loop, and --ui runs every file in ui_tests in run.sh. The
+      # GPU tests are in that list because 4.2 to 5.1 have no GPU context
+      # in background mode.
       - name: Windowed tests (Xvfb)
         env:
           BLENDER: ${{ env.BLENDER_DIR }}/blender
@@ -158,6 +159,7 @@ jobs:
           import bpy
           bpy.ops.preferences.addon_enable(module='bl_ext.user_default.paint_system')
           assert 'bl_ext.user_default.paint_system' in bpy.context.preferences.addons, 'extension did not enable'
+          assert bpy.context.preferences.addons['bl_ext.user_default.paint_system'].preferences is not None, 'add-on preferences did not attach'
           print('extension enabled from package')
           "
 
