@@ -1,5 +1,5 @@
 from bpy.types import AddonPreferences
-from bpy.props import BoolProperty, FloatProperty, EnumProperty
+from bpy.props import BoolProperty, FloatProperty, FloatVectorProperty, EnumProperty
 from bpy.utils import register_classes_factory
 
 from .common import ADDON_ID
@@ -104,6 +104,49 @@ class PaintSystemPreferences(AddonPreferences):
         default=True
     )
 
+    # Selection overlay (PS-091). Colours are display values; the overlay
+    # converts them to linear before drawing.
+    show_selection_3d: BoolProperty(
+        name="Show Selection in 3D View",
+        description="Draw the selection over the painted object in Texture Paint mode",
+        default=True
+    )
+    selection_wash_color: FloatVectorProperty(
+        name="Selection Tint",
+        description="Color laid over the selected part of the layer",
+        subtype='COLOR_GAMMA',
+        size=3,
+        min=0.0,
+        max=1.0,
+        default=(0.25, 0.55, 1.0)
+    )
+    selection_wash_opacity: FloatProperty(
+        name="Tint Opacity",
+        description="How strongly the tint covers the selected part of the layer",
+        subtype='FACTOR',
+        min=0.0,
+        max=1.0,
+        default=0.2
+    )
+    selection_ant_color_a: FloatVectorProperty(
+        name="Outline Dash Color",
+        description="Color of the dashes in the selection outline",
+        subtype='COLOR_GAMMA',
+        size=3,
+        min=0.0,
+        max=1.0,
+        default=(0.0, 0.0, 0.0)
+    )
+    selection_ant_color_b: FloatVectorProperty(
+        name="Outline Gap Color",
+        description="Color between the dashes in the selection outline",
+        subtype='COLOR_GAMMA',
+        size=3,
+        min=0.0,
+        max=1.0,
+        default=(1.0, 1.0, 1.0)
+    )
+
     def draw(self, context):
         layout = self.layout
 
@@ -117,6 +160,15 @@ class PaintSystemPreferences(AddonPreferences):
         dev_box = layout.box()
         dev_box.label(text="Advanced", icon='PREFERENCES')
         dev_box.prop(self, "developer_mode", text="Developer Mode")
+
+        selection_box = layout.box()
+        selection_box.label(text="Selection", icon='SELECT_SET')
+        selection_box.use_property_split = True
+        selection_box.prop(self, "show_selection_3d")
+        selection_box.prop(self, "selection_wash_color")
+        selection_box.prop(self, "selection_wash_opacity")
+        selection_box.prop(self, "selection_ant_color_a")
+        selection_box.prop(self, "selection_ant_color_b")
 
         # --- Color popover ---
         popover_box = layout.box()

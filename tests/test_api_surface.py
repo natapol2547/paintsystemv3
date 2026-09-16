@@ -240,6 +240,10 @@ SURFACE = [
     attr("gpu_extras.batch.batch_for_shader"),
     attr("bpy_extras.view3d_utils.location_3d_to_region_2d"),
     attr("mathutils.bvhtree.BVHTree.FromObject"),
+    # The selection overlay's polygon offset (PS-091).
+    rna_prop("RegionView3D", "window_matrix"),
+    rna_prop("RegionView3D", "view_distance"),
+    rna_prop("RegionView3D", "view_perspective"),
 ]
 
 
