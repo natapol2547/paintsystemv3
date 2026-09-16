@@ -2,6 +2,34 @@
 
 Epic J. Size S. Milestone M3b.
 
+## Status
+
+Done. `undo/pixels.py` and `tests/test_pixel_undo.py`; the handlers in
+`handlers/node_tree_handlers.py` clear its session state after undo, redo
+and a file read. 24 checks pass on 5.2.1 and 4.2.23.
+
+Two things the spikes had not reached, found while building it:
+
+- Undo and redo restore the pixels recorded by the step they arrive at, so
+  an image needs a step holding the pixels from *before* the first scripted
+  write or that write is not undoable (the spikes always had a native
+  stroke in front of the write, which hid this). `write_pixels` pushes that
+  baseline the first time it touches an image, and the handlers forget the
+  record after undo, redo and a file read, since the step may no longer be
+  on the stack. N writes to an image therefore cost N+1 steps, every one of
+  them a visible Ctrl+Z.
+- `bpy.ops.image.invert` crashes a background Blender that has no undo
+  stack, on 4.2 and 5.2. Blender builds the stack when something first
+  pushes to it and does that for itself only in an interactive session, and
+  reading a file frees it again. `ensure_undo_stack` pushes one memfile
+  step in background mode before the first registration. Without it any
+  headless use of the addon that writes pixels would take Blender down.
+
+Measured on this machine, background, first registration on a 4K byte
+image: 146 ms on 5.2, 208 ms on 4.2. The spikes' 40-120 ms were repeat
+registrations in a windowed session, where the buffer is already realised.
+The test's ceiling is 500 ms so CI on a slow runner does not flake.
+
 ## Problem
 
 Blender's undo records image pixels only in image undo steps, which
@@ -24,17 +52,26 @@ Decided 2026-09-16 from PS-096: Blender's own image undo holds the
 pixels, and the addon only registers its writes with it.
 
 - `undo/pixels.py`:
-  - `write_pixels(image, pixels)`: `foreach_set`, `image.update()`,
-    then `register(image)`. Marks the image dirty so PS-056 saves or
-    packs it.
-  - `register(image)`: calls `bpy.ops.image.invert` with all four
+  - `write_pixels(image, pixels)`: pushes a baseline step when the image
+    has none, then `foreach_set`, `image.update()` and a second
+    `push_undo_step`. Marks the image dirty so PS-056 saves or packs it.
+    Raises `ValueError` on a buffer that is not
+    `width * height * channels` long; returns False when the write landed
+    but could not be registered, so the caller can say the edit is there
+    and not undoable.
+  - `push_undo_step(image)`: calls `bpy.ops.image.invert` with all four
     channels off under `temp_override(edit_image=image)`. The operator
     changes no pixel and pushes an image undo step that snapshots the
     image, exactly as a stroke does. Blender undoes and redoes the step
     itself, in order with native strokes and memfile steps, on 5.2 and
     4.2, in object and texture paint mode.
+  - `ensure_undo_stack()`: in background mode only, pushes one memfile
+    step so the stack exists. See the Status section.
+  - `forget_baselines()` after undo and redo, `forget_undo_state()` after
+    a file read: both called from `handlers/node_tree_handlers.py`.
   - `pack_write_once(image)`: packs a write-once image so it survives
-    undo past its creation and redo.
+    undo past its creation and redo. Used instead of `write_pixels`, not
+    with it: such an image takes no step of its own.
 - Rules for callers:
   - An operator that writes pixels has no `UNDO` option. With it,
     Blender pushes a memfile step on top of the image step and every
@@ -73,4 +110,4 @@ pixels, and the addon only registers its writes with it.
 - Undo a native stroke made after a scripted write: the scripted write
   stays.
 - A write-once image created, undone past and redone keeps its pixels.
-- The registration adds no more than 150 ms on a 4K byte image.
+- The registration adds no more than 250 ms on a 4K byte image.

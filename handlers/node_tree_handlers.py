@@ -5,6 +5,7 @@ from ..compiler.bake import PS_IMAGE_KEY
 from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty, ps_trees,
                              unblock_compile)
 from ..nodetree.tree import subscribe_name_changes
+from ..undo import pixels
 
 
 def paint_system_images() -> set[bpy.types.Image]:
@@ -40,6 +41,9 @@ def on_load_post(*args):
     unblock_compile()
     subscribe_name_changes()
     cleanup_orphan_artifacts()
+    # Reading a file frees the undo stack and everything the addon pushed
+    # onto it (PS-090).
+    pixels.forget_undo_state()
     # Runs before Blender records the file's initial undo step, so the
     # compile result is part of it.
     mark_dirty()
@@ -48,6 +52,7 @@ def on_load_post(*args):
 @bpy.app.handlers.persistent
 def on_load_post_fail(*args):
     unblock_compile()
+    pixels.forget_undo_state()
 
 
 @bpy.app.handlers.persistent
@@ -56,6 +61,8 @@ def on_undo_post(*args):
     # a fingerprint check per tree. It repairs files from before that held.
     unblock_compile()
     mark_dirty()
+    # The steps the addon pushed may no longer be on the stack (PS-090).
+    pixels.forget_baselines()
 
 
 @bpy.app.handlers.persistent
