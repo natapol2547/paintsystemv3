@@ -220,13 +220,12 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
 
 
 class PaintSystemSelection(bpy.types.PropertyGroup):
-    """The selection on one layer image, as the ops that built it."""
+    """The selection of a tree, as the ops that built it.
 
-    image: PointerProperty(
-        name="Image",
-        description="The layer image this selection applies to",
-        type=bpy.types.Image,
-    )
+    It applies to the tree's active layer, whichever that is, and its mask
+    is built at the size of that layer's image (`selection/session.py`).
+    """
+
     ops: CollectionProperty(type=PaintSystemSelectionOp)
 
     feather: FloatProperty(
@@ -273,6 +272,17 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
 
     def clear(self) -> None:
         self.ops.clear()
+
+    def invert(self) -> None:
+        """Invert the selection: drop a trailing `INVERT`, else append one.
+
+        Inverting twice gives back the ops, and so the digest and the cached
+        mask, that the first inversion started from.
+        """
+        if len(self.ops) and self.ops[-1].kind == 'INVERT':
+            self.ops.remove(len(self.ops) - 1)
+        else:
+            self.add_op('INVERT')
 
     def chain_start(self) -> int:
         """Index of the last op that replaces everything before it, or 0.

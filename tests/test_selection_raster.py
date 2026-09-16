@@ -52,7 +52,6 @@ def tree(name=TREE):
 def fresh_selection(name=TREE):
     got = tree(name).selection
     got.clear()
-    got.image = None
     return got
 
 
@@ -594,13 +593,12 @@ def test_udim_tiles():
 
     image = bpy.data.images.new("PS Selection Tiles", 64, 32, tiled=True)
     image.tiles.new(tile_number=1002)
-    sel.image = image
-    sizes = [raster.mask_size(sel, tile=number) for number in (1001, 1002, 1005)]
+    sizes = [raster.image_size(image, tile=number) for number in (1001, 1002, 1005)]
     check(sizes == [(64, 32), (0, 0), (0, 0)],
           f"the size is the tile's, and (0, 0) for an empty or missing tile {sizes}")
-    check(raster.availability(sel, tile=1002) == "The selection has no image with pixels to take its size from",
+    check(raster.availability(sel, raster.image_size(image, 1002), tile=1002)
+          == "The selection has no image with pixels to take its size from",
           "an empty tile reports NO_SIZE")
-    sel.image = None
     bpy.data.images.remove(image)
 
 
@@ -821,24 +819,24 @@ def test_problems():
 
     sel = fresh_selection()
     sel.add_op('ALL')
-    for label, size, reason in (("no image and no size", None, 'NO_SIZE'),
+    for label, size, reason in (("0x0", (0, 0), 'NO_SIZE'),
                                 ("9000x9000", (9000, 9000), 'TOO_LARGE')):
         try:
             raster.get_mask(sel, size=size)
             check(False, f"{label} raises {reason}")
         except raster.MaskUnavailable as error:
-            check(error.reason == reason, f"{label} raises {reason} ({error.reason})")
+            check(error.reason == reason and str(error) == raster.MESSAGES[reason],
+                  f"{label} raises {reason} with the public message ({error.reason})")
     missing = bpy.data.images.new("PS Selection Missing", 4, 4)
     missing.source = 'FILE'
     missing.filepath = "//no_such_selection_image.png"
-    sel.image = missing
-    check(tuple(missing.size) == (0, 0) and raster.availability(sel)
+    check(raster.image_size(missing) == (0, 0) and raster.availability(sel, raster.image_size(missing))
           == "The selection has no image with pixels to take its size from",
           f"an image whose file is missing reports NO_SIZE {tuple(missing.size)}")
     generated = bpy.data.images.new("PS Selection Generated", 300, 200)
-    sel.image = generated
-    check(raster.get_mask(sel).size == (300, 200), "without a size the image's size is used")
-    sel.image = None
+    check(raster.image_size(generated) == (300, 200)
+          and raster.get_mask(sel, raster.image_size(generated)).size == (300, 200),
+          "a mask built at the image's size has that size")
     bpy.data.images.remove(missing)
     bpy.data.images.remove(generated)
 

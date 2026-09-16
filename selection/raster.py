@@ -107,7 +107,7 @@ _UNSUPPORTED_KIND_MESSAGES = {
     'RASTER': "Selections with a raster operation cannot be built yet",
     'TRANSFORM': "Selections with a transform operation cannot be built yet",
 }
-_MESSAGES = {
+MESSAGES = {
     'NO_GPU': "This Blender session has no GPU context, so the selection cannot be built",
     'NO_SIZE': "The selection has no image with pixels to take its size from",
     'TOO_LARGE': "The image is too large for a selection mask",
@@ -664,7 +664,7 @@ def _run_chain(specs, source, targets, width: int, height: int, tile: int) -> No
         # a traceback keeps every frame's locals alive, and a held
         # exception would otherwise keep the textures past `release()`.
         source = target = targets = None
-        raise MaskUnavailable('TOO_COMPLEX', _MESSAGES['TOO_COMPLEX'], failed_step)
+        raise MaskUnavailable('TOO_COMPLEX', MESSAGES['TOO_COMPLEX'], failed_step)
 
 
 # ── Self-test ────────────────────────────────────────────────────────
@@ -814,7 +814,7 @@ def render(specs, width: int, height: int, tile: int = 1001) -> np.ndarray:
     """
     problem = _target_problem(width, height)
     if problem is not None:
-        raise MaskUnavailable(problem, _MESSAGES[problem])
+        raise MaskUnavailable(problem, MESSAGES[problem])
     for index, spec in enumerate(specs):
         if spec.kind not in SUPPORTED_KINDS:
             message = _UNSUPPORTED_KIND_MESSAGES.get(spec.kind, "This selection operation cannot be built")
@@ -839,24 +839,24 @@ _warned: set = set()
 _stats = dict(builds=0, passes=0, hits=0, allocations=0, evictions=0)
 
 
-def mask_size(selection, size: tuple[int, int] | None = None, tile: int = 1001) -> tuple[int, int]:
-    """The size a mask of *selection* is built at: *size*, else the image's.
+def image_size(image, tile: int = 1001) -> tuple[int, int]:
+    """The size a mask for *image* is built at: the image's, or tile *tile*'s.
 
     For a tiled image that is the size of tile *tile*, which is (0, 0)
     when the image has no such tile or the tile has no pixels. A missing
     image file also reports (0, 0).
     """
-    if size is not None:
-        return int(size[0]), int(size[1])
-    image = selection.image
-    if image is None:
-        return 0, 0
     if image.source == 'TILED':
         for image_tile in image.tiles:
             if image_tile.number == tile:
                 return int(image_tile.size[0]), int(image_tile.size[1])
         return 0, 0
     return int(image.size[0]), int(image.size[1])
+
+
+def mask_size(size: tuple[int, int]) -> tuple[int, int]:
+    """*size* as a pair of ints, which is what the digest and the textures take."""
+    return int(size[0]), int(size[1])
 
 
 def _target_problem(width: int, height: int, probe: bool = True) -> str | None:
@@ -885,20 +885,20 @@ def _problem(selection, width: int, height: int, probe: bool = True) -> tuple[st
     """
     reason = _target_problem(width, height, probe)
     if reason is not None:
-        return reason, _MESSAGES[reason], -1
+        return reason, MESSAGES[reason], -1
     ops = selection.ops
     for index in range(selection.chain_start(), len(ops)):
         op = ops[index]
         if op.kind not in SUPPORTED_KINDS:
             return 'UNSUPPORTED', _UNSUPPORTED_KIND_MESSAGES[op.kind], index
         if op.space == 'VIEW' and op.kind not in SPACELESS_KINDS:
-            return 'UNSUPPORTED', _MESSAGES['VIEW'], index
+            return 'UNSUPPORTED', MESSAGES['VIEW'], index
         if op.kind not in OUTLINELESS_KINDS:
             raw = op.get(POINTS_KEY)
             if raw is not None and points_view(raw) is None:
-                return 'UNSUPPORTED', _MESSAGES['POINTS'], index
+                return 'UNSUPPORTED', MESSAGES['POINTS'], index
     if _self_test_result is False:
-        return 'SELF_TEST', _MESSAGES['SELF_TEST'], -1
+        return 'SELF_TEST', MESSAGES['SELF_TEST'], -1
     return None
 
 
@@ -913,7 +913,7 @@ def _raise(problem: tuple[str, str, int], key: bytes):
     raise MaskUnavailable(reason, message, index)
 
 
-def availability(selection, size: tuple[int, int] | None = None, tile: int = 1001) -> str:
+def availability(selection, size: tuple[int, int], tile: int = 1001) -> str:
     """Empty when `get_mask` can build *selection*, else the reason as a UI message.
 
     An empty selection is available. Cheap enough for a `poll` or a draw
@@ -924,7 +924,7 @@ def availability(selection, size: tuple[int, int] | None = None, tile: int = 100
     """
     if not len(selection.ops):
         return ""
-    width, height = mask_size(selection, size, tile)
+    width, height = mask_size(size)
     problem = _problem(selection, width, height, probe=False)
     return problem[1] if problem is not None else ""
 
@@ -978,7 +978,7 @@ def _return_to_pool(targets, width: int, height: int) -> None:
             _pool.append(((width, height), texture))
 
 
-def peek_mask(selection, size: tuple[int, int] | None = None, tile: int = 1001) -> SelectionMask | None:
+def peek_mask(selection, size: tuple[int, int], tile: int = 1001) -> SelectionMask | None:
     """The cached mask of *selection*, or None. Never builds and never raises.
 
     For draw callbacks, which must not run passes: they show what is
@@ -986,7 +986,7 @@ def peek_mask(selection, size: tuple[int, int] | None = None, tile: int = 1001) 
     """
     if not len(selection.ops):
         return None
-    width, height = mask_size(selection, size, tile)
+    width, height = mask_size(size)
     if width <= 0 or height <= 0:
         return None
     key = selection.prefix_digests(width, height, tile)[-1]
@@ -995,10 +995,10 @@ def peek_mask(selection, size: tuple[int, int] | None = None, tile: int = 1001) 
     return _touch(key)
 
 
-def get_mask(selection, size: tuple[int, int] | None = None, tile: int = 1001) -> SelectionMask | None:
+def get_mask(selection, size: tuple[int, int], tile: int = 1001) -> SelectionMask | None:
     """The mask of *selection*, built or taken from the cache.
 
-    *size* overrides the size of `selection.image`; *tile* picks the UDIM
+    *size* is the target image's (`image_size`); *tile* picks the UDIM
     tile, whose UV square maps onto the mask. Returns None for an empty
     selection and raises `MaskUnavailable` when the mask cannot be built;
     the first failure for a given selection state is logged as a warning.
@@ -1011,7 +1011,7 @@ def get_mask(selection, size: tuple[int, int] | None = None, tile: int = 1001) -
     ops = selection.ops
     if not len(ops):
         return None
-    width, height = mask_size(selection, size, tile)
+    width, height = mask_size(size)
     problem = _problem(selection, width, height)
     if problem is not None:
         _raise(problem, selection.prefix_digests(max(width, 0), max(height, 0), tile)[-1])
@@ -1022,9 +1022,9 @@ def get_mask(selection, size: tuple[int, int] | None = None, tile: int = 1001) -
         return _touch(digests[last])
     passed = self_test()
     if passed is None:
-        _raise(('GPU_ERROR', _MESSAGES['GPU_ERROR'], -1), digests[last])
+        _raise(('GPU_ERROR', MESSAGES['GPU_ERROR'], -1), digests[last])
     if not passed:
-        _raise(('SELF_TEST', _MESSAGES['SELF_TEST'], -1), digests[last])
+        _raise(('SELF_TEST', MESSAGES['SELF_TEST'], -1), digests[last])
 
     start = selection.chain_start()
     source_index = None
@@ -1051,7 +1051,7 @@ def get_mask(selection, size: tuple[int, int] | None = None, tile: int = 1001) -
         # gpu.types raises RuntimeError when no GPU context is active or an
         # allocation fails; a later build may succeed.
         log.debug("Selection mask build failed: %s", str(error))
-        failure = ('GPU_ERROR', _MESSAGES['GPU_ERROR'], -1)
+        failure = ('GPU_ERROR', MESSAGES['GPU_ERROR'], -1)
     if failure is not None:
         _return_to_pool(targets, width, height)
         # See `_run_chain`: nothing the traceback keeps may hold a texture.

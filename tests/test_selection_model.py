@@ -61,6 +61,29 @@ def test_ops_are_ordered_and_replace_truncates():
         sel.ops.remove(1)
 
 
+def test_invert_toggles():
+    section("invert toggles a trailing INVERT")
+    sel = fresh_selection()
+    sel.add_op('BOX', 'REPLACE', points=[(0.1, 0.1), (0.5, 0.5)])
+    before = sel.prefix_digests(64, 64, 1001)[-1]
+    sel.invert()
+    check([op.kind for op in sel.ops] == ['BOX', 'INVERT'] and sel.ops[-1].mode == 'ADD',
+          f"the first invert appends INVERT {[op.kind for op in sel.ops]}")
+    check(sel.prefix_digests(64, 64, 1001)[-1] != before, "and changes the digest")
+    sel.invert()
+    check([op.kind for op in sel.ops] == ['BOX'], f"the second removes it {[op.kind for op in sel.ops]}")
+    check(sel.prefix_digests(64, 64, 1001)[-1] == before, "and the digest is the original again")
+    sel.clear()
+    sel.invert()
+    check([op.kind for op in sel.ops] == ['INVERT'], "inverting an empty selection appends INVERT")
+
+
+def test_selection_has_no_image():
+    section("the selection applies to the active layer, not a stored image")
+    check('image' not in selection_props.PaintSystemSelection.bl_rna.properties,
+          "PaintSystemSelection has no image property")
+
+
 def test_points_round_trip():
     section("outlines round-trip through the ID property")
     sel = fresh_selection()
@@ -319,6 +342,8 @@ def test_save_and_reload_keeps_the_ops():
 
 
 for test in (test_ops_are_ordered_and_replace_truncates,
+             test_invert_toggles,
+             test_selection_has_no_image,
              test_points_round_trip,
              test_defaults_come_from_the_selection,
              test_hash_tracks_what_the_mask_depends_on,
