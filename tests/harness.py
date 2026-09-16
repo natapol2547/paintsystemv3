@@ -72,6 +72,13 @@ def section(title):
     print(f"\n== {title}")
 
 
+def skip(msg):
+    """Note that a test could not run here. Counts as neither a check nor a
+    failure, so a test that needs a capability this Blender lacks - a GPU
+    context in background mode, say - does not fail the run."""
+    print(f"  [skip] {msg}")
+
+
 def guarded(fn):
     """Run ``fn`` and record an exception as a failure instead of aborting."""
     try:

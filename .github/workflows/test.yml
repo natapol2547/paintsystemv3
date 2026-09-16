@@ -110,7 +110,10 @@ jobs:
           BLENDER: ${{ env.BLENDER_DIR }}/blender
         run: paint_system/tests/run.sh
 
-      - name: UI draw test (Xvfb)
+      # Runs the windowed tests only: the named file is skipped by the
+      # headless loop, and --ui runs every windowed test. test_texel_map.py
+      # is in there because 4.2 has no GPU context in background mode.
+      - name: Windowed tests (Xvfb)
         env:
           BLENDER: ${{ env.BLENDER_DIR }}/blender
           XVFB: '1'

@@ -16,14 +16,19 @@ Slow at 4K and unusable at 8K.
 Filters run on the GPU with the `gpu` module and modify the layer's
 image in place, with undo.
 
+- `gpu_passes/core.py` already exists (PS-092) and owns the parts that
+  are not about filtering: `gpu_available()`, which probes the context
+  once and runs `gpu.init()` in a 5.x background session, and
+  `read_color()`, which reads a framebuffer slot back through a
+  one-dimensional `Buffer` passed as `read_color(..., data=buf)` because
+  a multi-dimensional buffer reports reversed strides on 4.2 (PS-096
+  spike 4). Build on it rather than repeating it.
 - `filters/gpu.py`:
   - `ImageTarget(image, tile)`: uploads a tile with
     `gpu.texture.from_image` (or `GPUTexture` from `pixels` for float
-    buffers), owns a ping-pong pair of `GPUOffScreen` at tile size,
-    `read_back()` copies the result into `image.pixels` through a
-    preallocated one-dimensional `Buffer` passed to `read_color(...,
-    data=buf)` (multi-dimensional buffers report reversed strides on 4.2,
-    PS-096 spike 4) + `foreach_set`, and calls `image.update()`.
+    buffers), owns a ping-pong pair of `GPUOffScreen` at tile size, and
+    `read_back()` copies `core.read_color` into `image.pixels` with
+    `foreach_set` and calls `image.update()`.
   - `run_pass(shader, target, uniforms, inputs)`: full-screen quad
     through a `GPUShader` built from a shared vertex shader and the
     filter's fragment source, using `gpu.shader.create_from_info` so it
@@ -45,9 +50,11 @@ image in place, with undo.
 - Alpha handling is a shared convention: filters operate on
   premultiplied colour and unpremultiply on output, as v2's
   `_gaussian_blur_alpha_safe` did, so edges never bleed black.
-- Headless tests use `gpu` in background mode, which Blender 5.x
-  supports with `--factory-startup -b` when a GPU context is available;
-  provide a CPU reference implementation for CI without a GPU.
+- Headless tests use `gpu` in background mode, which works from Blender
+  5.0 through `gpu.init()` and needs no display (PS-092). 4.2 has no
+  background GPU context, so its coverage comes from the windowed job:
+  `tests/run.sh --ui`. A test that cannot draw calls `harness.skip`
+  rather than failing, so no CPU reference implementation is needed.
 
 ## Acceptance
 

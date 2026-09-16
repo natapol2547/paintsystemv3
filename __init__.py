@@ -19,6 +19,7 @@ submodules = (
     "props",
     "context",
     "compiler",
+    "gpu_passes",
     "nodes",
     "nodetree",
     "ops",
