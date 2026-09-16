@@ -16,8 +16,9 @@ Epic D. Size S. Milestone M2.
 
 ## v3 design
 
-`preferences.py` in v3 already declares these properties (plus update
-checking). Remaining work:
+`preferences.py` in v3 already declares these properties, with the four
+`*_rmb` ones renamed `*_popover` (PS-036 replaced the right-click
+popover with a button and a floating HUD). Remaining work:
 
 - Port the draw layout from v2, dropping `use_legacy_ui`.
 - `panels/common.py::scale_content` helper honouring `use_compact_design`.

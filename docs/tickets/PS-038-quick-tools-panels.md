@@ -13,7 +13,9 @@ Epic D. Size S. Milestone M2.
   / `flip_normals` (`utils_operators.py:216-260`), non-uniform scale alert
   box with Apply Transform, Set Origin.
 - Paint (`:120`, poll `obj.mode == 'TEXTURE_PAINT'`): "Edit Externally"
-  (PS-054), `add_preset_brushes` (`utils_operators.py:60`).
+  and `add_preset_brushes` (`utils_operators.py:60`). Only the preset
+  brushes are ported; "Edit Externally" goes with the external-editor
+  round trip PS-054 drops.
 
 ## v3 design
 

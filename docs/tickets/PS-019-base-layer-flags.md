@@ -11,23 +11,24 @@ toggle, opacity and blend on the node, opacity and blend in the Layers
 panel box, and the layer's source settings. The layer list shows a lock icon; its visibility toggle
 stays usable on a locked layer, as in v2.
 `is_folder` is a class attribute. PS-060 (slice 6) clears the canvas for
-a locked layer and drives the brush's `use_alpha` from `lock_alpha`; `external_image`,
-`edit_external_mode`, `modifies_color_data` and the warnings API are
-open. `is_clip` came with PS-013.
+a locked layer and drives the brush's `use_alpha` from `lock_alpha`;
+`modifies_color_data` and the warnings API are open. `is_clip` came with
+PS-013.
 
 ## v2 behaviour
 
 `Layer` (`data.py:1240-1290`): `lock_layer` (row icon VIEW_LOCKED, layer
 settings disabled, paint canvas cleared), `lock_alpha` (brush
-`use_alpha`), `is_expanded` (folders), `external_image` (quick edit),
-`edit_external_mode`. `get_layer_warnings()` feeds the warning icon in the
+`use_alpha`), `is_expanded` (folders), and `external_image` /
+`edit_external_mode` for the external-editor round trip that v3 drops
+(PS-054). `get_layer_warnings()` feeds the warning icon in the
 list and the wrapped warnings box under it (`layers_panels.py:101-103,
 659-669`; `show_layer_warnings` operator `layers_operators.py:1014`).
 
 ## v3 design
 
-- Add to `PaintSystemLayerNode`: `lock_layer`, `lock_alpha`,
-  `external_image`, `edit_external_mode`. `lock_*` updates call
+- Add to `PaintSystemLayerNode`: `lock_layer`, `lock_alpha`. `lock_*`
+  updates call
   `update_active_image` (PS-060) rather than `mark_tree_dirty`, since they
   do not affect the graph.
 - `is_expanded` lives on the folder node only (PS-010).

@@ -167,7 +167,6 @@ SURFACE = [
     rna_func("ID", "update_tag"),
     op("image.save_all_modified"),
     op("image.save_as"),
-    op("image.external_edit"),
     op("image.tile_add"),
     op("image.invert"),
 

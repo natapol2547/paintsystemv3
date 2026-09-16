@@ -51,7 +51,7 @@ image after load.
 
 - `common/image.py::save_image(image)` with the v2 rules.
 - `on_save_pre` collects images referenced by any Paint System node
-  (`image`, `cache_image`, mask images, `external_image`) and channel bake
+  (`image`, `cache_image`, mask images) and channel bake
   images, not only managed ones, so imported images on disk are saved too.
 - `on_load_post` reloads the active layer image (v2 `refresh_image`).
 

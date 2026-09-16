@@ -24,7 +24,8 @@ colour state. Versioning history in `paintsystem/versioning.py` and
 2. For each channel walk `flatten_hierarchy` bottom-up and create nodes by
    `LAYER_TYPE_ENUM` -> registry `ps_type` (PS-029), copying properties by
    name, images by pointer, coord props into the mixin, `is_clip`,
-   `enabled`, `lock_*`, `is_expanded`, `actions`, `external_image`.
+   `enabled`, `lock_*`, `is_expanded`, `actions`. A v2 `external_image`
+   is dropped: v3 has no external-editor round trip (PS-054).
    Folders get their children inserted into the content chain; linked
    layers become linked nodes (PS-016) resolved by uid across materials
    after all trees exist.

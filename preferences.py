@@ -56,9 +56,9 @@ class PaintSystemPreferences(AddonPreferences):
         default='UNDETECTED',
     )
 
-    color_picker_scale_rmb: FloatProperty(
-        name="RMB Color Wheel Scale",
-        description="Scale the color wheel in the Texture Paint right-click popover",
+    color_picker_scale_popover: FloatProperty(
+        name="Color Wheel Scale",
+        description="Scale the color wheel in the color popover",
         default=1.2,
         min=0.5,
         max=3.0
@@ -88,20 +88,20 @@ class PaintSystemPreferences(AddonPreferences):
         default=False
     )
 
-    # RMB popover options
-    show_hsv_sliders_rmb: BoolProperty(
-        name="Show Hue/Saturation/Value sliders (RMB)",
-        description="Show HSV sliders under the color wheel in the Texture Paint right-click popover",
+    # Color popover options
+    show_hsv_sliders_popover: BoolProperty(
+        name="Show Hue/Saturation/Value Sliders",
+        description="Show HSV sliders under the color wheel in the color popover",
         default=False
     )
-    show_active_palette_rmb: BoolProperty(
-        name="Show Active Palette (RMB)",
-        description="Show the active palette swatches in the Texture Paint right-click popover",
+    show_active_palette_popover: BoolProperty(
+        name="Show Active Palette",
+        description="Show the active palette swatches in the color popover",
         default=True
     )
-    show_brush_settings_rmb: BoolProperty(
-        name="Show Brush Controls (RMB)",
-        description="Show brush radius/strength controls in the Texture Paint right-click popover",
+    show_brush_settings_popover: BoolProperty(
+        name="Show Brush Controls",
+        description="Show brush radius and strength controls in the color popover",
         default=True
     )
 
@@ -144,16 +144,17 @@ class PaintSystemPreferences(AddonPreferences):
         dev_box.label(text="Advanced", icon='PREFERENCES')
         dev_box.prop(self, "developer_mode", text="Developer Mode")
 
-        # --- Texture Paint Right Click Menu ---
-        rmb_box = layout.box()
-        rmb_box.label(text="Texture Paint Right Click Menu", icon='MOUSE_RMB')
-        rmb_box.prop(self, "color_picker_scale_rmb", text="Color Wheel Scale")
-        rmb_box.prop(self, "show_hsv_sliders_rmb",
-                     text="Show HSV sliders in RMB popover")
-        rmb_box.prop(self, "show_active_palette_rmb",
-                     text="Show Active Palette in RMB popover")
-        rmb_box.prop(self, "show_brush_settings_rmb",
-                     text="Show Brush Controls in RMB popover")
+        # --- Color popover ---
+        popover_box = layout.box()
+        popover_box.label(text="Color Popover", icon='COLOR')
+        popover_box.prop(self, "color_picker_scale_popover",
+                         text="Color Wheel Scale")
+        popover_box.prop(self, "show_hsv_sliders_popover",
+                         text="Show HSV Sliders")
+        popover_box.prop(self, "show_active_palette_popover",
+                         text="Show Active Palette")
+        popover_box.prop(self, "show_brush_settings_popover",
+                         text="Show Brush Controls")
 
         box = layout.box()
         box.label(text="Paint System Shortcuts:")

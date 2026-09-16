@@ -23,15 +23,24 @@ Guiding constraints for every ticket:
 - UI strings are English literals that can be translated later without
   restructuring (see Deferred: Multilingual UI).
 - Extension platform rules, as given by the Blender extensions review
-  team. No `threading`: use `bpy.app.timers`, `subprocess` or
-  `multiprocessing` for background work. Register keymap entries in the
-  addon keyconfig only and never remove default or user entries. No
-  adverts, social links, funding or update checkers in the UI. No calls
-  into third-party software. Build the package with
+  team and by the Extensions terms of service. No `threading`: use
+  `bpy.app.timers`, `subprocess` or `multiprocessing` for background
+  work. Register keymap entries in the addon keyconfig only and never
+  remove default or user entries. Shadowing counts as removing: the addon
+  keyconfig is matched before the default one, so binding a combination
+  Blender already uses in the same keymap takes it away from the user.
+  Check `scripts/presets/keyconfig/keymap_data/blender_default.py` before
+  adding an item; background Blender reports an empty default keyconfig
+  and cannot answer this. No adverts, social links, funding or update
+  checkers in the UI (terms 6.1-6.3). No calls into third-party software
+  and no files written outside storage the extension owns (terms 3.9,
+  5.2). No network access without the manifest permission and a
+  `bpy.app.online_access` check (terms 4.1-4.5). Build the package with
   `blender --command extension build` so development files are excluded.
   No leftover code: unused imports, dead modules and stale preferences
-  are removed. CI enforces these with ruff and the strict
-  `blender-extension-builder` validator on every push (PS-080).
+  are removed. CI enforces what it can with ruff and the strict
+  `blender-extension-builder` validator on every push (PS-080); the
+  keymap and third-party rules are read, not tested.
 
 ## Milestones
 
@@ -75,7 +84,7 @@ Slices, in order. Each ends playable, is committed, and keeps CI green.
 Deferred until after the demo: library imports (002), parameter nodes
 (003), coordinate mixin and non-UV coordinates (008), UDIM (009),
 pass-through folders (014), header presets and groups popover (031),
-the full channels panel (032), right-click popover (036), multiple
+the full channels panel (032), colour popover and HUD (036), multiple
 groups and templates (040-042), colour history (062).
 
 ## Epic A. Compositing core and compiler extensions
@@ -132,7 +141,7 @@ groups and templates (040-042), colour history (062).
 | [PS-033](tickets/PS-033-brush-and-color-panels.md) | Brush and Colour sub-panels | M | 030 061 062 |
 | [PS-034](tickets/PS-034-layers-panel.md) | Layers panel: list, sidebar, menus, warnings | L | 011 012 029 030 |
 | [PS-035](tickets/PS-035-layer-settings-subpanels.md) | Layer Settings sub-panels | L | 034 |
-| [PS-036](tickets/PS-036-rmb-popover-keymaps.md) | Shift+RMB popover, keymaps, brush tooltips | S | 033 |
+| [PS-036](tickets/PS-036-color-popover-and-hud.md) | Colour popover, floating colour HUD, keymaps, brush tooltips | L | 033 |
 | [PS-037](tickets/PS-037-node-editor-and-material-panels.md) | Node editor panel, material properties injection, inspect layer | S | 030 |
 | [PS-038](tickets/PS-038-quick-tools-panels.md) | Quick Tools panels | S | 030 |
 | [PS-039](tickets/PS-039-preferences-panel.md) | Preferences panel parity | S | – |
@@ -154,7 +163,7 @@ groups and templates (040-042), colour history (062).
 | [PS-051](tickets/PS-051-gpu-blur-sharpen.md) | Gaussian blur and sharpen on the GPU | M | 050 |
 | [PS-052](tickets/PS-052-invert-fill-clear-resize.md) | Invert, fill, clear, resize | S | 050 |
 | [PS-053](tickets/PS-053-gpu-brush-painter.md) | Brush painter on the GPU | L | 050 009 |
-| [PS-054](tickets/PS-054-quick-edit.md) | Quick edit (external editor) and toggle image editor | M | 020 |
+| [PS-054](tickets/PS-054-quick-edit.md) | Toggle image editor | S | 020 |
 | [PS-055](tickets/PS-055-export.md) | Export image and export all | S | 007 |
 | [PS-056](tickets/PS-056-image-save-policy.md) | Image save and pack policy | S | – |
 
