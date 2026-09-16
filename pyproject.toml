@@ -16,3 +16,11 @@ line-length = 120
 [tool.ruff.lint]
 # Pyflakes only: unused imports/variables, undefined names, redefinitions.
 select = ["F"]
+
+[tool.pyright]
+typeCheckingMode = "off"
+# fake-bpy-module types sockets as the NodeSocket base, so subclass
+# attributes like default_value read as unknown.
+reportAttributeAccessIssue = false
+reportMissingModuleSource = false
+reportInvalidTypeForm = false
