@@ -17,6 +17,19 @@ leave out the 'UNDO' flag and `push_undo` pushes the step where it works.
 """
 
 
+UNDO_MODES = frozenset(('OBJECT', 'PAINT_TEXTURE'))
+"""`context.mode` values where selection operators run; their polls check `undoable_mode`.
+
+An edit mode has an undo stack of its own: a step pushed there for a
+selection edit restores nothing on any version, and Ctrl+Z spends it.
+"""
+
+
+def undoable_mode(context) -> bool:
+    """Whether a selection edit made now gets an undo step that restores it."""
+    return context.mode in UNDO_MODES
+
+
 def push_undo(context, message: str) -> None:
     """Push the undo step `UNDO_OPTIONS` leaves out: before 5.1, outside texture paint mode."""
     if 'UNDO' in UNDO_OPTIONS or context.mode == 'PAINT_TEXTURE':
@@ -45,7 +58,7 @@ class PAINTSYSTEM_OT_select_all(Operator):
 
     @classmethod
     def poll(cls, context):
-        return get_active_tree(context) is not None
+        return undoable_mode(context) and get_active_tree(context) is not None
 
     def execute(self, context):
         selection = get_active_tree(context).selection

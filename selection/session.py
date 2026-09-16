@@ -23,7 +23,8 @@ is still cached. Otherwise it builds the mask once, remembering a failure
 per digest so a mask that cannot be built is not tried again on every
 tick, and retrying `GPU_ERROR` a few times. A sync that gets past the
 comparison hands the state on to `stencil.sync`, then `overlay.sync`,
-and tags the 3D views and image editors for redraw.
+and tags the 3D views and image editors for redraw. A consumer that
+raises is logged, and the next sync reaches the consumers again.
 `notify(force=True)` forgets the last state first, so that sync reaches
 everything even when the state is unchanged: undo, redo and a file read
 restore the ops and Blender's own settings independently.
@@ -71,6 +72,9 @@ _LABELS = {
     'SELF_TEST': "GPU failed the selection self-test",
     'GPU_ERROR': "GPU error, retrying",
 }
+
+GPU_ERROR_GIVEN_UP = "GPU error, change the selection to retry"
+"""Label of `GPU_ERROR` once `RETRY_LIMIT` tries have run and the timer has stopped."""
 
 _REDRAW_AREAS = frozenset(('VIEW_3D', 'IMAGE_EDITOR'))
 
@@ -122,6 +126,7 @@ _last: State | None = None
 _failures: dict[bytes, tuple[str, str]] = {}
 _retries: dict[bytes, int] = {}
 _pending_force = False
+_consumer_failed = False
 
 
 def resolve_target(context) -> tuple[Target | None, str]:
@@ -192,7 +197,7 @@ def sync(context=None, force: bool = False) -> State:
     Cheap when nothing changed. *force* forgets the last state, so the
     state reaches every consumer even when it is unchanged.
     """
-    global _last
+    global _last, _consumer_failed
     context = context or bpy.context
     if force:
         _last = None
@@ -205,11 +210,18 @@ def sync(context=None, force: bool = False) -> State:
             # A mask rebuilt after an eviction is news even when the state
             # compares equal; a build that failed the same way again is not.
             built = state.active
-    if state == _last and not built:
+    if state == _last and not built and not _consumer_failed:
         return state
     _last = state
-    stencil.sync(state, target)
-    overlay.sync(state, target)
+    _consumer_failed = False
+    for consumer in (stencil, overlay):
+        try:
+            consumer.sync(state, target)
+        except Exception:
+            # Logged, not raised: the timer would stop. The next sync reaches
+            # the consumers again, even with an equal state.
+            log.exception("Selection could not update %s", consumer.__name__)
+            _consumer_failed = True
     _tag_redraw(context)
     return state
 
@@ -247,6 +259,8 @@ def current() -> State:
 
 def label(state: State) -> str:
     """Short text for *state*'s problem that fits a sidebar line; `state.message` has the full sentence."""
+    if state.reason == 'GPU_ERROR' and _retries.get(state.digest, 0) >= RETRY_LIMIT:
+        return GPU_ERROR_GIVEN_UP
     return _TARGET_MESSAGES.get(state.reason) or _LABELS.get(state.reason, state.message)
 
 
@@ -258,11 +272,12 @@ def forget_failures() -> None:
 
 def release() -> None:
     """Stop the timer and forget everything; on unregister."""
-    global _last, _pending_force
+    global _last, _pending_force, _consumer_failed
     if bpy.app.timers.is_registered(_tick):
         bpy.app.timers.unregister(_tick)
     _last = None
     _pending_force = False
+    _consumer_failed = False
     forget_failures()
 
 

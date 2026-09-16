@@ -10,6 +10,7 @@ ends by tagging a redraw, so wrapping `session._tag_redraw` counts them.
 import os
 import sys
 import tempfile
+from types import SimpleNamespace
 
 import bpy
 
@@ -20,6 +21,7 @@ register_addon()
 core = import_from("gpu_passes.core")
 raster = import_from("selection.raster")
 session = import_from("selection.session")
+stencil = import_from("selection.stencil")
 selection_ops = import_from("ops.selection_ops")
 ps_context = import_from("context")
 
@@ -231,11 +233,17 @@ def test_failures_are_remembered():
         raster.get_mask = lambda selection, size, tile=1001: failing(selection, size, tile, 'GPU_ERROR')
         calls.clear()
         cancel_tick()
-        results = [session._tick() for _ in range(session.RETRY_LIMIT + 1)]
-        check(results[:session.RETRY_LIMIT - 1] == [session.RETRY_INTERVAL] * (session.RETRY_LIMIT - 1)
-              and results[-1] is None,
-              f"GPU_ERROR is retried {session.RETRY_LIMIT} times and then left up ({results})")
+        results = []
+        labels = []
+        for _ in range(session.RETRY_LIMIT):
+            results.append(session._tick())
+            labels.append(session.label(session.current()))
+        check(results == [session.RETRY_INTERVAL] * (session.RETRY_LIMIT - 1) + [None]
+              and len(calls) == session.RETRY_LIMIT,
+              f"GPU_ERROR is tried {session.RETRY_LIMIT} times and then left up ({results}, {len(calls)} builds)")
         check(session.current().reason == 'GPU_ERROR', "the state says so")
+        check(labels == ["GPU error, retrying"] * (session.RETRY_LIMIT - 1) + [session.GPU_ERROR_GIVEN_UP],
+              f"the label stops promising a retry once the tries run out ({labels})")
         check(session.current().digest not in session._failures, "GPU_ERROR is not remembered as a failure")
     finally:
         raster.get_mask = original_get_mask
@@ -270,7 +278,74 @@ def test_select_all_operator():
           "inverting again drops it, back to the same digest and cached mask")
     check(run(bpy.ops.paint_system.select_all, action='DESELECT') == {'FINISHED'} and t.selection.is_empty,
           "deselect clears the ops")
+    run(bpy.ops.paint_system.select_all, action='SELECT')
+    run(bpy.ops.paint_system.select_all, action='INVERT')
+    check(t.selection.is_empty, "inverting all leaves no selection, not one that blocks all painting")
     cancel_tick()
+
+
+def test_select_all_modes():
+    section("select all runs only where its undo step restores it")
+    select(BIG)
+    t = tree()
+    t.selection.clear()
+    bpy.ops.object.mode_set(mode='EDIT')
+    try:
+        check(not bpy.ops.paint_system.select_all.poll(), f"it does not run in {bpy.context.mode}")
+    finally:
+        bpy.ops.object.mode_set(mode='OBJECT')
+    check(bpy.ops.paint_system.select_all.poll(), "it runs in Object mode")
+
+    pushes = []
+    fake_bpy = SimpleNamespace(ops=SimpleNamespace(ed=SimpleNamespace(undo_push=lambda message: pushes.append(message))))
+    real_bpy, selection_ops.bpy = selection_ops.bpy, fake_bpy
+    try:
+        for mode in ('OBJECT', 'PAINT_TEXTURE'):
+            selection_ops.push_undo(SimpleNamespace(mode=mode), mode)
+    finally:
+        selection_ops.bpy = real_bpy
+    expected = [] if since(5, 1) else ['OBJECT']
+    check(pushes == expected,
+          f"push_undo pushes only before 5.1 and never in texture paint mode, where it would be dead ({pushes})")
+
+
+def test_consumer_failure_is_retried():
+    section("a consumer that raises is reached again by the next sync")
+    select(BIG)
+    t = tree()
+    t.selection.clear()
+    session.sync(force=True)
+    t.selection.add_op('ALL')
+    original = stencil.sync
+    calls = []
+
+    def failing(state, target):
+        calls.append(state)
+        raise OSError("No space left on device")
+
+    stencil.sync = failing
+    try:
+        reaches.clear()
+        state = session.sync()
+        check(len(calls) == 1 and len(reaches) == 1 and session.current() == state,
+              f"the failure is logged, not raised, and the sync still ends ({len(calls)} calls)")
+    finally:
+        stencil.sync = original
+    calls.clear()
+
+    def counting(state, target):
+        calls.append(state)
+        original(state, target)
+
+    stencil.sync = counting
+    try:
+        session.sync()
+        session.sync()
+    finally:
+        stencil.sync = original
+    check(len(calls) == 1, f"the next sync with an equal state reaches it once more, and no further ({len(calls)})")
+    t.selection.clear()
+    session.sync(force=True)
 
 
 def test_uv_map_rename_notifies():
@@ -377,6 +452,8 @@ guarded(test_notify_schedules_one_tick)
 guarded(test_sync_compares_state)
 guarded(test_failures_are_remembered)
 guarded(test_select_all_operator)
+guarded(test_select_all_modes)
+guarded(test_consumer_failure_is_retried)
 guarded(test_uv_map_rename_notifies)
 guarded(test_update_active_image_without_a_tree_notifies)
 guarded(test_undo_and_load_force_a_sync)

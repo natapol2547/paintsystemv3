@@ -75,7 +75,19 @@ def test_invert_toggles():
     check(sel.prefix_digests(64, 64, 1001)[-1] == before, "and the digest is the original again")
     sel.clear()
     sel.invert()
-    check([op.kind for op in sel.ops] == ['INVERT'], "inverting an empty selection appends INVERT")
+    check([op.kind for op in sel.ops] == ['ALL'] and sel.ops[0].mode == 'REPLACE',
+          f"inverting an empty selection selects all {[op.kind for op in sel.ops]}")
+    sel.invert()
+    check(sel.is_empty, "inverting all leaves no selection rather than an empty mask")
+    sel.add_op('BOX', 'REPLACE', points=[(0.1, 0.1), (0.5, 0.5)])
+    sel.add_op('ALL', 'ADD')
+    sel.invert()
+    check(sel.is_empty, "so does inverting ops that end in an added ALL")
+    sel.add_op('BOX', 'REPLACE', points=[(0.1, 0.1), (0.5, 0.5)])
+    sel.add_op('ALL', 'INTERSECT')
+    sel.invert()
+    check([op.kind for op in sel.ops] == ['BOX', 'ALL', 'INVERT'],
+          f"an intersected ALL keeps what came before, so it is inverted {[op.kind for op in sel.ops]}")
 
 
 def test_selection_has_no_image():

@@ -30,7 +30,9 @@ main_panels = import_from("panels.main_panels")
 
 draw_errors = []
 section_draws = []
+drawn_labels = []
 _draw_section = main_panels._draw_selection_section
+_label = session.label
 
 
 def _wrapped_draw_section(layout, context, tree):
@@ -42,7 +44,15 @@ def _wrapped_draw_section(layout, context, tree):
         raise
 
 
+def _recording_label(state):
+    """Record the problem lines the section draws; only the section calls `session.label`."""
+    text = _label(state)
+    drawn_labels.append(text)
+    return text
+
+
 main_panels._draw_selection_section = _wrapped_draw_section
+session.label = _recording_label
 
 
 def view3d():
@@ -186,7 +196,8 @@ def steps():
     yield from wait_for(lambda: section_draws)
     check(section_draws and not draw_errors,
           f"the section drew without an exception ({len(section_draws)} draws, {draw_errors[:1]})")
-    check(session.UDIM in section_draws, "including with the problem line")
+    check(session.UDIM in section_draws and "UDIM layers are not supported yet" in drawn_labels,
+          f"including with the problem line ({sorted(set(drawn_labels))})")
     screenshot = os.environ.get("SCREENSHOT")
     if screenshot:
         with bpy.context.temp_override(window=window):

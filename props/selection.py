@@ -277,10 +277,19 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
         """Invert the selection: drop a trailing `INVERT`, else append one.
 
         Inverting twice gives back the ops, and so the digest and the cached
-        mask, that the first inversion started from.
+        mask, that the first inversion started from. Nothing and the whole
+        image invert to each other as ops: an empty selection becomes `ALL`,
+        and a selection ending in an `ALL` that covers everything is
+        cleared, rather than kept as a selection whose empty mask would
+        block painting with no outline to show for it.
         """
-        if len(self.ops) and self.ops[-1].kind == 'INVERT':
-            self.ops.remove(len(self.ops) - 1)
+        ops = self.ops
+        if not len(ops):
+            self.add_op('ALL')
+        elif ops[-1].kind == 'INVERT':
+            ops.remove(len(ops) - 1)
+        elif ops[-1].kind == 'ALL' and ops[-1].mode in {'REPLACE', 'ADD'}:
+            self.clear()
         else:
             self.add_op('INVERT')
 
