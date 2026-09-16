@@ -211,6 +211,35 @@ def steps():
     check(painted[interior].sum() > 1.0 and (painted[interior & (mask == 0)] == 0).all(),
           "paint lands inside and nothing lands outside")
 
+    section("a selection whose stencil cannot be written blocks strokes")
+    block_file = os.path.join(stencil._file_dir(), stencil.BLOCK_FILE)
+    if os.path.exists(block_file):
+        os.remove(block_file)
+    write_png = stencil._write_png
+
+    def unwritable(path, grey):
+        raise OSError("No space left on device")
+
+    def generated_block_applied():
+        image = image_paint().stencil_image
+        return image is not None and bool(image.get(stencil.BLOCK_KEY)) and image_paint().invert_stencil
+
+    stencil._write_png = unwritable
+    try:
+        tree().selection.add_op('BOX', points=[(0.2, -0.1), (0.8, 1.1)], feather=64.0)
+        session.notify()
+        yield from wait_for(generated_block_applied)
+        check(generated_block_applied(), "with no file at all, the generated block image holds the stencil")
+        result, painted, _ = paint_across()
+        check(result == {'FINISHED'} and painted.max() <= 0.003,
+              f"and a stroke paints nothing ({result}, max painted {painted.max():.4f})")
+    finally:
+        stencil._write_png = write_png
+    tree().selection.add_op('BOX', points=[(0.3, -0.1), (0.7, 1.1)], feather=128.0)
+    session.notify()
+    yield from wait_for(applied)
+    check(applied(), "the earlier selection applies its mask file again")
+
     section("user edits of the stencil are set back")
     image_paint().invert_stencil = False
     yield from wait_for(lambda: image_paint().invert_stencil)

@@ -9,7 +9,8 @@ undo treats it the same way as the setting it backs up:
   which files do not save.
 * A mesh's stencil UV map is mesh data, which undo restores. Its backup
   is on the scene (`PaintSystemSceneSettings.stencil_meshes`), which undo
-  restores too.
+  restores too. The window manager entry of the scene keeps a copy, used
+  only when the scene is removed while the selection holds it.
 """
 import bpy
 from bpy.props import BoolProperty, CollectionProperty, PointerProperty, StringProperty
@@ -33,6 +34,7 @@ class PaintSystemStencilSceneBackup(bpy.types.PropertyGroup):
     use_stencil_layer: BoolProperty(name="Use Stencil Layer", default=False)
     invert_stencil: BoolProperty(name="Invert Stencil", default=False)
     stencil_image: PointerProperty(name="Stencil Image", type=bpy.types.Image)
+    meshes: CollectionProperty(type=PaintSystemStencilMeshBackup)
 
 
 class PaintSystemWindowManagerSettings(bpy.types.PropertyGroup):

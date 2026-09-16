@@ -332,6 +332,29 @@ def test_block_mode():
             patched(stencil, "_write_png", unwritable):
         stencil.sync(usable, target)
     check(blocked() and not os.path.exists(mask_file(state)), "a mask file that cannot be written blocks")
+
+    # Neither the mask nor block.png can be written: a full disk, or a
+    # temporary directory without write permission.
+    os.remove(os.path.join(stencil._file_dir(), stencil.BLOCK_FILE))
+
+    def generated_blocks():
+        image = image_paint().stencil_image
+        return (image is not None and image.get(stencil.BLOCK_KEY) and image.source == 'GENERATED'
+                and tuple(image.size) == (1, 1) and pixels(image)[..., :3].max() == 0 and not image.is_dirty
+                and image_paint().use_stencil_layer and image_paint().invert_stencil)
+
+    with patched(raster, "peek_mask", lambda selection, size, tile=1001: FakeMask(size, 255)), \
+            patched(stencil, "_write_png", unwritable):
+        stencil.sync(usable, target)
+        check(generated_blocks(), "with no file at all, a generated black image blocks")
+        stencil.sync(dataclasses.replace(state, reason=session.UDIM, message="UDIM"), None)
+        check(generated_blocks(), "and so it does for a target problem")
+        remove_mask_file(state)
+        reached = session.sync(force=True)
+        check(reached.selected and generated_blocks(),
+              f"a session sync blocks too, without raising ({reached.reason})")
+    stencil.sync(dataclasses.replace(state, reason=session.UDIM, message="UDIM"), None)
+    check(blocked(), "once the file can be written, block.png takes over again")
     t.selection.clear()
     apply()
 
@@ -361,6 +384,58 @@ def test_other_scene_is_restored():
         bpy.data.scenes.remove(other)
     stencil.sync(session.State(paint_mode=True), None)
     check(not len(backups()), "an entry for a removed scene is dropped")
+
+
+def test_removed_scene_gives_meshes_back():
+    section("a scene removed while it holds the stencil")
+    set_user_stencil()
+    obj = cube()
+    other = bpy.data.scenes.new("PS Stencil Removed")
+    other.collection.objects.link(obj)
+    other.view_layers[0].objects.active = obj
+    tree().selection.add_op('ALL')
+    try:
+        with bpy.context.temp_override(scene=other, view_layer=other.view_layers[0]):
+            state = session.sync(force=True)
+        check(state.paint_mode and stencil.is_applied(other) and obj.data.uv_layer_stencil_index == 0,
+              f"the selection holds the other scene and set the mesh's stencil UV map ({state.reason})")
+    finally:
+        bpy.data.scenes.remove(other)
+    tree().selection.clear()
+    apply()
+    check(obj.data.uv_layer_stencil_index == 1, "the mesh still gets its stencil UV map back")
+    check(not len(backups()), "and the removed scene's entry is dropped")
+
+
+def test_copied_scene_is_not_backed_up_as_the_users():
+    section("a scene copied while the selection holds its stencil")
+    set_user_stencil()
+    home = bpy.context.scene
+    tree().selection.add_op('ALL')
+    apply()
+    names = set(bpy.data.scenes.keys())
+    check(bpy.ops.scene.new(type='LINK_COPY') == {'FINISHED'}, "Linked Copy runs")
+    copy = next(scene for scene in bpy.data.scenes if scene.name not in names)
+    try:
+        copied = copy.tool_settings.image_paint
+        check(copied.stencil_image == stencil.stencil_image(), "the copy starts with the selection's stencil")
+        with bpy.context.temp_override(scene=copy, view_layer=copy.view_layers[0]):
+            apply()
+            check(stencil.is_applied(copy) and not stencil.is_applied(home), "the copy is held")
+            tree().selection.clear()
+            apply()
+        check(copied.stencil_image is None and not copied.use_stencil_layer and not copied.invert_stencil,
+              "clearing the selection there gives it Blender's defaults, not the selection's stencil")
+        check(cube().data.uv_layer_stencil_index == 1, "and the shared mesh its user's stencil UV map")
+    finally:
+        stencil.restore(copy)
+        # A windowed session switches the window to the new scene.
+        for window in bpy.context.window_manager.windows:
+            if window.scene == copy:
+                window.scene = home
+        bpy.data.scenes.remove(copy)
+    apply()
+    check(user_stencil_back(), "the first scene keeps the user's settings")
 
 
 def test_renamed_mesh_is_restored():
@@ -532,13 +607,15 @@ def test_unregister():
     stencil._hold(other, None)
     other_paint.use_stencil_layer = True
     other_paint.stencil_image = stencil.stencil_image()
+    stencil._block_image()
     directory = stencil._file_dir()
     check(os.path.isdir(directory) and stencil.is_applied(home) and stencil.is_applied(other), "two scenes are held")
     stencil.unregister()
     check(user_stencil_back() and not other_paint.use_stencil_layer and other_paint.stencil_image is None,
           "every scene has its own settings back")
-    check(stencil.stencil_image() is None and not os.path.exists(directory),
-          "the stencil image and the mask files are gone")
+    check(stencil.stencil_image() is None and not os.path.exists(directory)
+          and not any(image.get(stencil.BLOCK_KEY) for image in bpy.data.images),
+          "the stencil and block images and the mask files are gone")
     check(not len(backups()), "no backup is left")
 
 
@@ -550,6 +627,8 @@ guarded(test_digest_files_are_reused)
 guarded(test_stale_pixels_reload)
 guarded(test_block_mode)
 guarded(test_other_scene_is_restored)
+guarded(test_removed_scene_gives_meshes_back)
+guarded(test_copied_scene_is_not_backed_up_as_the_users)
 guarded(test_renamed_mesh_is_restored)
 guarded(test_resized_image)
 guarded(test_prune_keeps_current_and_block)

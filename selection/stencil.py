@@ -18,11 +18,15 @@ mode, the scene's stencil settings belong to it:
   before it is pointed at another file.
 * when a selection exists but its mask cannot be used, the stencil image
   is a single black pixel, which blocks painting altogether rather than
-  letting it land outside the selection.
+  letting it land outside the selection. When not even that file can be
+  written, `.PS Selection Block`, a generated black image, blocks instead:
+  it holds no pixels of its own, so it is never dirty either.
 * the user's settings from before are backed up (`props/stencil.py`) and
   restored when the selection stops applying, before a file is saved and
   when the add-on is unregistered. User edits made while the selection
-  holds them are set back on the next sync.
+  holds them are set back on the next sync. A scene copied from one the
+  selection holds copies the selection's settings, not the user's, so
+  its backup is Blender's defaults.
 
 `selection.session` decides when: its tick calls `sync` with the state
 it resolved, and `handlers.node_tree_handlers` calls `restore_all`,
@@ -46,6 +50,8 @@ log = logging.getLogger(__name__)
 
 IMAGE_KEY = "ps_selection_stencil"
 IMAGE_NAME = ".PS Selection Stencil"
+BLOCK_KEY = "ps_selection_block"
+BLOCK_NAME = ".PS Selection Block"
 FILE_DIR = "paint_system_selection"
 BLOCK_FILE = "block.png"
 FILE_BUDGET = 256 << 20
@@ -95,8 +101,11 @@ def _prune(keep: str) -> None:
         total -= size
 
 
-def _mask_file(selection, size: tuple[int, int], tile: int) -> str:
-    """The PNG of the selection's mask, written if missing, or `_block_file()` when it cannot be."""
+def _mask_file(selection, size: tuple[int, int], tile: int) -> str | None:
+    """The PNG of the selection's mask, written if missing, or `_block_file()` when it cannot be.
+
+    None when not even the block file can be written.
+    """
     width, height = raster.mask_size(size)
     path = os.path.join(_file_dir(), selection.prefix_digests(width, height, tile)[-1].hex() + ".png")
     if os.path.exists(path):
@@ -116,18 +125,37 @@ def _mask_file(selection, size: tuple[int, int], tile: int) -> str:
     return path
 
 
-def _block_file() -> str:
-    """A 1x1 black PNG: with the stencil inverted, nothing gets painted."""
+def _block_file() -> str | None:
+    """A 1x1 black PNG: with the stencil inverted, nothing gets painted. None when it cannot be written."""
     path = os.path.join(_file_dir(), BLOCK_FILE)
     if not os.path.exists(path):
-        os.makedirs(_file_dir(), exist_ok=True)
-        _write_png(path, np.zeros((1, 1), np.uint8))
+        try:
+            os.makedirs(_file_dir(), exist_ok=True)
+            _write_png(path, np.zeros((1, 1), np.uint8))
+        except OSError as error:
+            log.warning("Selection blocks painting without a file, none could be written: %s", error)
+            return None
     return path
 
 
 def stencil_image() -> bpy.types.Image | None:
     """The image the selection stencils with, if it exists."""
     return next((image for image in bpy.data.images if image.get(IMAGE_KEY)), None)
+
+
+def _is_selection_image(image) -> bool:
+    return image is not None and bool(image.get(IMAGE_KEY) or image.get(BLOCK_KEY))
+
+
+def _block_image() -> bpy.types.Image:
+    """The generated black image that blocks painting when no file can be written, created if needed."""
+    image = next((image for image in bpy.data.images if image.get(BLOCK_KEY)), None)
+    if image is None:
+        image = bpy.data.images.new(BLOCK_NAME, 1, 1)
+        image[BLOCK_KEY] = True
+        image.generated_color = (0.0, 0.0, 0.0, 1.0)
+        image.colorspace_settings.name = 'Non-Color'
+    return image
 
 
 def _show_file(path: str) -> bpy.types.Image:
@@ -164,19 +192,34 @@ def _settings():
 def _hold(scene, mesh) -> None:
     """Back up the settings the selection is about to take, once per holding."""
     settings = _settings()
-    if settings.find_scene(scene) < 0:
+    index = settings.find_scene(scene)
+    if index < 0:
         image_paint = scene.tool_settings.image_paint
         entry = settings.stencil_scenes.add()
         entry.scene = scene
-        entry.use_stencil_layer = image_paint.use_stencil_layer
-        entry.invert_stencil = image_paint.invert_stencil
-        entry.stencil_image = image_paint.stencil_image
+        # A scene copied while the selection held its source carries the
+        # selection's settings; the entry's defaults are Blender's.
+        if not _is_selection_image(image_paint.stencil_image):
+            entry.use_stencil_layer = image_paint.use_stencil_layer
+            entry.invert_stencil = image_paint.invert_stencil
+            entry.stencil_image = image_paint.stencil_image
+        index = len(settings.stencil_scenes) - 1
+    if mesh is None:
+        return
     meshes = scene.paint_system.stencil_meshes
-    if mesh is not None and not any(entry.mesh == mesh for entry in meshes):
-        entry = meshes.add()
-        entry.mesh = mesh
+    backup = next((entry for entry in meshes if entry.mesh == mesh), None)
+    if backup is None:
+        backup = meshes.add()
+        backup.mesh = mesh
         stencil_uv = mesh.uv_layer_stencil
-        entry.uv_name = stencil_uv.name if stencil_uv is not None else ""
+        backup.uv_name = stencil_uv.name if stencil_uv is not None else ""
+    # The scene's backup is the one undo restores along with the mesh. The
+    # window manager keeps a copy for when the scene is removed while it holds.
+    kept = settings.stencil_scenes[index].meshes
+    if not any(entry.mesh == mesh for entry in kept):
+        entry = kept.add()
+        entry.mesh = mesh
+        entry.uv_name = backup.uv_name
 
 
 def is_applied(scene) -> bool:
@@ -184,8 +227,8 @@ def is_applied(scene) -> bool:
     return _settings().find_scene(scene) >= 0
 
 
-def _restore_meshes(scene) -> None:
-    meshes = scene.paint_system.stencil_meshes
+def _restore_meshes(meshes) -> None:
+    """Give the meshes in the backup collection *meshes* their stencil UV maps back, and empty it."""
     for entry in meshes:
         mesh = entry.mesh
         index = mesh.uv_layers.find(entry.uv_name) if mesh is not None else -1
@@ -206,15 +249,23 @@ def restore(scene) -> None:
         _set(image_paint, 'invert_stencil', entry.invert_stencil)
         _set(image_paint, 'stencil_image', entry.stencil_image)
         settings.stencil_scenes.remove(index)
-    _restore_meshes(scene)
+    _restore_meshes(scene.paint_system.stencil_meshes)
+
+
+def _forget_removed_scenes() -> None:
+    """Drop the entries of scenes that are gone, giving their meshes back from the window manager's copy."""
+    scenes = _settings().stencil_scenes
+    for index in reversed(range(len(scenes))):
+        if scenes[index].scene is None:
+            _restore_meshes(scenes[index].meshes)
+            scenes.remove(index)
 
 
 def restore_all() -> None:
     """Give every scene's stencil settings back; before a save and on unregister."""
+    _forget_removed_scenes()
     for scene in bpy.data.scenes:
         restore(scene)
-    # What is left belongs to scenes that are gone.
-    _settings().stencil_scenes.clear()
 
 
 def _recover(scene) -> None:
@@ -224,13 +275,12 @@ def _recover(scene) -> None:
     Blender's defaults.
     """
     image_paint = scene.tool_settings.image_paint
-    image = image_paint.stencil_image
-    if image is None or not image.get(IMAGE_KEY):
+    if not _is_selection_image(image_paint.stencil_image):
         return
     image_paint.stencil_image = None
     image_paint.use_stencil_layer = False
     image_paint.invert_stencil = False
-    _restore_meshes(scene)
+    _restore_meshes(scene.paint_system.stencil_meshes)
 
 
 def sync(state, target) -> None:
@@ -243,13 +293,11 @@ def sync(state, target) -> None:
     """
     scene = bpy.context.scene
     # Tool settings are per scene: another scene keeps nothing of the selection's.
+    _forget_removed_scenes()
     scenes = _settings().stencil_scenes
     for index in reversed(range(len(scenes))):
-        other = scenes[index].scene
-        if other is None:
-            scenes.remove(index)
-        elif other != scene:
-            restore(other)
+        if scenes[index].scene != scene:
+            restore(scenes[index].scene)
     if not (state.paint_mode and state.selected):
         restore(scene)
         return
@@ -257,7 +305,7 @@ def sync(state, target) -> None:
         path = _block_file()
     else:
         path = _mask_file(target.tree.selection, state.size, state.tile)
-    image = _show_file(path)
+    image = _show_file(path) if path is not None else _block_image()
     mesh = target.object.data if target is not None and target.object is not None else None
     _hold(scene, mesh)
     image_paint = scene.tool_settings.image_paint
@@ -316,8 +364,7 @@ def unregister() -> None:
     bpy.msgbus.clear_by_owner(_msgbus_owner)
     bpy.types.IMAGE_HT_tool_header.remove(draw_image_header)
     restore_all()
-    image = stencil_image()
-    if image is not None:
+    for image in [image for image in bpy.data.images if _is_selection_image(image)]:
         bpy.data.images.remove(image)
     _loaded.clear()
     shutil.rmtree(_file_dir(), ignore_errors=True)
