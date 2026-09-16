@@ -6,7 +6,9 @@ import os
 from .custom_icons import get_icon
 
 
-ADDON_ID = "paint_system"
+# The add-on's module name, which keys its preferences entry: "paint_system"
+# as a legacy add-on, "bl_ext.<repository>.paint_system" as an extension.
+ADDON_ID = __package__
 
 log = logging.getLogger(__name__)
 
