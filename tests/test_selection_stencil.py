@@ -21,7 +21,7 @@ import bpy
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import check, finish, guarded, import_from, register_addon, section, skip  # noqa: E402
+from harness import before, check, finish, guarded, import_from, register_addon, section, since, skip  # noqa: E402
 
 register_addon()
 core = import_from("gpu_passes.core")
@@ -72,11 +72,11 @@ def set_user_stencil():
     return user
 
 
-def user_stencil_back():
+def user_stencil_back(uv_map=True):
     settings = image_paint()
     return (not settings.use_stencil_layer and not settings.invert_stencil
             and settings.stencil_image is not None and settings.stencil_image.name == USER_STENCIL
-            and cube().data.uv_layer_stencil_index == 1)
+            and (not uv_map or cube().data.uv_layer_stencil_index == 1))
 
 
 def apply():
@@ -591,13 +591,22 @@ def test_save_and_load():
 
 def test_reopened_file():
     section("a reopened file")
-    check(user_stencil_back(), "holds the user's stencil settings")
+    # Blender 5.0 does not write a mesh's stencil UV map to the file at all,
+    # with or without the add-on: it reads back as the first map.
+    saves_stencil_uv_map = not (since(5, 0) and before(5, 1))
+    check(user_stencil_back(uv_map=saves_stencil_uv_map), "holds the user's stencil settings")
+    if not saves_stencil_uv_map:
+        skip("the user's stencil UV map is not saved by Blender 5.0")
     apply()
     check(stencil.is_applied(bpy.context.scene), "and its selection applies again")
 
 
 def test_unregister():
     section("unregister gives everything back")
+    # Set the user's stencil while nothing holds it, or the backup keeps
+    # whatever the previous test left.
+    tree().selection.clear()
+    apply()
     set_user_stencil()
     home = bpy.context.scene
     other = bpy.data.scenes.new("PS Stencil Unregister")
