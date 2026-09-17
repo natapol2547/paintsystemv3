@@ -126,7 +126,7 @@ class PaintSystemPreferences(AddonPreferences):
         subtype='FACTOR',
         min=0.0,
         max=1.0,
-        default=0.2
+        default=0.0
     )
     selection_ant_color_a: FloatVectorProperty(
         name="Outline Dash Color",

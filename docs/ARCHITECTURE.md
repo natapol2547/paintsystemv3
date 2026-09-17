@@ -120,8 +120,8 @@ hands the state to its two consumers in order. `selection/stencil.py`
 points Blender's Stencil Mask at a PNG of the mask so native strokes
 are clipped, blocks painting when a selection exists but cannot be
 used, and backs up the user's stencil settings where undo treats them
-like the settings themselves. `selection/overlay.py` draws the tint and
-marching ants from draw handlers that only read the cached mask, and
+like the settings themselves. `selection/overlay.py` draws the marching
+ants and an optional tint from draw handlers that only read the cached mask, and
 calls `notify()` when what they would draw is out of step. Nothing but
 the tick builds a mask. The selection edits no material and never
 compiles. A mask that selects nothing counts as no selection: the

@@ -351,8 +351,9 @@ GPU passes build the mask at the image's size, or at a UDIM tile's.
 Draw handlers only, so showing or hiding a selection never changes the
 material and never recompiles a shader.
 
-- Both editors draw a light wash inside the selection and marching ants
-  along its outline, found from mask samples one screen pixel to either
+- Both editors draw marching ants along the selection's outline, plus a
+  wash inside it when "Tint Opacity" is above 0 (off by default, since
+  any tint hides the true colour of what is being painted). The ants are found from mask samples one screen pixel to either
   side and dashed along the screen axis closest to the outline's
   tangent. `overlay_shader.ANT_GLSL` holds the dash math, so PS-093's
   drag preview can crawl in step with the committed ants
@@ -396,7 +397,7 @@ material and never recompiles a shader.
 - Preferences (`PaintSystemPreferences`, "Selection" box):
   `show_selection_3d` ("Show Selection in 3D View", on),
   `selection_wash_color` ("Selection Tint", 0.25, 0.55, 1.0),
-  `selection_wash_opacity` ("Tint Opacity", 0.2), `selection_ant_color_a`
+  `selection_wash_opacity` ("Tint Opacity", 0), `selection_ant_color_a`
   ("Outline Dash Color", black) and `selection_ant_color_b` ("Outline Gap
   Color", white). `overlay.settings()` falls back to these defaults when
   the add-on has no preferences entry.
@@ -465,7 +466,7 @@ settings.
 
 ## Acceptance
 
-- A lasso on a 4K image shows the wash and ants in both editors within
+- A lasso on a 4K image shows the ants in both editors within
   one timer tick after release.
 - Add, subtract, intersect and invert combine as the soft set operations
   above; undo and redo restore the previous mask exactly, without a pass

@@ -124,6 +124,12 @@ def test_preferences_and_colours():
           "without an add-on entry the overlay uses its defaults")
     props = preferences.PaintSystemPreferences.bl_rna.properties
     check(all(name in props for name in overlay.DEFAULTS), "every overlay setting is a preference")
+    pref_defaults = {name: tuple(props[name].default_array) if props[name].is_array else (props[name].default,)
+                     for name in overlay.DEFAULTS}
+    ours = {name: value if isinstance(value, tuple) else (value,) for name, value in overlay.DEFAULTS.items()}
+    check(all(abs(a - b) < 1e-6 for name in ours for a, b in zip(pref_defaults[name], ours[name], strict=True)),
+          f"the overlay defaults match the preference defaults ({pref_defaults})")
+    check(overlay.DEFAULTS["selection_wash_opacity"] == 0.0, "the selection is untinted by default")
     check(all(props[name].subtype == 'COLOR_GAMMA' for name in
               ("selection_wash_color", "selection_ant_color_a", "selection_ant_color_b")),
           "the colours are display colours")

@@ -64,7 +64,7 @@ DEPTH_OFFSET = 1.0
 DEFAULTS = {
     "show_selection_3d": True,
     "selection_wash_color": (0.25, 0.55, 1.0),
-    "selection_wash_opacity": 0.2,
+    "selection_wash_opacity": 0.0,
     "selection_ant_color_a": (0.0, 0.0, 0.0),
     "selection_ant_color_b": (1.0, 1.0, 1.0),
 }
