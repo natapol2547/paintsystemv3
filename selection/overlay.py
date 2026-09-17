@@ -30,6 +30,7 @@ update on 5.3, therefore rebuilds nothing, and a real surface change
 shows the previous batch for one frame. `handlers.node_tree_handlers`
 drops every batch when a file is read.
 """
+import functools
 import logging
 import time
 
@@ -191,8 +192,10 @@ def _target_mask(tree, state, image) -> raster.SelectionMask | None:
     if raster.image_size(image, state.tile) != state.size:
         session.notify()
         return None
-    # peek_mask looks the mask up by the digest of the ops as they are now.
-    mask = raster.peek_mask(tree.selection, state.size, state.tile)
+    # peek_mask looks the mask up by the digest of the ops as they are now,
+    # with the surface keys a draw may read without resolving them.
+    mask = raster.peek_mask(tree.selection, state.size, state.tile,
+                            surface_key=functools.partial(raster.view_key, peek=True))
     if mask is None or mask.key != state.digest:
         session.notify()
         return None
