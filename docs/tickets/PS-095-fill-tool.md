@@ -13,11 +13,13 @@ view the way the user sees the surface.
 Seams are handled by where the flood runs, not by mesh adjacency.
 
 - 3D view: the flood runs in screen space on a view render of the source,
-  as the wand does (PS-093). The filled region reaches texels through the
-  texel map (PS-092) and is refined at its edge in texel space. A fill that
-  crosses a seam is continuous because the screen has no seams. Texels
-  hidden from the view are not filled; filling around an object takes a
-  second click from another angle, as with native projection painting.
+  as the magic wand in PS-097 does. PS-097 is deferred, so if the fill
+  comes first it builds that flood. The filled region reaches texels
+  through the texel map (PS-092) and is refined at its edge in texel
+  space. A fill that crosses a seam is continuous because the screen has
+  no seams. Texels hidden from the view are not filled; filling around an
+  object takes a second click from another angle, as with native
+  projection painting.
 - Image editor: the flood runs on the image in texel space.
 - `filters/fill.py`:
   - `match_pass`: GPU pass giving a match texture against the seed colour

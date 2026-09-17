@@ -6,9 +6,10 @@ Epic J. Size M. Milestone M3b.
 
 Milestone 2 of PS-091 is done: Rectangle, Ellipse and Lasso Selection
 in the 3D view in texture paint mode, the `VIEW` rasteriser behind them
-and the surface content keys both need. Still to do: the polygon lasso,
-the magic wand, select by faces, UV island or material, the image
-editor tools, and clipping in the image editor.
+and the surface content keys both need. The polygon lasso, the magic
+wand, select by faces, UV island or material, the image editor tools
+and clipping in the image editor moved to PS-097 on 2026-09-17, as nice
+to have and not scheduled.
 
 Built in three parts, merged in order, each leaving the suite green:
 
@@ -103,9 +104,9 @@ Known limitations:
 
 ## Goal
 
-Box, ellipse, lasso, polygon lasso and magic wand selection, select all,
-none and invert, and select by face or UV island. The 3D view in texture
-paint mode comes first; the image editor follows with the same operators.
+Box, ellipse and lasso selection in the 3D view in texture paint mode,
+and select all, none and invert. The polygon lasso, the magic wand,
+select by face or UV island and the image editor tools are PS-097.
 
 ## v3 design
 
@@ -124,9 +125,7 @@ paint mode comes first; the image editor follows with the same operators.
   `ops.generic.select_box`, `select_circle` and `select_lasso` icons.
   They form one group, registered after `builtin_brush.mask` with a
   separator. 4.2 has no such item, so the group goes to the end of the
-  toolbar and Blender prints "could not find 'after'". Later:
-  `select_polygon` and `select_wand`, and `IMAGE_EDITOR` tools in `PAINT`
-  and `VIEW` modes.
+  toolbar and Blender prints "could not find 'after'".
 - Each operator only appends a `VIEW` op to the selection (PS-091), then
   calls `push_undo(context, bl_label)` and `selection.session.notify()`,
   and returns without GPU work. The session tick builds the mask and
@@ -226,8 +225,6 @@ paint mode comes first; the image editor follows with the same operators.
   raising when EGL cannot start. `GPU_ERROR` is transient, so a later try
   can succeed; `SELF_TEST` lasts for the session, and `availability()`
   reports it from then on.
-- The polygon lasso, when it comes, closes on Enter, double click or a
-  click on the first point; Backspace removes the last point.
 
 ### Empty selections
 
@@ -247,41 +244,13 @@ the session copies `State.empty` from its last state while the digest
 is unchanged. Nothing checks emptiness per draw. A read back that raises
 is `GPU_ERROR` and retried.
 
-### Magic wand
+### Select all
 
-The wand flood runs where the user sees the colours, not in UV space.
-That keeps it off seams and islands entirely.
-
-- 3D view: render the source (the active layer, or the composite of its
-  channel when "Sample Merged" is on) into a region-size texture through
-  the texel map (PS-092), flood from the clicked pixel in screen space,
-  and turn the region into a `VIEW` op. Refinement: texels near the
-  projected edge are tested again in texel space against the seed colour,
-  so the edge follows the image resolution rather than the screen's.
-- Image editor: the same flood on the image in texel space.
-- Colour distance is Euclidean in OKLab with alpha as a fourth axis, so a
-  tolerance means the same visual step for dark and light colours. Fully
-  transparent texels match a transparent seed.
-- Contiguous or global. The first version floods on the CPU with numpy
-  over a GPU match mask; a jump flooding connectivity pass replaces it if
-  profiling asks for it (PS-081).
-- The result is written once to a greyscale `Image`, packed (PS-091),
-  and stored as a `RASTER` op, so undo and reload need no pixel history.
-- The wand selects visible surface only. Texels hidden from the view are
-  not reached; the tool settings say so.
-
-### Faces and all
-
-- `paint_system.select_faces(mode='SELECTED'|'ISLAND'|'MATERIAL')` adds a
-  `FACES` op from the mesh's face selection, the UV island under the
-  cursor, or the faces of the active material slot. It reuses
-  `surface.resolve_key` and the texel map's triangle arrays, with the
-  same digest provider as `VIEW` ops.
-- `paint_system.select_all(action='SELECT'|'DESELECT'|'INVERT')` shipped
-  with PS-091 milestone 1, with no keymap items (see above). `SELECT`
-  appends `ALL` with `REPLACE`, `DESELECT` clears the ops, and `INVERT`
-  calls `PaintSystemSelection.invert()`, which toggles a trailing
-  `INVERT` and turns nothing and `ALL` into each other.
+`paint_system.select_all(action='SELECT'|'DESELECT'|'INVERT')` shipped
+with PS-091 milestone 1, with no keymap items (see above). `SELECT`
+appends `ALL` with `REPLACE`, `DESELECT` clears the ops, and `INVERT`
+calls `PaintSystemSelection.invert()`, which toggles a trailing `INVERT`
+and turns nothing and `ALL` into each other.
 
 ### Surface keys (`gpu_passes/surface.py`)
 
@@ -442,30 +411,7 @@ texel slope, an eye that ignores view rotation, or the surface step
 choice at island edges. `view_eye` runs on the CPU and the tests check
 it on 1000 random orthographic views with scaled objects.
 
-### Rasterising the other kinds
-
-`FACES`, `RASTER` and `TRANSFORM` ops still raise `UNSUPPORTED`. PS-091's
-self-test does not reach their passes, so it cannot catch a driver that
-draws them wrongly.
-
-- `FACES` stores the object, the UV map name and the selected face
-  indices, and draws the UV triangles of the evaluated mesh, like the
-  texel map.
-- `RASTER` images are float, written with alpha 1 and packed right
-  after the write: a packed float image with alpha 0.5 came back
-  premultiplied after an undo past its creation and a redo. They are
-  uploaded through `foreach_get` into a `Buffer`-backed texture, never
-  `gpu.texture.from_image`, which segfaults a background 5.2. Their
-  `session_uid` survives undo and redo and is part of the digest.
-
-### Image editor clipping
-
-Blender's 2D painting ignores the Stencil Mask, so PS-091 milestone 1
-only shows a header note there. The image editor tools own the
-fallback: keep a GPU copy of the layer image, and after each stroke
-(image update seen in `depsgraph_update_post`) write
-`mix(copy, image, mask)` back in one pass and refresh the copy. Paint
-outside the selection shows until the stroke ends.
+### Merge order
 
 The tools could not ship before the `VIEW` rasteriser: until then a
 `VIEW` op was `UNSUPPORTED`, and PS-091 blocks painting for a selection
@@ -480,11 +426,7 @@ cube builds a usable mask, which no software renderer gate may skip.
 - A box over a cube corner selects the matching texels on all three
   visible faces across UV islands, and none on the faces behind. Done.
 - With `through` on, the same box also selects the hidden faces. Done.
-- Wand with tolerance 0 on a flat colour region selects exactly that
-  region; a higher tolerance grows it to near colours.
-- Select by UV island selects every texel of the island and nothing else.
 - A 200-point lasso on a 4K image is ready in under 50 ms after release
   on a hardware GPU, not counting the first build of a session (shader
   compile and self-test) or of a surface (texel map). CI runs llvmpipe
   and asserts only 2 s.
-- The image editor tools pass the same checks in texel space.

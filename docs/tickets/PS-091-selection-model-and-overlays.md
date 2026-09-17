@@ -28,10 +28,10 @@ Built in slices, since the four halves of this ticket are independent.
    and 5.3 alpha, where one more check fails the run if Blender fell back
    to OpenGL. CI runs that lavapipe step from 5.2, because the OpenGL
    jobs miss Vulkan-only faults such as an `R32F` texture read back as
-   bytes. `FACES`, `RASTER`, `TRANSFORM` and outlined `VIEW` ops raise
-   `UNSUPPORTED` until PS-093 and PS-094 add them. `gpu.init()` turned
-   out to arrive in 5.2, not 5.0, and to crash Blender instead of raising
-   when EGL cannot start.
+   bytes. Outlined `VIEW` ops raised `UNSUPPORTED` until PS-093 added
+   them; `FACES`, `RASTER` and `TRANSFORM` ops still do until PS-097 and
+   PS-094 add them. `gpu.init()` turned out to arrive in 5.2, not 5.0,
+   and to crash Blender instead of raising when EGL cannot start.
 3. **Clipping native strokes. Done.** `props/stencil.py`,
    `selection/stencil.py`, `tests/test_selection_stencil.py` (70 checks)
    and `tests/test_selection_stencil_ui.py` (17 checks, windowed). A
@@ -209,7 +209,7 @@ GPU passes build the mask at the image's size, or at a UDIM tile's.
   surface's content key.
 - `FACES` draws the UV triangles of the mesh's selected faces
   (`use_paint_mask` face selection) in texel space.
-- Until PS-093 and PS-094 add them, `FACES`, `RASTER` and `TRANSFORM`
+- Until PS-097 and PS-094 add them, `FACES`, `RASTER` and `TRANSFORM`
   ops make `get_mask` raise `MaskUnavailable` with reason `UNSUPPORTED`;
   a limited edit never runs as if there were no selection. The digests
   already include the `RASTER` image's `session_uid` and the `TRANSFORM`
@@ -344,7 +344,7 @@ GPU passes build the mask at the image's size, or at a UDIM tile's.
   here" in Paint mode while the selection holds the stencil. It scrolls
   out of view in a narrow editor. The fallback that writes
   `mix(copy, image, mask)` back after a stroke belongs to the image
-  editor tools in PS-093.
+  editor tools in PS-097.
 
 ## Overlays (`selection/overlay.py`)
 

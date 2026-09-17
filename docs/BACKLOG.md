@@ -235,9 +235,10 @@ data structures or algorithms are ported.
 | [PS-090](tickets/PS-090-pixel-undo-stack.md) | Pixel undo for scripted image edits | S | 096 |
 | [PS-092](tickets/PS-092-texel-position-map.md) | Texel position map | M | 096 |
 | [PS-091](tickets/PS-091-selection-model-and-overlays.md) | Selection model and overlays. Slices 1 to 4 and milestone 2 surface keys done: model, mask, stroke clipping, overlays, view selections | L | 050 092 096 |
-| [PS-093](tickets/PS-093-selection-tools.md) | Selection tools: box, ellipse, lasso, wand, faces. Rectangle, Ellipse and Lasso Selection in the 3D view done; wand, faces and the image editor remain | M | 091 092 |
+| [PS-093](tickets/PS-093-selection-tools.md) | Selection tools: Rectangle, Ellipse and Lasso Selection in the 3D view. Built; the rest moved to PS-097 | M | 091 092 |
 | [PS-094](tickets/PS-094-transform-tool.md) | Transform tool and pixel clipboard | L | 008 081 090 091 092 |
 | [PS-095](tickets/PS-095-fill-tool.md) | Fill tool | M | 050 090 091 092 |
+| [PS-097](tickets/PS-097-more-selection-tools.md) | More selection tools: polygon lasso, magic wand, faces, image editor (deferred) | L | 090 091 092 093 |
 
 ## Deferred
 
@@ -247,6 +248,11 @@ data structures or algorithms are ported.
   calls rather than building labels by concatenation or f-strings, keep
   operator/property `name` and `description` as plain literals, and
   route dynamic labels through a single helper when they are introduced.
+- More selection tools (PS-097): the polygon lasso, the magic wand,
+  select by face, UV island or material, and the image editor selection
+  tools with clipping there. Nice to have and not scheduled; split out of
+  PS-093 on 2026-09-17, once Rectangle, Ellipse and Lasso Selection were
+  built in the 3D view.
 
 ## Not ported
 
