@@ -19,6 +19,7 @@ from harness import check, finish, guarded, import_from, register_addon, section
 register_addon()
 core = import_from("gpu_passes.core")
 texel_map = import_from("gpu_passes.texel_map")
+surface = import_from("gpu_passes.surface")
 
 SIZE = 128
 CUBE = "PS Texel Cube"
@@ -242,6 +243,101 @@ def test_cache():
           f"invalidating the object empties the cache, {texel_map.cached_count()} left")
 
 
+def test_cache_follows_surface_content():
+    section("the cache follows the surface's content, not its update events")
+    if not available():
+        return
+    obj = cube()
+    bpy.context.view_layer.objects.active = obj
+    texel_map.invalidate()
+    first = texel_map.get_texel_map(obj, "", (64, 64))
+    obj.data.update()
+    bpy.context.view_layer.update()
+    check(texel_map.get_texel_map(obj, "", (64, 64)) is first and texel_map.cached_count() == 1,
+          f"a geometry update that changes nothing keeps the map ({texel_map.cached_count()} cached)")
+
+    bpy.ops.ed.undo_push(message="before the vertex move")
+    obj.data.vertices[0].co.z += 0.5
+    obj.data.update()
+    bpy.ops.ed.undo_push(message="vertex move")
+    bpy.context.view_layer.update()
+    moved = texel_map.get_texel_map(obj, "", (64, 64))
+    changed = int((np.abs(moved.positions() - first.positions()) > 1e-4).any(-1).sum()) if moved is not None else 0
+    check(moved is not None and moved is not first and changed > 0,
+          f"moving a vertex builds a new map with moved positions ({changed} texels differ)")
+
+    bpy.ops.ed.undo()
+    bpy.context.view_layer.update()
+    obj = cube()
+    undone = texel_map.get_texel_map(obj, "", (64, 64))
+    fresh = texel_map.build_texel_map(obj, "", 64, 64)
+    check(undone is first, "undoing the move finds the map built before it")
+    check(undone is not None and fresh is not None and np.array_equal(undone.positions(), fresh.positions()),
+          "which matches a fresh build pixel for pixel")
+
+    count = texel_map.cached_count()
+    bpy.ops.object.mode_set(mode='EDIT')
+    try:
+        in_edit = texel_map.get_texel_map(obj, "", (64, 64))
+        check(in_edit is not None and texel_map.cached_count() == count,
+              f"in Edit Mode a map is built and not cached ({texel_map.cached_count()} cached, {count} before)")
+    finally:
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    check(texel_map.get_texel_map(obj, "PS Texel Missing", (64, 64), fallback_to_active=False) is None,
+          "a missing UV map without the fallback gives None")
+    check(texel_map.get_texel_map(obj, "PS Texel Missing", (64, 64)) is not None,
+          "and with it falls back to the active UV map")
+    texel_map.invalidate()
+
+
+def test_position_batch():
+    section("the depth batch shares the triangle soup with the map")
+    if not available():
+        return
+    obj = cube()
+    texel_map.invalidate()
+    calls = []
+    extract = texel_map._triangle_arrays
+
+    def counting_triangle_arrays(*args, **kwargs):
+        calls.append(args[1])
+        return extract(*args, **kwargs)
+
+    texel_map._triangle_arrays = counting_triangle_arrays
+    try:
+        texel_map.get_texel_map(obj, "", (64, 64), fallback_to_active=False)
+        batch = texel_map.get_position_batch(obj, "")
+        check(batch is not None and len(calls) == 1,
+              f"a batch after a map miss in the same build extracts once ({len(calls)} extractions)")
+        check(texel_map.cached_batch_count() == 1 and texel_map.cached_count() == 1,
+              f"one batch and one map are cached ({texel_map.cached_batch_count()}, {texel_map.cached_count()})")
+        texel_map._forget_pending_arrays()
+        check(texel_map.get_position_batch(obj, "") is batch and len(calls) == 1,
+              f"a later call is a hit ({len(calls)} extractions)")
+        obj.location = (1.0, 0.0, 0.0)
+        bpy.context.view_layer.update()
+        try:
+            moved = texel_map.get_position_batch(obj, "")
+            check(moved is not None and moved is not batch and texel_map.cached_batch_count() == 2,
+                  f"moving the object gives a new batch ({texel_map.cached_batch_count()} cached)")
+        finally:
+            obj.location = (0.0, 0.0, 0.0)
+            bpy.context.view_layer.update()
+        check(texel_map.get_position_batch(obj, "PS Texel Missing") is None,
+              "a missing UV map gives no batch")
+        texel_map.invalidate()
+        calls.clear()
+        texel_map.get_position_batch(obj, "")
+        texel_map.get_texel_map(obj, "", (32, 32), fallback_to_active=False)
+        check(len(calls) == 1 and texel_map.cached_count() == 1,
+              f"so does a map after a batch miss ({len(calls)} extractions)")
+    finally:
+        texel_map._triangle_arrays = extract
+        texel_map.invalidate()
+    check(texel_map.cached_batch_count() == 0, "invalidate drops the batches too")
+
+
 def test_cache_budget():
     section("the cache stays inside its video memory budget")
     if not available():
@@ -328,6 +424,8 @@ for test in (test_availability,
              test_margin_extends_islands,
              test_transform_is_applied,
              test_cache,
+             test_cache_follows_surface_content,
+             test_position_batch,
              test_cache_budget,
              test_udim_tile,
              test_cost):
@@ -337,5 +435,6 @@ for test in (test_availability,
 # them at interpreter shutdown otherwise, which is after the context has
 # gone, and freeing a texture there segfaults Blender.
 texel_map.release()
+surface.release()
 
 finish("TEXEL MAP TEST")

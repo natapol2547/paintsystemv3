@@ -4,7 +4,7 @@ from ..common import save_image
 from ..compiler.bake import PS_IMAGE_KEY
 from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty, ps_trees,
                              unblock_compile)
-from ..gpu_passes import texel_map
+from ..gpu_passes import surface, texel_map
 from ..nodetree.tree import subscribe_name_changes
 from ..selection import overlay as selection_overlay
 from ..selection import raster as selection_raster
@@ -34,19 +34,19 @@ def on_depsgraph_update_post(scene, depsgraph=None):
             tree.initialize()
     if depsgraph is None:
         return
-    # A cached texel map describes the geometry as it was when it was
-    # drawn, and stores world positions, so a moved or edited object needs
-    # a new one (PS-092).
+    # Texel maps are keyed by the content of the evaluated surface, so a
+    # geometry update only marks it suspect, and the next resolve compares
+    # arrays. A move changes no surface key; the texel map cache keys the
+    # world matrix (PS-092).
     geometry_changed = False
     for update in depsgraph.updates:
-        if not (update.is_updated_geometry or update.is_updated_transform):
+        if not update.is_updated_geometry:
             continue
         original = getattr(update.id, 'original', None)
         if isinstance(original, bpy.types.Object):
-            texel_map.invalidate(original.session_uid)
-            if update.is_updated_geometry:
-                selection_overlay.invalidate_object(original.session_uid)
-            geometry_changed = geometry_changed or update.is_updated_geometry
+            surface.mark_suspect(original.session_uid)
+            selection_overlay.invalidate_object(original.session_uid)
+            geometry_changed = True
     # Renaming or removing a UV map shows up only as a geometry update, and
     # the live selection samples a layer's UV map by name (PS-091).
     if geometry_changed:
@@ -68,8 +68,10 @@ def on_load_post(*args):
     # Reading a file frees the undo stack and everything the addon pushed
     # onto it (PS-090).
     pixels.forget_undo_state()
-    # Cached maps belong to objects of the file that was open (PS-092).
+    # Cached maps and surface keys belong to objects of the file that was
+    # open (PS-092).
     texel_map.invalidate()
+    surface.forget()
     # Masks are keyed by content and would still be right, but nothing in
     # the new file is likely to ask for them; give the memory back.
     selection_raster.invalidate()
@@ -94,6 +96,7 @@ def on_load_post_fail(*args):
     unblock_compile()
     pixels.forget_undo_state()
     texel_map.invalidate()
+    surface.forget()
     selection_raster.invalidate()
     selection_overlay.invalidate_all()
     selection_session.forget_failures()
@@ -109,14 +112,23 @@ def on_undo_post(*args):
     # The steps the addon pushed may no longer be on the stack (PS-090).
     pixels.forget_baselines()
     # An undo can restore different geometry under the same world matrix,
-    # which the cache key alone would not notice (PS-092).
-    texel_map.invalidate()
+    # so every surface key is checked again on its next resolve. Cached
+    # maps stay: the undo of a stroke restores the same surface, and the
+    # undo of a vertex move finds the map built before it (PS-092).
+    surface.mark_suspect()
     # Selection masks stay: they are keyed by a digest of the ops and the
     # size, so the restored ops find their mask, if it is cached, without
     # a rebuild. Undo restores the ops and Blender's own settings
     # independently, so the session reconciles everything derived from the
     # selection even when its state matches (PS-091).
     selection_session.notify(force=True)
+
+
+@bpy.app.handlers.persistent
+def on_frame_change_post(scene, depsgraph=None):
+    """An animated deformation changes surfaces with no depsgraph update to report it (PS-093)."""
+    surface.mark_suspect()
+    selection_session.notify()
 
 
 @bpy.app.handlers.persistent
@@ -146,6 +158,7 @@ _handlers = [
     (bpy.app.handlers.undo_post, on_undo_post),
     (bpy.app.handlers.redo_pre, on_restore_pre),
     (bpy.app.handlers.redo_post, on_undo_post),
+    (bpy.app.handlers.frame_change_post, on_frame_change_post),
     (bpy.app.handlers.save_pre, on_save_pre),
     (bpy.app.handlers.save_post, on_save_post),
 ]

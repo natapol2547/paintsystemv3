@@ -223,6 +223,8 @@ SURFACE = [
     attr("bpy.app.handlers.load_post"),
     attr("bpy.app.handlers.depsgraph_update_post"),
     attr("bpy.app.handlers.save_pre"),
+    # Frame changes mark cached surfaces suspect (PS-093).
+    attr("bpy.app.handlers.frame_change_post"),
 
     # GPU entry points for the image filters (PS-050) and overlays.
     attr("gpu.shader.create_from_info"),
@@ -244,6 +246,16 @@ SURFACE = [
     rna_prop("RegionView3D", "window_matrix"),
     rna_prop("RegionView3D", "view_distance"),
     rna_prop("RegionView3D", "view_perspective"),
+    # Surface content keys and position batches (PS-092).
+    rna_prop("Mesh", "attributes"),
+    rna_prop("Attribute", "data_type"),
+    rna_prop("Attribute", "domain"),
+    rna_prop("Mesh", "corner_normals"),
+    rna_prop("Mesh", "has_custom_normals"),
+    rna_prop("MeshPolygon", "loop_start"),
+    attr("gpu.types.GPUVertFormat"),
+    attr("gpu.types.GPUVertBuf"),
+    attr("gpu.types.GPUBatch"),
 ]
 
 

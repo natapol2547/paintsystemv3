@@ -22,6 +22,12 @@ this ticket first specified yields the nearest island texel rather than a
 continuation of the surface, but wants two ping-pong seed textures and a
 gather pass into fresh position and normal targets: about 1 GB of video
 memory at 4K against the 400 MB the map itself occupies.
+
+A pass that draws the surface from a view, such as the depth test of a
+selection drawn in the 3D view, takes the same triangles as a position
+batch (`get_position_batch`). Both are cached under the surface's content
+key, so they survive events that report a geometry update without
+changing the mesh (PS-093).
 """
 import logging
 
@@ -30,7 +36,7 @@ import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
-from . import core
+from . import core, surface
 
 log = logging.getLogger(__name__)
 
@@ -103,13 +109,29 @@ def _texel_shader() -> gpu.types.GPUShader:
     return _shader
 
 
-def _triangle_arrays(obj: bpy.types.Object, uv_map: str,
-                     depsgraph: bpy.types.Depsgraph) -> dict | None:
+def resolve_uv_map(obj: bpy.types.Object, uv_map: str) -> str | None:
+    """*uv_map*, or the active render UV map's name for ''; None when the mesh has no such map.
+
+    An empty name renders with the active render UV map, so that is the
+    one a layer without a UV map of its own is painted through.
+    """
+    uv_layers = getattr(obj.data, 'uv_layers', None) if obj is not None else None
+    if uv_layers is None:
+        return None
+    if uv_map:
+        return uv_map if uv_layers.get(uv_map) is not None else None
+    return next((layer.name for layer in uv_layers if layer.active_render), None)
+
+
+def _triangle_arrays(obj: bpy.types.Object, uv_map: str, depsgraph: bpy.types.Depsgraph,
+                     fallback_to_active: bool = True) -> dict | None:
     """The evaluated mesh as a triangle soup of vertex attributes.
 
     Corners are not shared: UVs and split normals are per corner, so every
     triangle contributes three of its own vertices. Returns None when the
-    object has no geometry or no UV map to draw into.
+    object has no geometry or no UV map to draw into. The evaluated mesh's
+    active UV map stands in for a missing *uv_map* only with
+    *fallback_to_active*.
     """
     evaluated = obj.evaluated_get(depsgraph)
     try:
@@ -124,7 +146,7 @@ def _triangle_arrays(obj: bpy.types.Object, uv_map: str,
         if not len(mesh.loop_triangles):
             return None
         layer = mesh.uv_layers.get(uv_map) if uv_map else None
-        if layer is None:
+        if layer is None and fallback_to_active:
             layer = mesh.uv_layers.active
         if layer is None:
             return None
@@ -225,7 +247,11 @@ def build_texel_map(obj: bpy.types.Object, uv_map: str, width: int, height: int,
     arrays = _triangle_arrays(obj, uv_map, depsgraph)
     if arrays is None:
         return None
+    return _draw_texel_map(arrays, width, height, tile, margin)
 
+
+def _draw_texel_map(arrays: dict, width: int, height: int, tile: int, margin: int) -> TexelMap:
+    """Rasterise the triangle soup *arrays* from `_triangle_arrays` into a new map."""
     shader = _texel_shader()
     batch = batch_for_shader(shader, 'TRIS', arrays)
     position = gpu.types.GPUTexture((width, height), format='RGBA32F')
@@ -261,67 +287,181 @@ def build_texel_map(obj: bpy.types.Object, uv_map: str, width: int, height: int,
 
 
 # ── Cache ────────────────────────────────────────────────────────────
+#
+# Maps and depth batches are keyed by the object, the UV map, the world
+# matrix and the surface key (`surface.resolve_key`), and nothing drops
+# them on a geometry update or an undo: a stroke that reports a geometry
+# update, or the undo of a vertex move, finds the entry it had. What no
+# longer matches ages out of the budget. Without a surface key, in Edit
+# Mode, a build is returned and not cached.
 
-_maps: dict[tuple, TexelMap] = {}
+
+class _PositionBatch:
+    """World positions of the triangle soup, for depth passes drawn from a view."""
+
+    __slots__ = ('batch', 'video_memory')
+
+    def __init__(self, batch, vertex_count):
+        self.batch = batch
+        self.video_memory = 12 * vertex_count
+
+
+# ('map', session_uid, uv_map, width, height, tile, margin, matrix, surface key) -> TexelMap
+# ('batch', session_uid, uv_map, matrix, surface key) -> _PositionBatch
+_cache: dict[tuple, TexelMap | _PositionBatch] = {}
 _recent: list[tuple] = []
+# One extraction a map miss and a batch miss for the same surface share
+# within a build: (session_uid, uv_map, fallback, matrix, surface key) and
+# the arrays, dropped on the next timer tick.
+_pending_arrays: tuple[tuple, dict] | None = None
 
 
 def _matrix_key(obj: bpy.types.Object) -> tuple:
     """The world matrix as a hashable key.
 
-    The map stores world positions, so moving the object invalidates it.
-    `on_depsgraph_update_post` normally drops the entry first; this keeps
-    the cache correct even when it does not run.
+    Maps and batches store world positions, so moving the object gives
+    them a new key; the surface key leaves the transform out.
     """
     return tuple(round(value, 6) for row in obj.matrix_world for value in row)
 
 
-def get_texel_map(obj: bpy.types.Object, uv_map: str, size: tuple[int, int],
-                  tile: int = 1001, margin: int = MARGIN) -> TexelMap | None:
-    """The cached map for these arguments, building it on first use."""
-    width, height = size
-    key = (obj.session_uid, uv_map or '', width, height, tile, margin,
-           _matrix_key(obj))
-    cached = _maps.get(key)
+def _cache_uv_map(obj: bpy.types.Object, uv_map: str, fallback_to_active: bool) -> str | None:
+    """The UV map name a cache entry is built with, or None when there is none."""
+    name = resolve_uv_map(obj, uv_map)
+    if name is None and fallback_to_active:
+        active = obj.data.uv_layers.active if hasattr(obj.data, 'uv_layers') else None
+        name = active.name if active is not None else None
+    return name
+
+
+def _arrays(obj: bpy.types.Object, uv_map: str, fallback_to_active: bool,
+            surface_key: bytes | None) -> dict | None:
+    """`_triangle_arrays`, reusing the extraction the other cache just made for this surface."""
+    global _pending_arrays
+    ident = (obj.session_uid, uv_map, fallback_to_active, _matrix_key(obj), surface_key)
+    if _pending_arrays is not None and _pending_arrays[0] == ident:
+        return _pending_arrays[1]
+    arrays = _triangle_arrays(obj, uv_map, bpy.context.evaluated_depsgraph_get(), fallback_to_active)
+    if arrays is not None and surface_key is not None:
+        _pending_arrays = (ident, arrays)
+        if not bpy.app.timers.is_registered(_forget_pending_arrays):
+            bpy.app.timers.register(_forget_pending_arrays, first_interval=0.0)
+    return arrays
+
+
+def _forget_pending_arrays() -> None:
+    global _pending_arrays
+    _pending_arrays = None
+
+
+def _lookup(key: tuple):
+    cached = _cache.get(key)
     if cached is not None:
         _recent.remove(key)
         _recent.append(key)
-        return cached
-    built = build_texel_map(obj, uv_map, width, height, tile, margin)
-    if built is None:
-        return None
-    _maps[key] = built
+    return cached
+
+
+def _store(key: tuple, item) -> None:
+    _cache[key] = item
     _recent.append(key)
     _evict()
+
+
+def get_texel_map(obj: bpy.types.Object, uv_map: str, size: tuple[int, int],
+                  tile: int = 1001, margin: int = MARGIN, *,
+                  fallback_to_active: bool = True) -> TexelMap | None:
+    """The cached map for these arguments, building it on first use.
+
+    *uv_map* '' is the active render UV map. A missing map falls back to
+    the active one only with *fallback_to_active*; a selection drawn on a
+    named map passes False, so it is never placed through another.
+    """
+    if not core.gpu_available():
+        return None
+    name = _cache_uv_map(obj, uv_map, fallback_to_active)
+    if name is None:
+        return None
+    width, height = size
+    surface_key = surface.resolve_key(obj, name)
+    key = ('map', obj.session_uid, name, width, height, tile, margin, _matrix_key(obj), surface_key)
+    cached = _lookup(key) if surface_key is not None else None
+    if cached is not None:
+        return cached
+    arrays = _arrays(obj, name, fallback_to_active, surface_key)
+    if arrays is None:
+        return None
+    built = _draw_texel_map(arrays, width, height, tile, margin)
+    if surface_key is not None:
+        _store(key, built)
     return built
 
 
-def _evict() -> None:
-    """Drop the least recently used maps until the cache fits the budget.
+def get_position_batch(obj: bpy.types.Object, uv_map: str, *,
+                       fallback_to_active: bool = False) -> gpu.types.GPUBatch | None:
+    """The world positions of *obj*'s triangle soup as a `TRIS` batch, cached like the maps.
 
-    The newest map is never dropped, so a single map larger than the whole
-    budget is still usable.
+    One `position` attribute, F32 x3, in the order of the texel map's
+    triangles, for a depth pass with any shader that reads `position`.
+    None when this session cannot draw or the surface has no such UV map.
     """
-    total = sum(item.video_memory for item in _maps.values())
+    if not core.gpu_available():
+        return None
+    name = _cache_uv_map(obj, uv_map, fallback_to_active)
+    if name is None:
+        return None
+    surface_key = surface.resolve_key(obj, name)
+    key = ('batch', obj.session_uid, name, _matrix_key(obj), surface_key)
+    cached = _lookup(key) if surface_key is not None else None
+    if cached is not None:
+        return cached.batch
+    arrays = _arrays(obj, name, fallback_to_active, surface_key)
+    if arrays is None:
+        return None
+    positions = np.ascontiguousarray(arrays["position"], dtype=np.float32)
+    vertex_format = gpu.types.GPUVertFormat()
+    vertex_format.attr_add(id="position", comp_type='F32', len=3, fetch_mode='FLOAT')
+    vertices = gpu.types.GPUVertBuf(vertex_format, len(positions))
+    vertices.attr_fill("position", positions)
+    built = _PositionBatch(gpu.types.GPUBatch(type='TRIS', buf=vertices), len(positions))
+    if surface_key is not None:
+        _store(key, built)
+    return built.batch
+
+
+def _evict() -> None:
+    """Drop the least recently used maps and batches until the cache fits the budget.
+
+    The newest entry is never dropped, so a single map larger than the
+    whole budget is still usable.
+    """
+    total = sum(item.video_memory for item in _cache.values())
     while total > CACHE_BUDGET and len(_recent) > 1:
         key = _recent.pop(0)
-        total -= _maps.pop(key).video_memory
+        total -= _cache.pop(key).video_memory
 
 
 def invalidate(session_uid: int | None = None) -> None:
-    """Drop cached maps: all of them, or only one object's."""
+    """Drop cached maps and batches: all of them, or only one object's."""
+    global _pending_arrays
+    _pending_arrays = None
     if session_uid is None:
-        _maps.clear()
+        _cache.clear()
         _recent.clear()
         return
-    for key in [key for key in _maps if key[0] == session_uid]:
-        del _maps[key]
+    for key in [key for key in _cache if key[1] == session_uid]:
+        del _cache[key]
         _recent.remove(key)
 
 
 def cached_count() -> int:
     """How many maps the cache holds. For the tests."""
-    return len(_maps)
+    return sum(1 for key in _cache if key[0] == 'map')
+
+
+def cached_batch_count() -> int:
+    """How many position batches the cache holds. For the tests."""
+    return sum(1 for key in _cache if key[0] == 'batch')
 
 
 def release() -> None:
@@ -332,5 +472,7 @@ def release() -> None:
     already gone by then and freeing a texture there segfaults Blender.
     """
     global _shader
+    if bpy.app.timers.is_registered(_forget_pending_arrays):
+        bpy.app.timers.unregister(_forget_pending_arrays)
     invalidate()
     _shader = None
