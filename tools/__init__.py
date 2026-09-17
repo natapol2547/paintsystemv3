@@ -10,6 +10,12 @@ with no keymap, so drags stop painting until the user picks another
 tool. `unregister` therefore sets the brush back first, in live windows
 through `wm.tool_set_by_id` and in every workspace by writing the
 Texture Paint tool id.
+
+A written id takes effect when Texture Paint is next entered in that
+workspace. A workspace no window shows that is still in Texture Paint
+is not entered again when it is shown, so it shows the brush without
+its keymap until the user picks a tool or re-enters Texture Paint:
+setting up a tool in a workspace no window shows crashes Blender.
 """
 import logging
 
@@ -36,12 +42,6 @@ def _reset_windows(context, brush: str) -> None:
     window_manager = getattr(context, 'window_manager', None)
     if window_manager is None:
         return
-    current = getattr(context, 'window', None)
-    # An override of another window raises while the context window shows
-    # a temporary screen, such as the Preferences window the add-on is
-    # disabled from. `tool_set_by_id` with a space type needs no area, but
-    # acts on the context window's workspace only.
-    temporary = current is not None and current.screen is not None and current.screen.is_temporary
     for window in window_manager.windows:
         try:
             workspace = window.workspace
@@ -50,10 +50,10 @@ def _reset_windows(context, brush: str) -> None:
                 continue
             if not _ours(workspace.tools.from_space_view3d_mode('PAINT_TEXTURE', create=False)):
                 continue
-            if temporary:
-                if current.workspace == workspace:
-                    bpy.ops.wm.tool_set_by_id(name=brush, space_type='VIEW_3D')
-                continue
+            # Every window through its own 3D view, also while the context
+            # window is the Preferences window the add-on is disabled from.
+            # Only passing a temporary screen itself raises, and a window
+            # with a 3D view never shows one.
             area = next((a for a in window.screen.areas if a.type == 'VIEW_3D'), None)
             if area is None:
                 continue

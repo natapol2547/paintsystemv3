@@ -337,13 +337,17 @@ def run_sections():
     yield from wait_for(lambda: active_tool() == "paint_system.select_box")
     check(active_tool() == "paint_system.select_box", f"the Rectangle Selection tool is active ({active_tool()})")
     low, high = (centre[0] - 80, centre[1] - 60), (centre[0] + 80, centre[1] + 60)
+    # Shift held from the start picks the mode only: the box stays 160 by 120.
+    corners = [(low[0] + 0.5, low[1] + 0.5), (high[0] + 0.5, high[1] + 0.5)]
     expected = []
     for modifiers, mode in (({}, 'REPLACE'), ({"shift": True}, 'ADD'), ({"ctrl": True}, 'SUBTRACT'),
                             ({"shift": True, "ctrl": True}, 'INTERSECT')):
         yield from region_drag(low, high, **modifiers)
         expected.append(('BOX', mode, 'VIEW'))
-        check(ops() == expected and last_operator() == "PAINT_SYSTEM_OT_select_box",
-              f"a drag with {sorted(modifiers) or 'no modifier'} appends a {mode} box ({ops()}, {last_operator()})")
+        points = tree().selection.ops[-1].get_points() if len(tree().selection.ops) else []
+        check(ops() == expected and last_operator() == "PAINT_SYSTEM_OT_select_box" and points == corners,
+              f"a drag with {sorted(modifiers) or 'no modifier'} appends a {mode} box with the dragged corners "
+              f"({ops()}, {last_operator()}, {points})")
     yield from region_drag(centre, centre)
     check(ops() == [] and last_operator() == "PAINT_SYSTEM_OT_select_all",
           f"a click clears the selection through select_all ({ops()}, {last_operator()})")
@@ -676,6 +680,56 @@ def run_sections():
         region = main_region(view3d())
         painted = yield from paints((region.width // 2, region.height // 2))
         check(painted, "a drag paints")
+    finally:
+        tools.register()
+
+    # A second main window shows the Texture Paint workspace with the tool,
+    # and the add-on is disabled from a Preferences window opened from the
+    # first one, which shows another workspace.
+    window().workspace = home
+    yield from wait_for(lambda: window().workspace == home)
+    yield 0.3
+    with override():
+        bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
+        bpy.ops.wm.window_new_main()
+    yield 1.0
+    windows = bpy.context.window_manager.windows
+    second = windows[len(windows) - 1]
+    second.workspace = texture_paint
+    yield from wait_for(lambda: second.workspace == texture_paint)
+    yield 0.5
+    second_area = max((a for a in second.screen.areas if a.type == 'VIEW_3D'), key=lambda a: a.width * a.height)
+    second_region = main_region(second_area)
+    with bpy.context.temp_override(window=second, area=second_area, region=second_region):
+        bpy.ops.wm.tool_set_by_id(name="paint_system.select_box")
+    yield from wait_for(lambda: active_tool(texture_paint) == "paint_system.select_box")
+    with override():
+        bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
+    yield from wait_for(lambda: any(w.screen.is_temporary for w in bpy.context.window_manager.windows))
+    yield 0.5
+    preferences = next(w for w in bpy.context.window_manager.windows if w.screen.is_temporary)
+    with bpy.context.temp_override(window=preferences):
+        tools.unregister()
+    try:
+        with bpy.context.temp_override(window=preferences):
+            bpy.ops.wm.window_close()
+        yield 0.5
+        check(active_tool(texture_paint) == brush,
+              f"disabled from Preferences, the second window gets the brush ({active_tool(texture_paint)})")
+        middle = (second_region.x + second_region.width // 2, second_region.y + second_region.height // 2)
+        # Simulated mouse input reaches no keymap until the window has handled a key event.
+        simulate(second, 'ESC', 'PRESS', *middle)
+        yield
+        simulate(second, 'ESC', 'RELEASE', *middle)
+        yield 0.2
+        # Below the earlier strokes, whose pixels already have the brush colour.
+        before = image_sum()
+        yield from drag(second, (middle[0] - 80, middle[1] + 50), (middle[0] + 80, middle[1] + 60))
+        yield 0.6
+        check(image_sum() != before, "a drag in the second window paints")
+        with bpy.context.temp_override(window=second):
+            bpy.ops.wm.window_close()
+        yield 0.5
     finally:
         tools.register()
 

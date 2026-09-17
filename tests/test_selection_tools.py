@@ -81,18 +81,32 @@ def test_ellipse_outline():
 def test_lasso_append():
     section("lasso points")
     points = [(0.0, 0.0)]
-    check(not shapes.lasso_append(points, (1.0, 1.0), 2.0) and len(points) == 1,
+    check(shapes.lasso_append(points, (1.0, 1.0), 2.0) == 2.0 and len(points) == 1,
           "a point closer than the step is not appended")
-    check(shapes.lasso_append(points, (2.0, 0.0), 2.0) and points[-1] == (2.0, 0.0),
+    check(shapes.lasso_append(points, (2.0, 0.0), 2.0) == 2.0 and points[-1] == (2.0, 0.0),
           "a point at the step is appended")
     points = [(0.0, 0.0)]
     for i in range(1, shapes.LASSO_MAX_POINTS):
         shapes.lasso_append(points, (float(i), 0.0), 1.0)
     check(len(points) == shapes.LASSO_MAX_POINTS, f"up to the limit every point is kept ({len(points)})")
-    shapes.lasso_append(points, (float(shapes.LASSO_MAX_POINTS), 0.0), 1.0)
+    step = shapes.lasso_append(points, (float(shapes.LASSO_MAX_POINTS), 0.0), 1.0)
     check(len(points) <= shapes.LASSO_MAX_POINTS // 2 + 1 and points[0] == (0.0, 0.0)
-          and points[-1] == (float(shapes.LASSO_MAX_POINTS), 0.0),
-          f"past the limit every other point goes, keeping the first and the newest ({len(points)})")
+          and points[-1] == (float(shapes.LASSO_MAX_POINTS), 0.0) and step == 2.0,
+          f"past the limit every other point goes, keeping the first and the newest, and the step doubles "
+          f"({len(points)} points, step {step})")
+
+    # A circle of radius 400 traced twelve times, about 30,000 pixels at
+    # a step of 2: several overflows, each of which must thin the whole
+    # lasso evenly rather than the start again and again.
+    step, points = 2.0, [(400.0, 0.0)]
+    count = 15000
+    for i in range(1, count + 1):
+        angle = 24.0 * math.pi * i / count
+        step = shapes.lasso_append(points, (400.0 * math.cos(angle), 400.0 * math.sin(angle)), step)
+    gaps = [math.dist(a, b) for a, b in zip(points, points[1:])]
+    check(step >= 8.0 and max(gaps) <= 2.0 * step + 1.0 and len(points) <= shapes.LASSO_MAX_POINTS,
+          f"after {int(math.log2(step / 2.0))} overflows no gap is longer than twice the step "
+          f"(largest {max(gaps):.1f} px at the start {max(gaps[:50]):.1f} px, step {step})")
 
 
 def test_degenerate():

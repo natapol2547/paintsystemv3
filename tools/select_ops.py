@@ -85,8 +85,7 @@ class _ShapeSelect:
         self._start = (event.mouse_prev_press_x - region.x + 0.5, event.mouse_prev_press_y - region.y + 0.5)
         self._end = (event.mouse_region_x + 0.5, event.mouse_region_y + 0.5)
         self._path = [self._start]
-        self._step = LASSO_STEP * context.preferences.system.ui_scale
-        shapes.lasso_append(self._path, self._end, self._step)
+        self._step = shapes.lasso_append(self._path, self._end, LASSO_STEP * context.preferences.system.ui_scale)
         self._shift_armed = not event.shift
         self._alt_armed = not event.alt
         self._square = self._centre = False
@@ -125,7 +124,7 @@ class _ShapeSelect:
             self._end = (event.mouse_region_x + 0.5, event.mouse_region_y + 0.5)
             changed = True
             if self.kind == 'LASSO':
-                shapes.lasso_append(self._path, self._end, self._step)
+                self._step = shapes.lasso_append(self._path, self._end, self._step)
         if event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
             self._preview.remove()
             return self._commit(context)

@@ -6,7 +6,7 @@ Screen y points up, as in `Event.mouse_region_y`.
 import math
 
 LASSO_MAX_POINTS = 4096
-"""Points a lasso keeps while it is drawn; past it every other point is dropped."""
+"""Points a lasso keeps while it is drawn; past it every other point is dropped and the step doubles."""
 
 
 def box_corners(start, end, square: bool, centre: bool) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -40,23 +40,26 @@ def ellipse_outline(low, high, segments: int = 64) -> list[tuple[float, float]]:
             for i in range(segments)]
 
 
-def lasso_append(points: list, point, step: float) -> bool:
-    """Append *point* to a lasso when it is at least *step* from the last point; whether it was.
+def lasso_append(points: list, point, step: float) -> float:
+    """Append *point* to a lasso when it is at least *step* from the last point; the step for the next one.
 
     Past `LASSO_MAX_POINTS` every other point is dropped, keeping the
     first and the one just appended, so a long drag stays cheap to draw
-    and to rasterise at a coarser spacing.
+    and to rasterise at a coarser spacing. The returned step is then
+    doubled, so later points are spaced like the kept ones and the start
+    of the lasso is not thinned again on every later overflow.
     """
     point = (float(point[0]), float(point[1]))
     if points and math.hypot(point[0] - points[-1][0], point[1] - points[-1][1]) < step:
-        return False
+        return step
     points.append(point)
     if len(points) > LASSO_MAX_POINTS:
         kept = points[::2]
         if kept[-1] != point:
             kept.append(point)
         points[:] = kept
-    return True
+        return step * 2.0
+    return step
 
 
 def degenerate(kind: str, points) -> bool:
