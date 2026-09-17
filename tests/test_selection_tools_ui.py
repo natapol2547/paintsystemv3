@@ -736,8 +736,12 @@ def run_sections():
     try:
         with bpy.context.temp_override(window=preferences):
             bpy.ops.wm.window_close()
-        yield from wait_for(lambda: active_tool(texture_paint) == brush)
-        check(active_tool(texture_paint) == brush,
+        # Unregistering has already set the brush and the close is immediate,
+        # so neither can be waited on; let the window loop handle the close
+        # before input is simulated.
+        yield 0.5
+        check(active_tool(texture_paint) == brush
+              and not any(w.screen.is_temporary for w in bpy.context.window_manager.windows),
               f"disabled from Preferences, the second window gets the brush ({active_tool(texture_paint)})")
         middle = (second_region.x + second_region.width // 2, second_region.y + second_region.height // 2)
         # Simulated mouse input reaches no keymap until the window has handled a key event.
