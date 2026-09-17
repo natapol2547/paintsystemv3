@@ -58,6 +58,11 @@ them keep the position they had.
 The compiler never writes back into the document beyond the normalize
 repairs, so a nested compile request only needs a re-entrancy flag.
 
+Setting `PS_PROFILE=1` in the environment makes `compiler/profile.py` log
+how long each phase took (`normalize`, `build_ir`, `fingerprint`, `apply`,
+and the builder's `upsert`, `links` and `arrange` inside it). Unset, a
+phase is one call into a shared no-op, so the switch costs nothing.
+
 ## Layer stack (`nodetree/stack_ops.py`)
 
 The stack is the graph; there is no parent or order property. The top

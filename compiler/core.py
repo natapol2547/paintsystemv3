@@ -17,6 +17,7 @@ from typing import Any, Iterable
 import bpy
 
 from .ir import IR, Ref, SocketId, hash_payload, _serialize
+from .profile import phase
 from ..nodes.builder import BuildStats
 from ..nodetree.stack_ops import (alpha_partner, feeding_link, feeds_clip_run, link_index,
                                   paired_color_input)
@@ -399,12 +400,17 @@ def artifact_fingerprint(tree) -> str:
 def compile_tree(tree, *, force: bool = False) -> str:
     """Bring ``tree.compiled`` up to date. Returns the IR fingerprint."""
     global last_build_stats
-    normalize_tree(tree)
-    ir = build_ir(tree)
-    fingerprint = ir.fingerprint()
+    with phase("normalize", tree):
+        normalize_tree(tree)
+    with phase("build_ir", tree):
+        ir = build_ir(tree)
+    with phase("fingerprint", tree):
+        fingerprint = ir.fingerprint()
     artifact = ensure_artifact(tree)
     if force or artifact.get(ARTIFACT_FINGERPRINT_KEY) != fingerprint:
-        last_build_stats = ir.apply(artifact)
+        with phase("apply", tree) as timing:
+            last_build_stats = ir.apply(artifact)
+            timing.detail(last_build_stats)
         artifact[ARTIFACT_FINGERPRINT_KEY] = fingerprint
     else:
         last_build_stats = None

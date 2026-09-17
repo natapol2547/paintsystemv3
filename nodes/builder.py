@@ -273,48 +273,56 @@ class NodeTreeBuilder:
     # ── Build ────────────────────────────────────────────────────────
 
     def build(self, *, arrange: bool = True) -> None:
-        # Sync node tree interface sockets
-        self._sync_interface_sockets()
+        # Imported per build, not at module level: the compiler package imports
+        # this module, so importing it back from the top would fail whenever
+        # the builder is imported first. A build is one import lookup.
+        from ..compiler.profile import phase
 
-        desired_ids = set(self._node_instructions.keys())
+        with phase("upsert", self.node_tree):
+            # Sync node tree interface sockets
+            self._sync_interface_sockets()
 
-        # Remove excess nodes (auto-removes their links)
-        for identifier in list(self._existing_nodes.keys()):
-            if identifier not in desired_ids:
-                self.node_tree.nodes.remove(
-                    self._existing_nodes.pop(identifier))
+            desired_ids = set(self._node_instructions.keys())
 
-        # Upsert nodes and apply properties / socket values
-        for identifier, instr in self._node_instructions.items():
-            node = self._existing_nodes.get(identifier)
+            # Remove excess nodes (auto-removes their links)
+            for identifier in list(self._existing_nodes.keys()):
+                if identifier not in desired_ids:
+                    self.node_tree.nodes.remove(
+                        self._existing_nodes.pop(identifier))
 
-            if node is not None and node.bl_idname != instr.bl_idname:
-                self.node_tree.nodes.remove(node)
-                node = None
+            # Upsert nodes and apply properties / socket values
+            for identifier, instr in self._node_instructions.items():
+                node = self._existing_nodes.get(identifier)
 
-            is_new = node is None
-            if is_new:
-                node = self.node_tree.nodes.new(instr.bl_idname)
-                node[IDENTIFIER_KEY] = identifier
-                self._existing_nodes[identifier] = node
-                self._newly_created.add(identifier)
-                self.stats.nodes_created += 1
+                if node is not None and node.bl_idname != instr.bl_idname:
+                    self.node_tree.nodes.remove(node)
+                    node = None
 
-            self._apply_node_properties(node, instr.properties, is_new)
-            self._apply_socket_properties(node.inputs, instr.inputs, is_new)
-            self._apply_socket_properties(node.outputs, instr.outputs, is_new)
+                is_new = node is None
+                if is_new:
+                    node = self.node_tree.nodes.new(instr.bl_idname)
+                    node[IDENTIFIER_KEY] = identifier
+                    self._existing_nodes[identifier] = node
+                    self._newly_created.add(identifier)
+                    self.stats.nodes_created += 1
 
-            for attr_name, props in instr.specials.items():
-                sub_obj = getattr(node, attr_name, None)
-                if sub_obj is not None:
-                    self._apply_props_recursive(sub_obj, props, is_new)
-                else:
-                    log.warning("special %s not found on node %s", attr_name, node.name)
+                self._apply_node_properties(node, instr.properties, is_new)
+                self._apply_socket_properties(node.inputs, instr.inputs, is_new)
+                self._apply_socket_properties(node.outputs, instr.outputs, is_new)
 
-        self._sync_links()
+                for attr_name, props in instr.specials.items():
+                    sub_obj = getattr(node, attr_name, None)
+                    if sub_obj is not None:
+                        self._apply_props_recursive(sub_obj, props, is_new)
+                    else:
+                        log.warning("special %s not found on node %s", attr_name, node.name)
+
+        with phase("links", self.node_tree):
+            self._sync_links()
 
         if arrange:
-            self.arrange_nodes()
+            with phase("arrange", self.node_tree):
+                self.arrange_nodes()
 
     # ── Link sync ────────────────────────────────────────────────────
 
