@@ -262,6 +262,18 @@ SURFACE = [
     rna_prop("Object", "matrix_world"),
     rna_prop("ViewLayer", "objects"),
     rna_prop("Object", "mode"),
+    # Selection tools in the 3D view (PS-093); event_simulate is for the tests only.
+    attr("bpy.utils.unregister_tool"),
+    rna_prop("WorkSpaceTool", "idname"),
+    rna_prop("WorkSpace", "tools"),
+    rna_func("wmTools", "from_space_view3d_mode"),
+    rna_func("WindowManager", "event_timer_add"),
+    rna_func("WindowManager", "event_timer_remove"),
+    rna_prop("Event", "mouse_prev_press_x"),
+    rna_func("Window", "event_simulate"),
+    op("wm.tool_set_by_id"),
+    op("ed.undo_redo"),
+    rna_prop("Screen", "is_temporary"),
 ]
 
 

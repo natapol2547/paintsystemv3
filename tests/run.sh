@@ -9,7 +9,8 @@
 # every file in ui_tests windowed after the headless loop. That list also
 # holds GPU tests that run headless: Blender 5.2's gpu.init() gives a
 # background session a GPU context, but 4.2 to 5.1 have none, so there
-# they only have coverage under --ui.
+# they only have coverage under --ui. Files in event_simulate also get
+# --enable-event-simulate, which makes Blender ignore real input.
 #
 # BLENDER  path to the Blender executable (default: local 5.2 LTS install)
 # XVFB=1   force the windowed tests through xvfb-run even when DISPLAY is set
@@ -40,6 +41,11 @@ ui_tests=(
     test_selection_overlay_ui.py
     test_selection_view_raster.py
     test_selection_view_windowed.py
+    test_selection_tools_ui.py
+)
+# Windowed with --enable-event-simulate: real input is ignored while they run.
+event_simulate=(
+    test_selection_tools_ui.py
 )
 
 BLENDER="${BLENDER:-/home/tawan/Desktop/Blender Launcher/stable/blender-5.2.1-lts.9e2066aef7ef/blender}"
@@ -73,14 +79,16 @@ done
 if [ "$run_ui" = 1 ]; then
     for name in "${ui_tests[@]}"; do
         echo "### $name (windowed)"
-        cmd=("$BLENDER" --factory-startup --python-exit-code 1 --python "$HERE/$name")
+        extra_args=()
+        [[ " ${event_simulate[*]} " == *" $name "* ]] && extra_args=(--enable-event-simulate)
+        cmd=("$BLENDER" --factory-startup "${extra_args[@]}" --python-exit-code 1 --python "$HERE/$name")
         if [ "${XVFB:-0}" = 1 ] || [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
             if command -v xvfb-run >/dev/null; then
                 # Headless X server with Mesa's software renderer; force the
                 # OpenGL backend since Vulkan has no software device there.
                 cmd=(env LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1920x1080x24"
-                     "$BLENDER" --factory-startup --gpu-backend opengl --python-exit-code 1
-                     --python "$HERE/$name")
+                     "$BLENDER" --factory-startup --gpu-backend opengl "${extra_args[@]}"
+                     --python-exit-code 1 --python "$HERE/$name")
             else
                 echo "no display and no xvfb-run; skipping $name"
                 cmd=()
