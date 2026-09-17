@@ -342,6 +342,40 @@ def test_read_back_and_state():
           f"all within 1e-4 of a half step ({int(boundary.sum())} such texels)")
 
 
+def test_is_empty():
+    section("a mask with no texel at 0.5 / 255 or more is empty")
+    if not available():
+        return
+    raster.invalidate()
+    sel = fresh_selection()
+    sel.add_op('ALL')
+    check(raster.get_mask(sel, size=(64, 64)).is_empty() is False, "ALL is not empty")
+    # The widest soft edge, its inner side 502 texels past the last column:
+    # coverage there is about 3e-4, which rounds to 0 as 8 bits.
+    sel.add_op('BOX', points=[(565.5 / 64, -1.0), (600.0 / 64, 2.0)], feather=raster.FEATHER_MAX)
+    mask = raster.get_mask(sel, size=(64, 64))
+    values = mask.read()
+    reads = []
+    read_bytes = raster.SelectionMask.read_bytes
+
+    def counting(self):
+        reads.append(self.key)
+        return read_bytes(self)
+
+    raster.SelectionMask.read_bytes = counting
+    try:
+        empty = [mask.is_empty(), mask.is_empty()]
+    finally:
+        raster.SelectionMask.read_bytes = read_bytes
+    check(0.0 < float(values.max()) < 0.5 / 255 and empty == [True, True] and len(reads) == 1,
+          f"a box whose coverage peaks at {float(values.max()):.1e} is empty, read back once ({len(reads)} reads)")
+    sel.clear()
+    sel.add_op('BOX', points=[(0.2, 0.2), (0.21, 0.21)], feather=0.0, antialias=True)
+    mask = raster.get_mask(sel, size=(64, 64))
+    mask.read_bytes()
+    check(mask._empty is False and mask.is_empty() is False, "read_bytes remembers a mask that selects texels")
+
+
 def test_set_operations():
     section("modes combine as the soft set operations")
     if not available():
@@ -564,6 +598,39 @@ def test_degenerate_shapes():
     wide = raster.render([raster.OpSpec('ELLIPSE', points=[(0.2, 0.2), (0.8, 0.8)], feather=5000.0)], 256, 256)
     clamped = raster.render([raster.OpSpec('ELLIPSE', points=[(0.2, 0.2), (0.8, 0.8)], feather=1024.0)], 256, 256)
     check(np.array_equal(wide, clamped), "a feather over 1024 draws as 1024")
+
+
+def test_distance_variants():
+    section("the distance variants write the clamped signed distance")
+    if not available():
+        return
+    width, height = 96, 80
+    target = gpu.types.GPUTexture((width, height), format='R32F')
+    cases = (
+        ("feathered box", dict(kind='BOX', points=[(12.3, -20.0), (70.6, 51.2)]), 6.5),
+        ("box past the target", dict(kind='BOX', points=[(-300.0, 10.7), (40.2, 500.0)]), 2.0),
+        ("ellipse", dict(kind='ELLIPSE', points=[(20.4, 8.1), (88.9, 71.3)]), 3.0),
+        ("feathered lasso", dict(kind='LASSO', points=[(x * width, y * height) for x, y
+                                                       in reference.star(80, 0.5, 0.5, 0.45, 0.25, 5)]), 9.0),
+        ("self-intersecting lasso", dict(kind='LASSO', points=[(x * width, y * height) for x, y
+                                                               in reference.pentagram(0.5, 0.5, 0.4)]), 1.5),
+        ("flat box", dict(kind='BOX', points=[(10.0, 10.0), (10.0, 60.0)]), 2.5),
+    )
+    buffer = gpu.types.Buffer('FLOAT', width * height)
+    for label, op, reach in cases:
+        with raster._State():
+            raster._run_distance_pass(spec(op), target, width, height, reach)
+        framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
+        with framebuffer.bind():
+            framebuffer.read_color(0, 0, width, height, 1, 0, 'FLOAT', data=buffer)
+        got = np.frombuffer(buffer, dtype=np.float32).reshape(height, width)
+        uv = dict(kind=op['kind'], points=[(x / width, y / height) for x, y in op['points']])
+        found = reference.outline_distance(uv, width, height)
+        want = np.full((height, width), -reach) if found is None else np.clip(found[0], -reach, reach)
+        error = worst(got, want)
+        check(error <= 1e-4 and float(np.abs(got).max()) <= reach,
+              f"{label}: within 1e-4 of the reference, clamped to {reach} (worst {error:.2e})")
+    target = None
 
 
 def test_bands():
@@ -792,11 +859,19 @@ def test_problems():
     sel.add_op('BOX', 'SUBTRACT', space='VIEW', points=[(0.1, 0.1), (0.4, 0.4)])
     try:
         raster.get_mask(sel, size=SIZE)
-        check(False, "a VIEW box raises UNSUPPORTED")
+        check(False, "a VIEW box without an object raises SURFACE")
     except raster.MaskUnavailable as error:
-        check(error.reason == 'UNSUPPORTED' and error.op_index == 1
-              and str(error) == "Selections drawn in the 3D view cannot be built yet",
-              f"a VIEW box raises UNSUPPORTED at op 1 and a VIEW ALL does not ({error.op_index})")
+        check(error.reason == 'SURFACE' and error.op_index == 1 and str(error) == raster.MESSAGES['SURFACE'],
+              f"a VIEW box without an object raises SURFACE at op 1 and a VIEW ALL does not "
+              f"({error.reason}, {error.op_index})")
+    check(raster.MESSAGES['VIEW'] == "This selection's view is invalid"
+          and raster.GEOMETRY_REASONS == {'SURFACE', 'VIEW', 'EDIT_MODE'},
+          "VIEW has its own message, and the reasons that depend on objects are listed")
+    sel = fresh_selection()
+    sel.add_op('ALL')
+    sel.add_op('RASTER', 'SUBTRACT')
+    check(raster.availability(sel, size=SIZE) == "Selections with a raster operation cannot be built yet",
+          f"RASTER is still unsupported: {raster.availability(sel, size=SIZE)!r}")
 
     message = "A selection operation has malformed points"
     for label, points in (("a list of pairs", [(0.1, 0.1), (0.5, 0.2), (0.3, 0.6)]),
@@ -1054,10 +1129,12 @@ for test in (test_availability,
              test_self_test_failure,
              test_feathered_box,
              test_read_back_and_state,
+             test_is_empty,
              test_set_operations,
              test_hard_lasso_is_exact,
              test_precision,
              test_degenerate_shapes,
+             test_distance_variants,
              test_bands,
              test_udim_tiles,
              test_cache,
