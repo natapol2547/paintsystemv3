@@ -279,6 +279,11 @@ BLENDER=/path/to/blender tests/run.sh   # another Blender build
 operator the addon depends on still exists, and `test_ui_draw.py` draws
 every panel in a real window (Xvfb on CI) and fails on draw exceptions;
 it also checks the selection triggers that only a window loop runs.
+`test_parity.py` walks a 40-layer tree of images, solids, folders and clip
+runs through a long edit sequence and checks after every step that the
+incrementally patched artifact holds what a compile from scratch would
+have produced, that its fingerprint is the current one, and that an
+unchanged recompile changes nothing (PS-081).
 The Epic J tests cover the texel map (`test_texel_map.py`), pixel undo
 (`test_pixel_undo.py`) and the selection: `test_selection_model.py`,
 `test_selection_outline.py` and `test_selection_raster.py` for the ops
