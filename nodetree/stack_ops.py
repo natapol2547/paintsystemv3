@@ -22,6 +22,7 @@ Callers batch edits in ``suspend_compile`` so the tree compiles once.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 
 import bpy
@@ -33,6 +34,93 @@ LAYER_SOCKET_PAIRS = {'Color': 'Alpha', 'Content Color': 'Content Alpha'}
 
 COLUMN_WIDTH = 260
 ROW_HEIGHT = 320
+
+
+# ── Link index ───────────────────────────────────────────────────────
+#
+# ``NodeSocket.links`` is a Python property that scans every link of the
+# tree, so a walk down the stack costs O(layers * links). ``link_index``
+# maps a tree's links by socket in one pass and keeps that map for the
+# length of a read-only walk; ``socket_links`` reads it.
+#
+# Indexes are keyed by tree pointer, so a nested compile of a child tree
+# cannot clobber the one a parent build installed, and any tree without one
+# falls back to ``NodeSocket.links``. An index must never survive a link
+# edit: a block that edits calls ``invalidate`` before its first change.
+
+_link_indexes: dict[int, dict[int, tuple]] = {}
+
+# Reads that found no index and scanned the tree instead. The compile walks
+# are meant to be fully indexed, so a test can assert this stays at zero
+# across them. The increment sits on a path that already costs O(links), so
+# there is nothing to gain from making it conditional.
+unindexed_reads = 0
+
+
+def socket_links(socket) -> tuple:
+    """The links touching *socket*, from the installed index when there is one."""
+    global unindexed_reads
+    if _link_indexes:
+        index = _link_indexes.get(socket.id_data.as_pointer())
+        if index is not None:
+            return index.get(socket.as_pointer(), ())
+    unindexed_reads += 1
+    return socket.links
+
+
+def _build_link_index(tree) -> dict[int, tuple]:
+    """Every socket pointer of *tree* mapped to its links, in ``NodeSocket.links`` order.
+
+    That property walks ``tree.links`` in order and then, for an input,
+    sorts by ``multi_input_sort_id`` descending. Python's sort is stable, so
+    links sharing an id keep tree order; sorting the inputs here matches it.
+    Muted and invalid links go in, exactly as the property returns them:
+    ``feeding_link`` does its own filtering and ``consumer_slot`` does not.
+    """
+    by_socket: defaultdict[int, list] = defaultdict(list)
+    inputs: set[int] = set()
+    for link in tree.links:
+        by_socket[link.from_socket.as_pointer()].append(link)
+        key = link.to_socket.as_pointer()
+        by_socket[key].append(link)
+        inputs.add(key)
+    for key in inputs:
+        entry = by_socket[key]
+        if len(entry) > 1:
+            entry.sort(key=lambda link: link.multi_input_sort_id, reverse=True)
+    return {key: tuple(entry) for key, entry in by_socket.items()}
+
+
+class link_index:
+    """Read *tree*'s links from an index inside the ``with`` block.
+
+    Nested blocks on the same tree share the outermost one's index. Only
+    read-only walks may install one; a block that goes on to edit links
+    calls ``invalidate`` first, which drops the index for the enclosing
+    blocks as well and sends their reads back to ``NodeSocket.links``.
+    """
+
+    def __init__(self, tree):
+        self.tree = tree
+        self.key = tree.as_pointer()
+        self._owner = False
+
+    def __enter__(self) -> link_index:
+        if self.key not in _link_indexes:
+            _link_indexes[self.key] = _build_link_index(self.tree)
+            self._owner = True
+        return self
+
+    def invalidate(self) -> None:
+        """Drop the index because the tree's links are about to change."""
+        _link_indexes.pop(self.key, None)
+        self._owner = False
+
+    def __exit__(self, *exc) -> bool:
+        if self._owner:
+            _link_indexes.pop(self.key, None)
+            self._owner = False
+        return False
 
 
 @dataclass(eq=False)
@@ -79,7 +167,7 @@ def feeding_link(socket) -> bpy.types.NodeLink | None:
     reads as invalid there. The walks guard against the cycles validation
     would flag.
     """
-    for link in socket.links:
+    for link in socket_links(socket):
         if not link.is_muted:
             return link
     return None
@@ -105,7 +193,7 @@ def below_slot(node):
 
 def consumer_slot(node):
     """The slot *node*'s ``Color`` output feeds, or None."""
-    for link in node.outputs['Color'].links:
+    for link in socket_links(node.outputs['Color']):
         partner = alpha_partner(link.to_node, link.to_socket.name)
         return link.to_socket, link.to_node.inputs.get(partner) if partner else None
     return None
@@ -140,7 +228,8 @@ def stack(tree, channel_name: str) -> list[StackItem]:
             if is_folder(node):
                 walk(node.inputs['Content Color'], level + 1, item)
 
-    walk(slot[0], 0, None)
+    with link_index(tree):
+        walk(slot[0], 0, None)
     return items
 
 
@@ -155,7 +244,8 @@ def descendants(folder) -> list[bpy.types.Node]:
             if is_folder(child):
                 walk(child)
 
-    walk(folder)
+    with link_index(folder.id_data):
+        walk(folder)
     return found
 
 
@@ -178,7 +268,7 @@ def layer_below(node):
 
 def layer_above(node):
     """The layer compositing over *node* within its folder or channel, or None."""
-    for link in node.outputs['Color'].links:
+    for link in socket_links(node.outputs['Color']):
         consumer = link.to_node
         if (is_layer(consumer) and link.to_socket.name == 'Color'
                 and feeding_link(link.to_socket) == link):
@@ -395,30 +485,34 @@ def move(tree, channel_name: str, node, direction: str, action: str) -> bool:
 def repair_alpha_links(tree) -> int:
     """Make every slot's alpha input follow its colour input. Returns the number of fixes."""
     fixes = 0
-    for node in tree.nodes:
-        for color_in in node.inputs:
-            partner = alpha_partner(node, color_in.name)
-            alpha_in = node.inputs.get(partner) if partner else None
-            if alpha_in is None:
-                continue
-            link = feeding_link(color_in)
-            if link is None:
-                expected = None
-            else:
-                source_partner = alpha_partner(link.from_node, link.from_socket.name)
-                expected = link.from_node.outputs.get(source_partner) if source_partner else None
-                if expected is None:
+    # The scan reads through an index; the first fix edits links and drops it.
+    index = link_index(tree)
+    with index:
+        for node in tree.nodes:
+            for color_in in node.inputs:
+                partner = alpha_partner(node, color_in.name)
+                alpha_in = node.inputs.get(partner) if partner else None
+                if alpha_in is None:
                     continue
-            current = feeding_link(alpha_in)
-            if current is not None and expected is not None and current.from_socket == expected:
-                continue
-            if current is None and expected is None:
-                continue
-            for stale in list(alpha_in.links):
-                tree.links.remove(stale)
-            if expected is not None:
-                tree.links.new(expected, alpha_in)
-            fixes += 1
+                link = feeding_link(color_in)
+                if link is None:
+                    expected = None
+                else:
+                    source_partner = alpha_partner(link.from_node, link.from_socket.name)
+                    expected = link.from_node.outputs.get(source_partner) if source_partner else None
+                    if expected is None:
+                        continue
+                current = feeding_link(alpha_in)
+                if current is not None and expected is not None and current.from_socket == expected:
+                    continue
+                if current is None and expected is None:
+                    continue
+                index.invalidate()
+                for stale in list(alpha_in.links):
+                    tree.links.remove(stale)
+                if expected is not None:
+                    tree.links.new(expected, alpha_in)
+                fixes += 1
     return fixes
 
 

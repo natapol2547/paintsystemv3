@@ -17,7 +17,8 @@ from typing import Any, Iterable
 import bpy
 
 from .ir import IR, Ref, SocketId, hash_payload, _serialize
-from ..nodetree.stack_ops import alpha_partner, feeding_link, feeds_clip_run, paired_color_input
+from ..nodetree.stack_ops import (alpha_partner, feeding_link, feeds_clip_run, link_index,
+                                  paired_color_input)
 from ..props.channel import channel_socket_specs
 
 log = logging.getLogger(__name__)
@@ -296,6 +297,13 @@ def topological_order(start, ctx: CompileContext) -> list:
 
 
 def build_ir(tree, *, bake_target=None) -> IR:
+    # The build only reads *tree*'s links, so one index serves the whole walk.
+    # A nested compile of a child tree installs its own, under its own key.
+    with link_index(tree):
+        return _build_ir(tree, bake_target=bake_target)
+
+
+def _build_ir(tree, *, bake_target=None) -> IR:
     ir = IR()
     ir.meta['tree'] = tree.name
     ctx = CompileContext(tree, ir, bake_target=bake_target)
