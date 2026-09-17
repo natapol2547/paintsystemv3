@@ -178,6 +178,7 @@ groups and templates (040-042), colour history (062).
 | [PS-064](tickets/PS-064-empty-object-gizmos.md) | Empty object gizmos and the Paint System collection | M | – |
 | [PS-065](tickets/PS-065-projection-view-ops.md) | Projection view operators | S | 008 |
 | [PS-066](tickets/PS-066-multi-material-operator-base.md) | Multi-object and multi-material operator base | S | 030 |
+| [PS-067](tickets/PS-067-eraser-brush.md) | Eraser brush in the sidebar (deferred) | S | 033 |
 
 ## Epic H. Versioning
 
@@ -253,6 +254,10 @@ data structures or algorithms are ported.
   tools with clipping there. Nice to have and not scheduled; split out of
   PS-093 on 2026-09-17, once Rectangle, Ellipse and Lasso Selection were
   built in the 3D view.
+- Eraser brush in the sidebar (PS-067), for artists who do not know to
+  set a brush to Erase Alpha. Nice to have and not scheduled. The user
+  creates the brush and puts it in the library `.blend`; ask them to do
+  that before the ticket is started.
 
 ## Not ported
 
