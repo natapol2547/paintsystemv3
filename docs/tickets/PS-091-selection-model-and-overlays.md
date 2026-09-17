@@ -353,10 +353,11 @@ material and never recompiles a shader.
 
 - Both editors draw marching ants along the selection's outline, plus a
   wash inside it when "Tint Opacity" is above 0 (off by default, since
-  any tint hides the true colour of what is being painted). The ants are found from mask samples one screen pixel to either
-  side and dashed along the screen axis closest to the outline's
-  tangent. `overlay_shader.ANT_GLSL` holds the dash math, so PS-093's
-  drag preview can crawl in step with the committed ants
+  any tint hides the true colour of what is being painted). The ants
+  are found from mask samples one screen pixel to either side and
+  dashed along the screen axis closest to the outline's tangent.
+  `overlay_shader.ANT_GLSL` holds the dash math, so PS-093's drag
+  preview can crawl in step with the committed ants
   (`overlay.ant_style(context)`). Every read is a `texelFetch`, because
   linear filtering of float textures is an optional device feature on
   Vulkan and Metal, and the push constants fit the 128 bytes Vulkan
