@@ -95,29 +95,6 @@ SOCKET_HEIGHT = 22.0  # approximate per-socket row height in px
 DEFAULT_NODE_WIDTH = 140.0
 
 
-def _set_loc(node: bpy.types.Node, axis: int, value: float) -> None:
-    """Put one component of *node*'s location at *value*, if it is not there.
-
-    Layout assigns a position to every node it visits, and most of those
-    positions are the ones the node already has. A location write tags the
-    tree and the materials using it like any other RNA write does, so a
-    redundant one costs as much as a real move.
-    """
-    location = node.location
-    if location[axis] != _as_float32(value):
-        location[axis] = value
-
-
-def _shift_loc(node: bpy.types.Node, axis: int, delta: float) -> None:
-    """Move one component of *node*'s location by *delta*, if that moves it."""
-    if not delta:
-        return
-    location = node.location
-    current = location[axis]
-    if _as_float32(current + delta) != current:
-        location[axis] = current + delta
-
-
 @dataclass
 class Flexible:
     """Wrap a value to apply it only when the node/socket is first created."""
@@ -176,6 +153,8 @@ class NodeTreeBuilder:
             tuple[int, bool],
             tuple[list[bpy.types.NodeSocket], dict[str, bpy.types.NodeSocket]],
         ] = {}
+        # node pointer -> the node's box. See _node_bbox.
+        self._bbox_cache: dict[int, tuple[float, float, float, float]] = {}
         self.stats = BuildStats()
         self._hydrate_existing_nodes()
 
@@ -693,15 +672,51 @@ class NodeTreeBuilder:
                   or DEFAULT_NODE_WIDTH)
         return w if w > 0 else DEFAULT_NODE_WIDTH
 
+    def _set_loc(self, node: bpy.types.Node, axis: int, value: float) -> None:
+        """Put one component of *node*'s location at *value*, if it is not there.
+
+        Layout assigns a position to every node it visits, and most of those
+        positions are the ones the node already has. A location write tags the
+        tree and the materials using it like any other RNA write does, so a
+        redundant one costs as much as a real move.
+        """
+        location = node.location
+        if location[axis] != _as_float32(value):
+            location[axis] = value
+            self._bbox_cache.pop(node.as_pointer(), None)
+
+    def _shift_loc(self, node: bpy.types.Node, axis: int, delta: float) -> None:
+        """Move one component of *node*'s location by *delta*, if that moves it."""
+        if not delta:
+            return
+        location = node.location
+        current = location[axis]
+        if _as_float32(current + delta) != current:
+            location[axis] = current + delta
+            self._bbox_cache.pop(node.as_pointer(), None)
+
     def _node_bbox(
         self, node: bpy.types.Node,
     ) -> tuple[float, float, float, float]:
-        """Return (left, top, right, bottom). Y grows upward, so bottom < top."""
+        """Return (left, top, right, bottom). Y grows upward, so bottom < top.
+
+        Overlap resolution reads the same boxes many times per build and moves
+        few of the nodes it compares, while each box costs four RNA reads. The
+        answers are cached for the length of the build and dropped per node by
+        the two writers above, which are the only things that can move a node
+        while a build is running.
+        """
+        key = node.as_pointer()
+        box = self._bbox_cache.get(key)
+        if box is not None:
+            return box
         left = float(node.location.x)
         top = float(node.location.y)
         width = self._node_width(node)
         height = self._node_height(node)
-        return (left, top, left + width, top - height)
+        box = (left, top, left + width, top - height)
+        self._bbox_cache[key] = box
+        return box
 
     def _socket_y(
         self, node: bpy.types.Node, socket_idx: int, is_input: bool,
@@ -846,7 +861,7 @@ class NodeTreeBuilder:
 
         for nid, d in depths.items():
             node = self._existing_nodes[nid]
-            _set_loc(node, 0, col_right_x[d] - self._node_width(node))
+            self._set_loc(node, 0, col_right_x[d] - self._node_width(node))
 
         y_cursor = 0.0
         for component in components:
@@ -907,7 +922,7 @@ class NodeTreeBuilder:
             if not overlap:
                 break
         bottom = top - height
-        _set_loc(node, 1, top)
+        self._set_loc(node, 1, top)
         column_occupied[depth].append((top, bottom))
         return top
 
@@ -1172,7 +1187,7 @@ class NodeTreeBuilder:
             for nid in col_members:
                 node = self._existing_nodes[nid]
                 # X: left-align inside the column slot
-                _set_loc(node, 0, col_x[k])
+                self._set_loc(node, 0, col_x[k])
                 # Y: align to immediate neighbor on the anchor side
                 target_top = self._neighbor_aligned_y(nid, meta, up_id)
 
@@ -1189,7 +1204,7 @@ class NodeTreeBuilder:
                             break
                     if not hit:
                         break
-                _set_loc(node, 1, target_top)
+                self._set_loc(node, 1, target_top)
                 column_intervals[k].append((target_top, target_top - height))
                 all_placed_members.append(nid)
 
@@ -1272,10 +1287,10 @@ class NodeTreeBuilder:
 
         if len(up_cluster) <= len(down_cluster):
             for nid in up_cluster:
-                _shift_loc(self._existing_nodes[nid], 0, -deficit)
+                self._shift_loc(self._existing_nodes[nid], 0, -deficit)
         else:
             for nid in down_cluster:
-                _shift_loc(self._existing_nodes[nid], 0, deficit)
+                self._shift_loc(self._existing_nodes[nid], 0, deficit)
 
     def _reachable(
         self,
@@ -1323,26 +1338,28 @@ class NodeTreeBuilder:
         if down_id is not None:
             excluded.add(down_id)
 
-        def _group_bbox() -> tuple[float, float, float, float]:
-            boxes = [
-                self._node_bbox(self._existing_nodes[nid])
-                for nid in group_members
-            ]
-            return (
-                min(b[0] for b in boxes),
-                max(b[1] for b in boxes),
-                max(b[2] for b in boxes),
-                min(b[3] for b in boxes),
-            )
+        # The group itself cannot move in this loop: only positioned nodes are
+        # shifted, and the group's members are new ones, which are not in
+        # positioned_ids. Its box and the list of nodes to test against it are
+        # therefore the same on every pass, and both cost a walk to build.
+        boxes = [
+            self._node_bbox(self._existing_nodes[nid])
+            for nid in group_members
+        ]
+        group_box = (
+            min(b[0] for b in boxes),
+            max(b[1] for b in boxes),
+            max(b[2] for b in boxes),
+            min(b[3] for b in boxes),
+        )
+        candidates = [nid for nid in positioned_ids if nid not in excluded]
+        group_member_set = set(group_members)
 
         max_iter = max(8, len(positioned_ids) * 2)
         for _ in range(max_iter):
-            group_box = _group_bbox()
             worst: str | None = None
             worst_overlap = 0.0
-            for nid in positioned_ids:
-                if nid in excluded:
-                    continue
+            for nid in candidates:
                 other_box = self._node_bbox(self._existing_nodes[nid])
                 if not self._rects_overlap(group_box, other_box):
                     continue
@@ -1365,17 +1382,17 @@ class NodeTreeBuilder:
                 # Worst is on (or aligned with) the left side → shift left
                 cluster = self._reachable(
                     worst, predecessors, positioned_ids,
-                    exclude=set(group_members),
+                    exclude=group_member_set,
                 )
                 for cid in cluster:
-                    _shift_loc(self._existing_nodes[cid], 0, -shift_amount)
+                    self._shift_loc(self._existing_nodes[cid], 0, -shift_amount)
             else:
                 cluster = self._reachable(
                     worst, successors, positioned_ids,
-                    exclude=set(group_members),
+                    exclude=group_member_set,
                 )
                 for cid in cluster:
-                    _shift_loc(self._existing_nodes[cid], 0, shift_amount)
+                    self._shift_loc(self._existing_nodes[cid], 0, shift_amount)
 
         log.debug("arrange_nodes: overlap resolution did not converge after %d iterations",
                   max_iter)
@@ -1397,8 +1414,8 @@ class NodeTreeBuilder:
         y = 0.0
         for nid in members:
             node = self._existing_nodes[nid]
-            _set_loc(node, 0, x)
-            _set_loc(node, 1, y)
+            self._set_loc(node, 0, x)
+            self._set_loc(node, 1, y)
             y -= self._node_height(node) + V_MARGIN
 
 

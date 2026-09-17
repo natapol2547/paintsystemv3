@@ -53,7 +53,9 @@ written, links created and removed, whether it arranged — is counted in
 Node locations follow the same rule, in the builder's layout and in
 `arrange_stack`, even though they are outside the IR and the fingerprint:
 laying a stack out rewrites the position of every layer, and nearly all of
-them keep the position they had.
+them keep the position they had. `NodeTreeBuilder._set_loc` and
+`_shift_loc` are the only things that move a node during a build, which is
+what lets layout cache each node's bounding box for the length of one.
 
 The compiler never writes back into the document beyond the normalize
 repairs, so a nested compile request only needs a re-entrancy flag.
