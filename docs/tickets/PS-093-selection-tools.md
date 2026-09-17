@@ -140,11 +140,13 @@ select by face or UV island and the image editor tools are PS-097.
   in the same order. Lasso was moved first at the user's request; the
   tools shipped with Rectangle first. Entering texture paint still
   makes the brush active. Consequences:
-  - Blender remembers the last tool used in a group for the session, in
-    the toolbar class and not in the file. After a user picks Rectangle
-    or Ellipse the group shows that tool until Blender restarts, across
-    file opens and add-on reloads. A file saved with Rectangle or
-    Ellipse active shows that tool when opened with its UI.
+  - Blender remembers the last tool used in a group in the toolbar
+    class, not in the file. After a user picks Rectangle or Ellipse the
+    group shows that tool across file opens and disabling and enabling
+    the add-on, until Blender restarts or scripts are reloaded: Reload
+    Scripts registers `bl_ui` again, and that forgets it. A file saved
+    with Rectangle or Ellipse active shows that tool when opened with
+    its UI.
   - Files store tool ids, not positions, so existing files keep their
     tool. So do shortcuts made with "Assign Shortcut", which bind the
     tool id; that was read from Blender's code, not tried.

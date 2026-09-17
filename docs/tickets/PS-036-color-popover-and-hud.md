@@ -40,8 +40,8 @@ rows in the preferences went with them. This ticket adds the operators,
 the two items and the shortcut rows together. Any key added later gets
 the same check against `blender_default.py` first; background Blender
 reports an empty default keyconfig, so that check reads the file. The
-add-on's first key, Ctrl+D in Image Paint (PS-093), also has a
-windowed guard: `tests/test_keymaps_ui.py` fails when the running
+add-on's first Image Paint key, Ctrl+D (PS-093), also has a windowed
+guard: `tests/test_keymaps_ui.py` fails when the running
 build's default keyconfig binds Ctrl+D where the item runs. I and E
 join that guard, and `tests/test_keymaps.py`, with their items.
 

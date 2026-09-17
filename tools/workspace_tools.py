@@ -3,12 +3,13 @@
 The three tools form one group after Blender's Mask tool, behind a
 separator; where the toolbar has no Mask tool (4.2) the group goes at the
 end. Lasso Selection is the group's first item, so the toolbar shows it
-until another tool of the group is used; Blender then shows that one for
-the rest of the session. Each tool's keymap is created by Blender in the
-add-on keyconfig and is active only while the tool is, so it shadows
-default items only then. It binds exactly five items: a drag for each
-mode, and a click that clears the selection. The header shows the
-settings the tool's operator saves: feather, anti-alias and through.
+until another tool of the group is used; Blender then shows that one
+until it restarts or scripts are reloaded. Each tool's keymap is created
+by Blender in the add-on keyconfig and is active only while the tool is,
+so it shadows default items only then. It binds exactly five items: a
+drag for each mode, and a click that clears the selection. The header
+shows the settings the tool's operator saves: feather, anti-alias and
+through.
 """
 import bpy
 from bpy.types import WorkSpaceTool
