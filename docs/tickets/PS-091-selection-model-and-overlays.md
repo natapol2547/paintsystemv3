@@ -284,6 +284,14 @@ GPU passes build the mask at the image's size, or at a UDIM tile's.
   stencil at 8 bits, so a feather has 256 levels, with a maximum error
   of 0.002 against the float mask. `sync_canvas` leaves the settings
   alone.
+- In Solid shading Blender draws the Stencil Mask over what is not
+  selected, in `stencil_color` (black by default) at the view's "Stencil
+  Mask Opacity" (1.0), which hides the paint there; Material Preview
+  does not draw it. The add-on leaves both settings to the user: the
+  display is Blender's own cue for protected texels, the opacity is per
+  3D view, so overriding it would need a backup in every view, and
+  with the tint off by default it is the only in-surface cue in Solid
+  shading.
 - **Policy: the selection owns the stencil while it applies.** A user
   edit to those settings notifies the message bus
   (`ImagePaint.use_stencil_layer`, `invert_stencil`, `stencil_image`,
