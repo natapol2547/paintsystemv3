@@ -22,15 +22,22 @@ Three costs, cheapest first:
 The arrays are read from attributes rather than `MeshLoop.vertex_index`
 and `MeshPolygon.material_index`, which cost 5 to 25 times as much. An
 entry keeps its arrays for the next compare, so at most `ENTRY_LIMIT`
-entries are kept, the least recently resolved dropped first. A dropped
-entry costs one read and hash on its next resolve and gives the same key,
-so nothing keyed by it has to be rebuilt.
+entries keep them, the least recently resolved losing them first. An
+entry without arrays keeps its key and token: it still peeks as fresh, and
+its next read gives the same key, so neither a draw nor a tick treats the
+lost arrays as a change. At most `KEY_LIMIT` entries are kept at all.
+
+Each view layer's depsgraph evaluates the mesh on its own, with its own
+data pointers, so an entry belongs to one object, UV map and view layer.
+A draw in a window on another view layer requests a resolve on that view
+layer's depsgraph.
 
 An entry also records that it was resolved when there is no surface: a
-non-mesh, an object in Edit Mode, or an evaluated mesh without the UV map
-(a Remesh modifier drops UVs). `peek_key` then reports that None key as
-fresh until the token changes, so a draw callback caches its empty result
-instead of asking again on every redraw.
+non-mesh, a mesh in Edit Mode through any object that uses it, or an
+evaluated mesh without the UV map (a Remesh modifier drops UVs).
+`peek_key` then reports that None key as fresh until the token changes,
+so a draw callback caches its empty result instead of asking again on
+every redraw.
 """
 import hashlib
 import logging
@@ -48,7 +55,10 @@ KEY_SIZE = 16
 """Bytes in a surface key."""
 
 ENTRY_LIMIT = 8
-"""Entries kept, each with its arrays: about 35 MB per entry at a million triangles."""
+"""Entries that keep their arrays: about 35 MB per entry at a million triangles."""
+
+KEY_LIMIT = 256
+"""Entries kept at all; one without arrays holds only its key and token."""
 
 
 class _Entry:
@@ -62,9 +72,10 @@ class _Entry:
         self.resolved = False
 
 
-# (object session_uid, UV map) -> entry; insertion order is least recently resolved first.
-_entries: dict[tuple[int, str], _Entry] = {}
-_requests: set[tuple[int, str]] = set()
+# (object session_uid, UV map, view layer) -> entry, the view layer as
+# `_layer` gives it; insertion order is least recently resolved first.
+_entries: dict[tuple[int, str, tuple[int, str]], _Entry] = {}
+_requests: set[tuple[int, str, tuple[int, str]]] = set()
 
 _CUSTOM_NORMAL_FORMATS = {
     'INT16_2D': (np.int16, 2, 'value'),
@@ -83,8 +94,15 @@ def _first_pointer(collection) -> int:
     return collection[0].as_pointer() if len(collection) else 0
 
 
+def _layer(depsgraph) -> tuple[int, str]:
+    """The view layer *depsgraph* evaluates, as its scene's session_uid and its name."""
+    return depsgraph.scene.session_uid, depsgraph.view_layer.name
+
+
 def _evaluated_mesh(obj, depsgraph) -> bpy.types.Mesh | None:
-    if obj is None or obj.type != 'MESH' or obj.mode == 'EDIT':
+    # A mesh in Edit Mode through another object, such as a linked
+    # duplicate, evaluates to an edit mesh wrapper for this object too.
+    if obj is None or obj.type != 'MESH' or obj.data.is_editmode:
         return None
     mesh = obj.evaluated_get(depsgraph).data
     return mesh if isinstance(mesh, bpy.types.Mesh) else None
@@ -112,10 +130,19 @@ def _read_custom(attribute) -> np.ndarray:
 
 
 def _read(mesh: bpy.types.Mesh, uv_map: str) -> dict[str, np.ndarray] | None:
-    """The arrays a key is made from, or None when *uv_map* is not a corner UV map of *mesh*."""
+    """The arrays a key is made from, or None when *uv_map* is not a corner UV map of *mesh*.
+
+    None as well for a mesh without the topology attributes, as an edit
+    mesh wrapper, whose layers are those of its BMesh.
+    """
     attributes = mesh.attributes
     uv = attributes.get(uv_map)
     if uv is None or uv.domain != 'CORNER' or uv.data_type != 'FLOAT2':
+        return None
+    required = ['position', '.corner_vert']
+    if attributes.get('sharp_edge') is not None:
+        required.append('.edge_verts')
+    if any(attributes.get(name) is None for name in required):
         return None
     arrays = {
         'position': np.empty(len(mesh.vertices) * 3, np.float32),
@@ -155,7 +182,9 @@ def _same(a: dict, b: dict) -> bool:
             continue
         if name != 'uv' or array.shape != other.shape:
             return False
-        if np.abs(array - other).max() > UV_TOLERANCE:
+        # A plain difference is NaN where either map holds one, and every
+        # comparison with NaN is False, so a NaN would hide any edit.
+        if not np.allclose(array, other, rtol=0.0, atol=UV_TOLERANCE, equal_nan=True):
             return False
     return True
 
@@ -173,7 +202,7 @@ def _digest(arrays: dict, uv_map: str) -> bytes:
 
 def mark_suspect(session_uid: int | None = None) -> None:
     """The surface of one object, or of every object, may have changed. For handlers."""
-    for (uid, _), entry in _entries.items():
+    for (uid, _, _), entry in _entries.items():
         if session_uid is None or uid == session_uid:
             entry.suspect = True
 
@@ -187,10 +216,11 @@ def forget() -> None:
 def peek_key(obj: bpy.types.Object, uv_map: str, depsgraph) -> tuple[bytes | None, bool]:
     """The last resolved key and whether it is still fresh. For draw callbacks.
 
-    `(None, False)` for an object and map never resolved or dropped since;
-    `(None, True)` for one resolved without a surface whose token held.
+    `(None, False)` for an object and map never resolved on *depsgraph*'s
+    view layer or dropped since; `(None, True)` for one resolved without a
+    surface whose token held.
     """
-    entry = _entries.get((obj.session_uid, uv_map))
+    entry = _entries.get((obj.session_uid, uv_map, _layer(depsgraph)))
     if entry is None or not entry.resolved:
         return None, False
     if entry.suspect:
@@ -204,15 +234,17 @@ def resolve_key(obj: bpy.types.Object, uv_map: str, depsgraph=None) -> bytes | N
     """The current key of *obj*'s evaluated surface with UV map *uv_map*. For timers and operators.
 
     *uv_map* is a name, never '' (see `texel_map.resolve_uv_map`). None
-    for a non-mesh, an object in Edit Mode or an evaluated mesh without
-    that corner UV map.
+    for a non-mesh, a mesh in Edit Mode or an evaluated mesh without that
+    corner UV map.
     """
     depsgraph = depsgraph or bpy.context.evaluated_depsgraph_get()
-    ident = (obj.session_uid, uv_map)
-    entry = _entries.pop(ident, None) or _Entry()
+    ident = (obj.session_uid, uv_map, _layer(depsgraph))
+    entry = _entries.pop(ident, None)
+    if entry is None:
+        entry = _Entry()
+        while len(_entries) >= KEY_LIMIT:
+            del _entries[next(iter(_entries))]
     _entries[ident] = entry
-    while len(_entries) > ENTRY_LIMIT:
-        del _entries[next(iter(_entries))]
     entry.resolved = True
     mesh = _evaluated_mesh(obj, depsgraph)
     if mesh is None:
@@ -228,16 +260,38 @@ def resolve_key(obj: bpy.types.Object, uv_map: str, depsgraph=None) -> bytes | N
     elif entry.arrays is None or not _same(arrays, entry.arrays):
         entry.key = _digest(arrays, uv_map)
         entry.arrays = arrays
+        _drop_old_arrays()
     entry.token = token
     entry.suspect = False
     return entry.key
 
 
-def request(obj: bpy.types.Object, uv_map: str) -> None:
-    """Resolve on the next timer tick. Safe from draw callbacks."""
-    _requests.add((obj.session_uid, uv_map))
+def _drop_old_arrays() -> None:
+    """Keep the arrays of the `ENTRY_LIMIT` most recently resolved entries that have them."""
+    kept = [entry for entry in _entries.values() if entry.arrays is not None]
+    for entry in kept[:-ENTRY_LIMIT]:
+        entry.arrays = None
+
+
+def request(obj: bpy.types.Object, uv_map: str, depsgraph=None) -> None:
+    """Resolve on the next timer tick, on *depsgraph*'s view layer. Safe from draw callbacks."""
+    depsgraph = depsgraph or bpy.context.evaluated_depsgraph_get()
+    _requests.add((obj.session_uid, uv_map, _layer(depsgraph)))
     if not bpy.app.timers.is_registered(_tick):
         bpy.app.timers.register(_tick, first_interval=0.0)
+
+
+def _depsgraph(layer: tuple[int, str]):
+    """The depsgraph of the view layer *layer* names, or None when it has none now."""
+    context = bpy.context
+    scene, view_layer = context.scene, context.view_layer
+    if scene is not None and view_layer is not None and (scene.session_uid, view_layer.name) == layer:
+        return context.evaluated_depsgraph_get()
+    scene_uid, name = layer
+    scene = next((scene for scene in bpy.data.scenes if scene.session_uid == scene_uid), None)
+    view_layer = scene.view_layers.get(name) if scene is not None else None
+    # Another window's view layer: evaluated when that window draws.
+    return view_layer.depsgraph if view_layer is not None else None
 
 
 def _tick() -> None:
@@ -245,13 +299,14 @@ def _tick() -> None:
     _requests.clear()
     by_uid = {obj.session_uid: obj for obj in bpy.data.objects}
     changed = False
-    for uid, uv_map in requests:
+    for uid, uv_map, layer in requests:
         obj = by_uid.get(uid)
-        if obj is None:
+        depsgraph = _depsgraph(layer)
+        if obj is None or depsgraph is None:
             continue
-        before = _entries.get((uid, uv_map))
+        before = _entries.get((uid, uv_map, layer))
         before = (before.resolved, before.key) if before is not None else (False, None)
-        changed |= (True, resolve_key(obj, uv_map)) != before
+        changed |= (True, resolve_key(obj, uv_map, depsgraph)) != before
     if changed:
         _surfaces_changed()
 

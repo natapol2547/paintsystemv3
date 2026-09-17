@@ -423,21 +423,33 @@ def test_batch_follows_surface_key():
         obj.modifiers.remove(remesh)
         bpy.context.view_layer.update()
 
-    section("a dropped surface entry costs no rebuild")
-    surface.forget()
-    overlay.invalidate_all()
-    builds.clear()
-    draw_batch(obj)
+    section("a surface entry that loses its arrays costs no rebuild or request")
+    others = []
     for index in range(surface.ENTRY_LIMIT):
-        surface.resolve_key(obj, f"PS Overlay Map {index}")
-    check((obj.session_uid, "UVMap") not in surface._entries, "the batch's entry was dropped")
-    requested = draw_batch(obj)
-    run_surface_tick()
-    later = [draw_batch(obj) for _ in range(2)]
-    check(requested and not any(later) and len(builds) == 1,
-          f"a draw uses the batch and requests once, then hits ({len(builds)} builds, "
-          f"requests {[requested, *later]})")
-    surface.forget()
+        other = bpy.data.objects.new(f"PS Overlay Other {index}", obj.data.copy())
+        bpy.context.scene.collection.objects.link(other)
+        others.append(other)
+    bpy.context.view_layer.update()
+    try:
+        surface.forget()
+        overlay.invalidate_all()
+        builds.clear()
+        draw_batch(obj)
+        for other in others:
+            surface.resolve_key(other, "UVMap")
+        layer = surface._layer(bpy.context.evaluated_depsgraph_get())
+        check(surface._entries[(obj.session_uid, "UVMap", layer)].arrays is None,
+              "resolving ENTRY_LIMIT other objects drops the arrays of the batch's entry")
+        requested = [draw_batch(obj) for _ in range(3)]
+        check(not any(requested) and len(builds) == 1,
+              f"later draws hit the batch without a request ({len(builds)} builds, requests {requested})")
+    finally:
+        for other in others:
+            mesh = other.data
+            bpy.data.objects.remove(other)
+            bpy.data.meshes.remove(mesh)
+        bpy.context.view_layer.update()
+        surface.forget()
 
 
 def test_target_mask():

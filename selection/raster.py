@@ -1050,15 +1050,16 @@ def view_key(op, peek: bool = False) -> bytes | None:
     *peek*: the last resolved key, with a resolve requested for the next
     timer tick when it may be stale, so a draw shows the previous mask for
     one frame at most. None when the op has no object or UV map, or the
-    object is not a mesh, is in Edit Mode or has no such UV map.
+    object is not a mesh, its mesh is in Edit Mode or it has no such UV map.
     """
     obj = op.object
     if obj is None or not op.uv_map:
         return None
     if peek:
-        key, fresh = surface.peek_key(obj, op.uv_map, bpy.context.evaluated_depsgraph_get())
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        key, fresh = surface.peek_key(obj, op.uv_map, depsgraph)
         if not fresh:
-            surface.request(obj, op.uv_map)
+            surface.request(obj, op.uv_map, depsgraph)
         return key
     return surface.resolve_key(obj, op.uv_map)
 
@@ -1080,7 +1081,8 @@ def _view_problem(op, surface_key) -> str | None:
     if determinant == 0.0 or not np.isfinite(determinant):
         return 'VIEW'
     if surface_key(op) is None:
-        return 'EDIT_MODE' if obj.mode == 'EDIT' else 'SURFACE'
+        # The mesh may be in Edit Mode through a linked duplicate.
+        return 'EDIT_MODE' if obj.data.is_editmode else 'SURFACE'
     return None
 
 

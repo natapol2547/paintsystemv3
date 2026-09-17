@@ -665,6 +665,27 @@ def test_reasons():
         finally:
             bpy.ops.object.mode_set(mode='OBJECT')
         fixed("leaving Edit Mode")
+
+        # A linked duplicate puts the shared mesh in Edit Mode while the
+        # op's own object stays in its mode.
+        twin = bpy.data.objects.new("PS View Twin", cube().data)
+        bpy.context.scene.collection.objects.link(twin)
+        view_layer = bpy.context.view_layer
+        view_layer.update()
+        view_layer.objects.active = twin
+        bpy.ops.object.mode_set(mode='EDIT')
+        try:
+            try:
+                got = failure(selection, (256, 256))
+            except KeyError as error:
+                got = error
+            check(cube().mode != 'EDIT' and got == ('EDIT_MODE', 1),
+                  f"a linked duplicate in Edit Mode raises EDIT_MODE at op 1 ({got!r})")
+        finally:
+            bpy.ops.object.mode_set(mode='OBJECT')
+            view_layer.objects.active = cube()
+            bpy.data.objects.remove(twin)
+        fixed("the linked duplicate leaving Edit Mode")
     finally:
         selection.clear()
         session.sync(force=True)

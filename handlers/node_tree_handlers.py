@@ -128,6 +128,11 @@ def on_undo_post(*args):
 @bpy.app.handlers.persistent
 def on_frame_change_post(scene, depsgraph=None):
     """An animated deformation changes surfaces with no depsgraph update to report it (PS-093)."""
+    # A render job calls this from its own thread for each frame it
+    # renders. The entries and timers are not thread safe, and a render
+    # depsgraph changes no surface drawn in the viewport.
+    if depsgraph is not None and depsgraph.mode == 'RENDER':
+        return
     surface.mark_suspect()
     selection_session.notify()
 

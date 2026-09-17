@@ -263,7 +263,7 @@ def _cached_batch(obj, uv_map: str, tree, depsgraph) -> gpu.types.GPUBatch | Non
     if cached is not None:
         surface_key, fresh = surface.peek_key(obj, uv_map, depsgraph)
         if not fresh:
-            surface.request(obj, uv_map)
+            surface.request(obj, uv_map, depsgraph)
             return cached[1]
         if cached[0] == surface_key:
             return cached[1]

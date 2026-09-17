@@ -8,6 +8,7 @@ count.
 """
 import os
 import sys
+import types
 
 import bpy
 import numpy as np
@@ -55,6 +56,12 @@ def key(obj, uv_map=UV):
     return surface.resolve_key(obj, uv_map)
 
 
+def entry(obj, uv_map=UV):
+    """The entry of *obj* and *uv_map* on the context's view layer, or None."""
+    layer = surface._layer(bpy.context.evaluated_depsgraph_get())
+    return surface._entries.get((obj.session_uid, uv_map, layer))
+
+
 def changed_by(obj, edit, label):
     """Resolve, apply *edit*, mark the object suspect as the handler would, and check the key changed."""
     before = key(obj)
@@ -98,16 +105,17 @@ def test_stable_without_content_change():
     obj.modifiers.new("PS Surface Subsurf", 'SUBSURF')
     update()
     with_subsurf = key(obj)
-    entry = surface._entries[(obj.session_uid, UV)]
-    token = entry.token
+    subsurf_entry = entry(obj)
+    token = subsurf_entry.token
     obj.update_tag(refresh={'DATA'})
     update()
     surface.mark_suspect(obj.session_uid)
     check(key(obj) == with_subsurf,
-          f"re-evaluating a Subdivision Surface keeps the key (token {'changed' if entry.token != token else 'held'})")
+          "re-evaluating a Subdivision Surface keeps the key "
+          f"(token {'changed' if subsurf_entry.token != token else 'held'})")
     uv_diff = 0.0
     for _ in range(3):
-        stored = entry.arrays["uv"]
+        stored = subsurf_entry.arrays["uv"]
         obj.update_tag(refresh={'DATA'})
         update()
         mesh = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).data
@@ -195,6 +203,34 @@ def test_content_changes():
 
     changed_by(other, weighted_normal, "a Weighted Normal modifier")
 
+    nan_cube = make_cube("PS Surface NaN UV")
+    nan_mesh = nan_cube.data
+    nan_mesh.uv_layers[UV].uv[0].vector = (float('nan'), 0.0)
+    nan_mesh.update()
+    update()
+
+    def move_uv_beside_nan():
+        nan_mesh.uv_layers[UV].uv[5].vector = (0.9, 0.9)
+        nan_mesh.update()
+
+    changed_by(nan_cube, move_uv_beside_nan, "moving one UV of a map that holds a NaN")
+
+    def remove_nan():
+        nan_mesh.uv_layers[UV].uv[0].vector = (0.1, 0.1)
+        nan_mesh.update()
+
+    changed_by(nan_cube, remove_nan, "replacing a NaN UV")
+    before = key(nan_cube)
+    nan_mesh.uv_layers[UV].uv[0].vector = (float('nan'), 0.0)
+    nan_mesh.update()
+    update()
+    surface.mark_suspect(nan_cube.session_uid)
+    with_nan = key(nan_cube)
+    nan_cube.update_tag(refresh={'DATA'})
+    update()
+    surface.mark_suspect(nan_cube.session_uid)
+    check(with_nan != before and key(nan_cube) == with_nan, "a NaN in the same place in both reads keeps the key")
+
 
 def test_no_surface():
     section("no surface gives None, and the entry still counts as resolved")
@@ -217,6 +253,26 @@ def test_no_surface():
         bpy.ops.object.mode_set(mode='OBJECT')
     surface.mark_suspect(obj.session_uid)
     check(key(obj) is not None, "leaving Edit Mode gives a key again")
+
+    twin = bpy.data.objects.new("PS Surface Twin", obj.data)
+    bpy.context.scene.collection.objects.link(twin)
+    update()
+    bpy.context.view_layer.objects.active = twin
+    bpy.ops.object.mode_set(mode='EDIT')
+    try:
+        update()
+        surface.mark_suspect(obj.session_uid)
+        try:
+            twin_key = key(obj)
+        except KeyError as error:
+            twin_key = error
+        check(obj.mode == 'OBJECT' and twin_key is None,
+              f"a mesh in Edit Mode through a linked duplicate gives None ({twin_key!r})")
+    finally:
+        bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.data.objects.remove(twin)
+    surface.mark_suspect(obj.session_uid)
+    check(key(obj) is not None, "and a key again once the duplicate leaves Edit Mode")
 
     sphere = make_cube("PS Surface Remesh")
     sphere.modifiers.new("PS Surface Remesh", 'REMESH')
@@ -291,20 +347,87 @@ def cancel_timers_keep_requests():
 
 
 def test_entry_limit():
-    section("entries are capped, least recently resolved dropped first")
+    section("stored arrays and entries are capped, least recently resolved first")
     surface.forget()
-    obj = make_cube("PS Surface Limit")
-    names = [f"PS Surface Map {index}" for index in range(surface.ENTRY_LIMIT + 1)]
+    cancel_timers()
+    cubes = [make_cube(f"PS Surface Limit {index}", location=(3.0 * index, 0.0, 0.0))
+             for index in range(surface.ENTRY_LIMIT + 1)]
+    update()
+    keys = [key(cube) for cube in cubes]
+    with_arrays = [entry(cube).arrays is not None for cube in cubes]
+    check(with_arrays == [False] + [True] * surface.ENTRY_LIMIT,
+          f"{surface.ENTRY_LIMIT + 1} resolves keep the arrays of {surface.ENTRY_LIMIT}, not the oldest's "
+          f"({with_arrays})")
+    key(cubes[1])
+    key(cubes[0])
+    check(entry(cubes[1]).arrays is not None and entry(cubes[2]).arrays is not None,
+          "resolving an entry again keeps its arrays")
+
+    # A draw peeks at every object, and the tick resolves what is not
+    # fresh. Losing arrays must not look like a change, or each tick would
+    # redraw, and the next draw would ask again.
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    requested = []
+    for _ in range(3):
+        peeks = [surface.peek_key(cube, UV, depsgraph) for cube in cubes]
+        stale = [cube for cube, (_, fresh) in zip(cubes, peeks) if not fresh]
+        for cube in stale:
+            surface.request(cube, UV)
+        cancel_timers_keep_requests()
+        changes.clear()
+        surface._tick()
+        requested.append((len(stale), len(changes)))
+    check(requested == [(0, 0)] * 3 and [peek[0] for peek in peeks] == keys,
+          f"more objects than ENTRY_LIMIT all peek fresh with their keys (requests and redraws {requested})")
+    surface.mark_suspect(cubes[0].session_uid)
+    changes.clear()
+    surface.request(cubes[0], UV)
+    cancel_timers_keep_requests()
+    surface._tick()
+    check(entry(cubes[0]).arrays is not None and key(cubes[0]) == keys[0] and not changes,
+          f"an entry without arrays reads them again with the same key and no redraw ({len(changes)} redraws)")
+
+    surface.forget()
+    obj = cubes[0]
+    names = [f"PS Surface Map {index}" for index in range(surface.KEY_LIMIT + 1)]
     for name in names:
         surface.resolve_key(obj, name)
-    kept = [name for uid, name in surface._entries]
-    check(len(surface._entries) == surface.ENTRY_LIMIT and kept == names[1:],
-          f"{surface.ENTRY_LIMIT + 1} resolves keep {surface.ENTRY_LIMIT} entries without the oldest ({len(kept)})")
-    surface.resolve_key(obj, names[1])
-    surface.resolve_key(obj, names[0])
-    kept = [name for uid, name in surface._entries]
-    check(names[1] in kept and names[2] not in kept, "resolving an entry again makes it the most recent")
+    kept = [name for _, name, _ in surface._entries]
+    check(len(surface._entries) == surface.KEY_LIMIT and kept == names[1:],
+          f"{surface.KEY_LIMIT + 1} resolves keep {surface.KEY_LIMIT} entries without the oldest ({len(kept)})")
+    for cube in cubes:
+        bpy.data.objects.remove(cube)
     surface.forget()
+
+
+def test_view_layers():
+    section("each view layer resolves and peeks on its own depsgraph")
+    surface.forget()
+    cancel_timers()
+    obj = make_cube("PS Surface Layers")
+    obj.modifiers.new("PS Surface Layers Subsurf", 'SUBSURF').levels = 1
+    scene = bpy.context.scene
+    second = scene.view_layers.new("PS Surface Second")
+    try:
+        update()
+        second.update()
+        first_depsgraph = bpy.context.evaluated_depsgraph_get()
+        second_depsgraph = second.depsgraph
+        first_key = key(obj)
+        check(surface.peek_key(obj, UV, second_depsgraph) == (None, False),
+              "a key resolved on one view layer is unknown on another")
+        surface.request(obj, UV, second_depsgraph)
+        cancel_timers_keep_requests()
+        surface._tick()
+        second_peek = surface.peek_key(obj, UV, second_depsgraph)
+        check(second_peek == (first_key, True),
+              f"a request from the other view layer's draw resolves on its depsgraph (fresh {second_peek[1]})")
+        check(surface.peek_key(obj, UV, first_depsgraph) == (first_key, True),
+              "and the first view layer stays fresh")
+    finally:
+        scene.view_layers.remove(second)
+        bpy.data.objects.remove(obj)
+        surface.forget()
 
 
 def test_handlers():
@@ -331,6 +454,14 @@ def test_handlers():
               "a frame change marks every surface suspect")
         check(notified, f"and notifies the session ({len(notified)} calls)")
         scene.frame_set(scene.frame_current - 1)
+
+        # A render job calls the handler from its own thread with the
+        # render depsgraph; it must touch neither the entries nor timers.
+        key(obj)
+        notified.clear()
+        handlers.on_frame_change_post(scene, types.SimpleNamespace(mode='RENDER'))
+        check(surface.peek_key(obj, UV, depsgraph)[1] and not notified,
+              "a frame change on a render depsgraph marks nothing and does not notify")
     finally:
         session.notify = notify
         cancel_timers()
@@ -365,6 +496,7 @@ guarded(test_content_changes)
 guarded(test_no_surface)
 guarded(test_peek_and_request)
 guarded(test_entry_limit)
+guarded(test_view_layers)
 guarded(test_handlers)
 guarded(test_resolve_uv_map)
 surface._surfaces_changed = _surfaces_changed
