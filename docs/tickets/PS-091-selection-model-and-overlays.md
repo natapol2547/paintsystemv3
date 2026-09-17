@@ -355,7 +355,9 @@ material and never recompiles a shader.
   wash inside it when "Tint Opacity" is above 0 (off by default, since
   any tint hides the true colour of what is being painted). The ants
   are found from mask samples one screen pixel to either side and
-  dashed along the screen axis closest to the outline's tangent.
+  dashed along the screen axis closest to the outline's tangent. The
+  ants are composited over the wash: mixing their colours instead put
+  the tint colour in the ants' soft edge even at opacity 0.
   `overlay_shader.ANT_GLSL` holds the dash math, so PS-093's drag
   preview can crawl in step with the committed ants
   (`overlay.ant_style(context)`). Every read is a `texelFetch`, because

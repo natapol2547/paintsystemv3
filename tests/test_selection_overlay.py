@@ -216,6 +216,46 @@ def test_shaders():
           f"a preference grey of 0.5 reads 127 through an sRGB target ({centre})")
 
 
+def test_ants_over_wash():
+    section("the ants' soft edge takes no colour from the wash")
+    if not available():
+        return
+    # A 64 texel disc magnified 8 times, so the outline crosses pixels at
+    # every fraction and its edge is partly covered.
+    n, scale = 64, SIZE // 64
+    yy, xx = np.mgrid[0:n, 0:n] + 0.5
+    disc = (np.hypot(xx - 32, yy - 32) < 18).astype(np.float32)
+    mask = mask_texture(disc)
+    # The mask as the image shader filters it at each pixel centre.
+    t = (np.arange(SIZE) + 0.5) / scale - 0.5
+    low = np.clip(np.floor(t).astype(int), 0, n - 1)
+    high = np.clip(low + 1, 0, n - 1)
+    w = t - np.floor(t)
+    rows = disc[low] * (1 - w)[:, None] + disc[high] * w[:, None]
+    m = rows[:, low] * (1 - w) + rows[:, high] * w
+
+    rgb = draw_image(mask, wash=(0.0, 0.0, 1.0, 0.0))[..., :3]
+    grey = round(GREY * 255)
+    partial = int(((np.abs(rgb - grey) > 3).any(-1) & ~ants(rgb)).sum())
+    spread = int((rgb.max(-1) - rgb.min(-1)).max())
+    check(partial > 100 and spread <= 2,
+          f"a transparent blue wash leaves the edge grey ({partial} partly covered pixels, channels differ by {spread})")
+
+    wash = (1.0, 0.0, 0.0, 0.5)
+    rgb = draw_image(mask, wash=wash)[..., :3] / 255.0
+    alpha = (wash[3] * np.clip(m, 0.0, 1.0))[..., None]
+    under = np.array(wash[:3]) * alpha + GREY * (1.0 - alpha)
+    error = np.full(m.shape, np.inf)
+    for ant in (0.0, 1.0):
+        line = (rgb[..., 1] - under[..., 1]) / (ant - under[..., 1])
+        fits = np.abs(under + line[..., None] * (ant - under) - rgb).max(-1)
+        error = np.where((line > -0.02) & (line < 1.02), np.minimum(error, fits), error)
+    edge = int((np.abs(rgb - under).max(-1) > 2 / 255).sum())
+    worst = float(error.max()) * 255
+    check(edge > 500 and worst <= 3.0,
+          f"every pixel is an ant colour over the wash ({edge} edge pixels, worst off by {worst:.1f}/255)")
+
+
 def test_two_passes_draw_no_seam():
     section("the 3D view's two passes draw no ants along a UV seam")
     if not available():
@@ -538,6 +578,7 @@ def test_wiring():
 
 guarded(test_preferences_and_colours)
 guarded(test_shaders)
+guarded(test_ants_over_wash)
 guarded(test_two_passes_draw_no_seam)
 guarded(test_mesh_batch)
 guarded(test_batch_follows_surface_key)

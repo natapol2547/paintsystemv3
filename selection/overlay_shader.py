@@ -81,8 +81,13 @@ vec4 shade(float m, float right, float left, float up, float down)
   float line = 1.0 - smoothstep(params.w - 0.5, params.w + 0.5, distance);
   vec2 direction = vec2(right - left, up - down);
   vec3 ant = ant_color(vec2(-direction.y, direction.x), ant_a, ant_b);
-  float alpha = mix(wash.a * clamp(m, 0.0, 1.0), 1.0, line);
-  return vec4(mix(wash.rgb, ant, line), alpha);
+  /* The ants over the wash, both straight alpha. Mixing the colours by
+     `line` instead would carry the wash colour into the ants' soft edge
+     even when the wash is transparent. */
+  float wash_alpha = wash.a * clamp(m, 0.0, 1.0);
+  float alpha = line + wash_alpha * (1.0 - line);
+  vec3 color = ant * line + wash.rgb * (wash_alpha * (1.0 - line));
+  return vec4(color / max(alpha, 1e-6), alpha);
 }
 """
 
