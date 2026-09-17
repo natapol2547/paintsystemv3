@@ -294,6 +294,10 @@ in real editors, selections recorded from a real 3D view and the tools
 driven by simulated input (`--enable-event-simulate`). GPU checks run
 headless from Blender 5.2 and windowed under `--ui` on every version,
 since 4.2 to 5.1 have no background GPU context.
+`test_keymaps.py` reads the addon's items from the addon keyconfig, and
+the windowed, event-simulated `test_keymaps_ui.py` presses Ctrl+D in
+texture paint and fails when the running build's default keyconfig binds
+Ctrl+D in a keymap the item is consulted before or after (PS-093).
 `.github/workflows/test.yml` runs all of this against the latest patch of
 every supported Blender series, lints with ruff (`uvx ruff check .`
 locally) and validates the built package with the strict
