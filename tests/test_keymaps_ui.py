@@ -14,7 +14,9 @@ real input while the test runs. `select_all`'s execute is wrapped to
 record every call, so a check can tell that the item ran, with which
 action, and that it did not raise. It also presses Alt+D, which clears
 nothing, and Ctrl+D over the sidebar's Opacity field, where Blender's
-User Interface keymap adds a driver and the selection is kept.
+User Interface keymap adds a driver and the selection is kept. Between
+the two it checks that the Selection section's None button names Ctrl D
+as its shortcut, with the brush and with each selection tool active.
 
 Not covered: annotation with D held through a drag. Only real input
 records a held key, and a simulated D held through a drag draws
@@ -320,6 +322,36 @@ def run_sections():
     yield from press_d("alt", centre(area))
     yield 0.3
     check(op_count() == 1 and calls == [], f"the selection is kept and select_all does not run ({op_count()} ops; {calls})")
+
+    section("the sidebar's None button names Ctrl D with any tool active")
+    # A button's tooltip names the first item found by the search
+    # find_item_from_operator runs: the main region's handlers in order,
+    # the active tool's keymap before Image Paint, and properties equal to
+    # the button's. They are taken from a disabled item in a temporary
+    # keymap, the way bl_keymap_utils.keymap_from_toolbar passes them.
+    keyconfigs = bpy.context.window_manager.keyconfigs
+    previous = active_tool()
+    scratch = keyconfigs.active.keymaps.new("Paint System test <temp>", space_type='EMPTY', region_type='TEMPORARY')
+    try:
+        button = scratch.keymap_items.new("paint_system.select_all", 'NONE', 'PRESS')
+        button.active = False
+        button.properties.action = 'DESELECT'
+        sidebar = next(r for r in area.regions if r.type == 'UI')
+        for tool in (brush, "paint_system.select_lasso", "paint_system.select_box", "paint_system.select_ellipse"):
+            with override():
+                bpy.ops.wm.tool_set_by_id(name=tool)
+            yield from wait_for(lambda: active_tool() == tool)
+            with bpy.context.temp_override(window=window(), area=area, region=sidebar):
+                keymap, item = keyconfigs.find_item_from_operator(
+                    idname="paint_system.select_all", context='INVOKE_REGION_WIN', properties=button.properties)
+            found = f"{keymap.name}: {item.to_string()}" if item else None
+            check(active_tool() == tool and item is not None and keymap.name == "Image Paint" and item.type == 'D',
+                  f"with {tool} active the lookup finds Image Paint's Ctrl+D item ({found})")
+    finally:
+        keyconfigs.active.keymaps.remove(scratch)
+    with override():
+        bpy.ops.wm.tool_set_by_id(name=previous)
+    yield from wait_for(lambda: active_tool() == previous)
 
     section("Ctrl+D over the sidebar's Opacity field adds a driver and keeps the selection")
     space = area.spaces.active

@@ -1,5 +1,5 @@
 import bpy
-from bpy.props import EnumProperty
+from bpy.props import BoolProperty, EnumProperty
 from bpy.types import Operator
 from bpy.utils import register_classes_factory
 
@@ -50,6 +50,18 @@ class PAINTSYSTEM_OT_select_all(Operator):
             ('INVERT', "Invert", "Invert the selection"),
         ),
         default='SELECT',
+    )
+    # Set only by the click item of the selection tools' keymaps
+    # (tools/workspace_tools.py); execute ignores it. A button's tooltip
+    # names the first keymap item whose properties equal the button's
+    # exactly, and the active tool's keymap is searched before Image
+    # Paint. Without this property the Selection section's None button
+    # would name that click (Left Mouse) instead of Ctrl D while one of
+    # the tools is active.
+    from_tool_click: BoolProperty(
+        name="From Tool Click",
+        description="Set by the click of a selection tool; changes nothing",
+        options={'HIDDEN', 'SKIP_SAVE'},
     )
 
     @classmethod

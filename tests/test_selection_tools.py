@@ -159,11 +159,14 @@ def test_keymap_and_tools():
                for idname, event, props in items]
     check(summary == [
         ("paint_system.select_box", False, False, 'CLICK_DRAG', {"mode": 'REPLACE'}),
+        ("paint_system.select_all", False, False, 'CLICK', {"action": 'DESELECT', "from_tool_click": True}),
         ("paint_system.select_box", True, False, 'CLICK_DRAG', {"mode": 'ADD'}),
         ("paint_system.select_box", False, True, 'CLICK_DRAG', {"mode": 'SUBTRACT'}),
         ("paint_system.select_box", True, True, 'CLICK_DRAG', {"mode": 'INTERSECT'}),
-        ("paint_system.select_all", False, False, 'CLICK', {"action": 'DESELECT'}),
-    ], f"five items: a drag per mode and a click that deselects ({summary})")
+    ], f"five items: a drag per mode and, neither first nor last, a click that deselects ({summary})")
+    marker = bpy.ops.paint_system.select_all.get_rna_type().properties["from_tool_click"]
+    check(marker.is_hidden and marker.is_skip_save,
+          "from_tool_click stays out of Adjust Last Operation and is not remembered")
     check(all(event["type"] == 'LEFTMOUSE' and not event.get("alt") for _, event, _ in items),
           "every item is the left mouse button without Alt")
     for _, cls, kind in OPERATORS:

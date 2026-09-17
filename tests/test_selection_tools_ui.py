@@ -402,6 +402,24 @@ def run_sections():
         items = [(item.idname, item.value, item.shift, item.ctrl, item.alt) for km in keymaps for item in km.keymap_items]
         check(len(keymaps) == 1 and len(items) == 5, f"{tool.bl_label} has one keymap of five items ({items})")
 
+    # The toolbar popup (Shift+Space) builds its keymap here, and the
+    # toolbar's tooltips name the same keys. A tool gets the key shortcut
+    # of its keymap's first operator, if one has any, and otherwise the
+    # next free number key in toolbar order.
+    from bl_keymap_utils import keymap_from_toolbar
+    with override():
+        popup = keymap_from_toolbar.generate(bpy.context, 'VIEW_3D')
+    numbers = ('ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'ZERO')
+    free = [(key, held) for held in ((), ("shift",), ("ctrl",), ("alt",)) for key in numbers]
+    keys = {tool_id: [] for tool_id in TOOL_IDS}
+    for item in popup.keymap_items:
+        if item.idname == "wm.tool_set_by_id" and item.properties.name in keys and not item.type.startswith("NUMPAD"):
+            held = tuple(name for name in ("shift", "ctrl", "alt", "oskey", "hyper") if getattr(item, name, 0) == 1)
+            keys[item.properties.name].append((item.type, held))
+    positions = [free.index(found[0]) if len(found) == 1 and found[0] in free else None for found in keys.values()]
+    check(None not in positions and positions == list(range(positions[0], positions[0] + 3)),
+          f"the toolbar popup gives Lasso, Rectangle and Ellipse Selection consecutive number keys ({keys})")
+
     def default_items():
         return sum(len(km.keymap_items) for km in keyconfigs.default.keymaps)
 

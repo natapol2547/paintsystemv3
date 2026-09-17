@@ -20,12 +20,20 @@ AFTER_MASK = frozenset(('builtin_brush.mask',))
 def shape_keymap(idname: str) -> tuple:
     """The tool keymap of the operator *idname*: drags with modifiers pick the mode, a click deselects."""
     drag = {"type": 'LEFTMOUSE', "value": 'CLICK_DRAG'}
+    # The toolbar popup (Shift+Space) and the toolbar's tooltips give a
+    # tool the key shortcut of the operator of its keymap's first item,
+    # read from the user keyconfig, and Blender copies add-on items there
+    # in reverse order. The click is kept from both ends: as the first or
+    # last item, select_all's Ctrl+D would become the first tool's popup
+    # key and shift the number keys of the others.
+    click = ("paint_system.select_all", {"type": 'LEFTMOUSE', "value": 'CLICK'},
+             {"properties": [("action", 'DESELECT'), ("from_tool_click", True)]})
     return (
         (idname, drag, {"properties": [("mode", 'REPLACE')]}),
+        click,
         (idname, {**drag, "shift": True}, {"properties": [("mode", 'ADD')]}),
         (idname, {**drag, "ctrl": True}, {"properties": [("mode", 'SUBTRACT')]}),
         (idname, {**drag, "shift": True, "ctrl": True}, {"properties": [("mode", 'INTERSECT')]}),
-        ("paint_system.select_all", {"type": 'LEFTMOUSE', "value": 'CLICK'}, {"properties": [("action", 'DESELECT')]}),
     )
 
 

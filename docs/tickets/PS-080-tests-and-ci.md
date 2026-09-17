@@ -146,7 +146,11 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   every window and workspace. It draws the toolbar and the group's popup
   into a recording layout, to check that the group shows Lasso Selection
   and lists Lasso, Rectangle and Ellipse, before any tool of the group
-  is used: Blender then shows the last one used for the session. Its
+  is used: Blender then shows the last one used for the session. It
+  builds the toolbar popup's keymap with
+  `bl_keymap_utils.keymap_from_toolbar.generate` and checks that the
+  three tools get consecutive number keys, which fails when the tool
+  keymap's click item takes Ctrl+D for the first tool. Its
   check that a box dragged over the cube builds a usable mask held the
   merge order of the tools after the view rasteriser, and no software
   renderer gate may skip it.
@@ -179,8 +183,13 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   Interface keymap turns into a driver, and checks that the selection
   is kept. Python cannot read a button's rectangle, so the test moves
   the pointer down the sidebar until `context.property` names the
-  field. A key held through a drag is not recorded by simulated input,
-  so annotation with D held is not covered. The file takes about 8 s.
+  field. Before that press it runs the search a button's tooltip runs
+  (`find_item_from_operator` from the sidebar, with the None button's
+  properties taken from a disabled item in a temporary keymap) with the
+  brush and with each selection tool active, and checks that it finds
+  the Image Paint item. A key held through a drag is not recorded by
+  simulated input, so annotation with D held is not covered. The file
+  takes about 10 s.
 - `tests/run.sh [--ui] [test files]` drives all of the above. Three
   arrays at the top list the special files: `window_only` files need a
   window and are skipped by the headless loop, `ui_tests` are run again

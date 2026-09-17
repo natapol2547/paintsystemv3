@@ -157,7 +157,9 @@ select by face or UV island and the image editor tools are PS-097.
   - `tests/test_selection_tools_ui.py` draws the toolbar with the brush
     active, before any tool of the group has been used, and checks the
     group's button is Lasso Selection, then draws the popup from each
-    member and checks its order.
+    member and checks its order. It also builds the toolbar popup's
+    keymap with `bl_keymap_utils.keymap_from_toolbar.generate` and checks
+    that the three tools get consecutive number keys.
 - Each operator only appends a `VIEW` op to the selection (PS-091), then
   calls `push_undo(context, bl_label)` and `selection.session.notify()`,
   and returns without GPU work. The session tick builds the mask and
@@ -187,7 +189,25 @@ select by face or UV island and the image editor tools are PS-097.
   | Shift + LMB drag | `ADD` |
   | Ctrl + LMB drag | `SUBTRACT` |
   | Shift+Ctrl + LMB drag | `INTERSECT` |
-  | LMB click | `paint_system.select_all(action='DESELECT')` |
+  | LMB click | `paint_system.select_all(action='DESELECT', from_tool_click=True)` |
+
+  Two details of the click item keep it out of Blender's shortcut
+  displays:
+  - `from_tool_click` is a hidden, unsaved property that `execute`
+    ignores. A button's tooltip names the first keymap item whose
+    properties equal the button's exactly, and the active tool's keymap
+    is searched before Image Paint. Without the property, the Selection
+    section's None button named Left Mouse instead of Ctrl D while one of
+    the tools was active. The Keymap preferences list every set property
+    of an expanded item, so they show it there; that was read from
+    Blender's code, not tried.
+  - The click is the second item, so neither end of the keymap is a
+    `select_all` item. The toolbar popup (Shift+Space) and the toolbar's
+    tooltips give a tool the key shortcut of the operator of its
+    keymap's first item, read from the user keyconfig, and Blender copies
+    add-on items there in reverse order. With the click last, Ctrl+D
+    became Lasso Selection's popup key, and Rectangle and Ellipse took 7
+    and 8 (0 and Shift+1 on 4.2).
 
   It binds no A, Alt+A or Ctrl+I: in texture paint those belong to
   Blender's face mask selection (`paint.face_select_all`), which a tool
@@ -366,8 +386,11 @@ before 5.1 (PS-091, Undo).
   in the 3D view with the brush and with Lasso Selection active, with
   nothing selected, and over the image editor in Paint mode. It checks
   that Alt+D clears nothing, and that Ctrl+D over the sidebar's Opacity
-  field adds a driver and keeps the selection. On 5.2.1, a default
-  Ctrl+D item added to 3D View Generic, Grease Pencil or Image by a
+  field adds a driver and keeps the selection. With the brush and with
+  each selection tool active, it runs the search a button's tooltip runs
+  (`find_item_from_operator` from the sidebar, with the None button's
+  properties) and checks that it finds the Image Paint item. On 5.2.1,
+  a default Ctrl+D item added to 3D View Generic, Grease Pencil or Image by a
   pre-script fails the keyconfig checks, and in Grease Pencil, which is
   consulted before Image Paint, the presses that clear as well.
   Annotation with D held needs a key held through a drag, which
