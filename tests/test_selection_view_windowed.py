@@ -304,6 +304,13 @@ def steps():
                ("single view, region overlap off", False, False, 1.0),
                ("quad view, region overlap on", True, True, 1.0),
                ("quad view, region overlap off, UI scale 2", True, False, 2.0))
+    space = view3d().spaces.active
+    show_gizmo = space.show_gizmo
+    # With gizmos shown, Blender 4.4.3 can segfault in its gizmo tooltip timer
+    # when quad view is left after a UI scale change: the timer still points
+    # at a freed quad view region. Stock 4.4.3 does it without the add-on,
+    # so only the test avoids it; the texel checks need no gizmos.
+    space.show_gizmo = False
     try:
         for label, quad, overlap, scale in layouts:
             set_layout(quad, overlap, scale)
@@ -315,6 +322,7 @@ def steps():
                 check_region(label, index, region)
     finally:
         set_layout(False, *defaults)
+        space.show_gizmo = show_gizmo
     tree().selection.clear()
     session.notify()
     view3d().tag_redraw()
