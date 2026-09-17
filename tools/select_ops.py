@@ -17,6 +17,8 @@ Shift of an Add drag does not also make a square.
 `execute` works from the stored properties alone, so Adjust Last
 Operation and the tests run it without a region.
 """
+import math
+
 from bpy.props import BoolProperty, CollectionProperty, EnumProperty, FloatProperty, FloatVectorProperty, \
     IntVectorProperty
 from bpy.types import Operator, PropertyGroup
@@ -157,6 +159,12 @@ class _ShapeSelect:
             return {'CANCELLED'}
         points = [tuple(point.co) for point in self.points]
         if shapes.degenerate(self.kind, points):
+            return {'CANCELLED'}
+        # The op stores the view relative to the object, which a flat
+        # object makes impossible to invert later.
+        determinant = target.object.matrix_world.determinant()
+        if determinant == 0.0 or not math.isfinite(determinant):
+            self.report({'WARNING'}, "Can't select on an object scaled to zero")
             return {'CANCELLED'}
         target.tree.selection.add_op(
             self.kind, self.mode, 'VIEW',

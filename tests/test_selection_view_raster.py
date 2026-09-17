@@ -14,7 +14,9 @@ The `view_eye` checks run on the CPU everywhere.
 """
 import math
 import os
+import shutil
 import sys
+import tempfile
 import time
 from types import SimpleNamespace
 
@@ -145,6 +147,11 @@ def remove_object(obj):
     bpy.data.objects.remove(obj)
     if mesh.users == 0:
         bpy.data.meshes.remove(mesh)
+
+
+def cancel_session_tick():
+    if bpy.app.timers.is_registered(session._tick):
+        bpy.app.timers.unregister(session._tick)
 
 
 def failure(selection, size=(SIZE, SIZE)):
@@ -616,8 +623,10 @@ def test_reasons():
         check(op.object == obj and obj.name not in bpy.context.view_layer.objects,
               "the op still points at the deleted object")
         expect('SURFACE', "Selection's object or UV map is gone")
+        cancel_session_tick()
         bpy.context.scene.collection.objects.link(obj)
         bpy.context.view_layer.update()
+        check(bpy.app.timers.is_registered(session._tick), "linking it back notifies the session")
         fixed("linking it back")
 
         bpy.context.scene.collection.objects.unlink(obj)
@@ -651,9 +660,25 @@ def test_reasons():
         obj.scale = (0.0, 0.0, 0.0)
         bpy.context.view_layer.update()
         expect('VIEW', "Selection's view is invalid")
+        cancel_session_tick()
         obj.scale = (1.0, 1.0, 1.0)
         bpy.context.view_layer.update()
+        check(bpy.app.timers.is_registered(session._tick),
+              "scaling it back, a transform-only update, notifies the session")
         fixed("scaling it back")
+
+        # Drawn while the object was flat: the stored object-to-view matrix
+        # has no inverse even once the object is scaled back.
+        stored = np.array(op.view_matrix, dtype=np.float64)
+        op.view_matrix = flat(stored @ np.diag((1.0, 1.0, 0.0, 1.0)))
+        try:
+            got = failure(selection, (256, 256))
+        except np.linalg.LinAlgError as error:
+            got = error
+        check(got == ('VIEW', 1), f"a stored view without an inverse raises VIEW at op 1 ({got!r})")
+        expect('VIEW', "Selection's view is invalid")
+        op.view_matrix = flat(stored)
+        fixed("a stored view with an inverse")
 
         op.object = cube()
         bpy.ops.object.mode_set(mode='EDIT')
@@ -691,6 +716,34 @@ def test_reasons():
         session.sync(force=True)
         remove_object(obj)
         bpy.data.scenes.remove(other_scene)
+
+
+def test_linked_object():
+    section("a VIEW op on a linked object is found in the view layer by identity, not by name")
+    directory = tempfile.mkdtemp(prefix="ps_view_link_")
+    path = os.path.join(directory, "library.blend")
+    local = new_object("PS View Shared Name")
+    bpy.data.libraries.write(path, {local})
+    with bpy.data.libraries.load(path, link=True) as (_, linked_data):
+        linked_data.objects = [local.name]
+    linked = linked_data.objects[0]
+    library = linked.library
+    bpy.context.scene.collection.objects.link(linked)
+    bpy.context.view_layer.update()
+    selection = fresh_selection()
+    try:
+        op = add_view_op(selection, linked, 'BOX', full_box(), look_at(EYE), perspective())
+        check(linked.library is not None and linked.name == local.name
+              and bpy.context.view_layer.objects.get(linked.name) == local,
+              "a linked object shares its name with a local one, which a name lookup finds")
+        problem = raster._view_problem(op, raster.view_key)
+        check(problem is None, f"the op on the linked object has no problem ({problem})")
+    finally:
+        selection.clear()
+        remove_object(linked)
+        bpy.data.libraries.remove(library)
+        remove_object(local)
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 def test_frame_change():
@@ -760,6 +813,7 @@ for test in (test_constants,
              test_moved_object,
              test_depth_bias_at_scale,
              test_reasons,
+             test_linked_object,
              test_frame_change,
              test_cost,
              test_release):

@@ -231,6 +231,16 @@ def test_execute():
         check(result == {'CANCELLED'} and len(selection.ops) == count, "a layer without an image is cancelled")
     finally:
         layer.image = image
+    scale = cube().scale.copy()
+    cube().scale = (1.0, 1.0, 0.0)
+    bpy.context.view_layer.update()
+    try:
+        result = bpy.ops.paint_system.select_box('EXEC_DEFAULT', **view_props(points))
+        check(result == {'CANCELLED'} and len(selection.ops) == count,
+              f"an object scaled to zero is cancelled, as its view could not be inverted ({result})")
+    finally:
+        cube().scale = scale
+        bpy.context.view_layer.update()
     selection.clear()
 
 

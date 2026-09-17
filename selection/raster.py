@@ -1064,21 +1064,29 @@ def view_key(op, peek: bool = False) -> bytes | None:
     return surface.resolve_key(obj, op.uv_map)
 
 
+def _invertible(matrix) -> bool:
+    """Whether `np.linalg.inv` can invert *matrix* (4 x 4): its float64 determinant is finite and not 0."""
+    determinant = np.linalg.det(np.array(matrix, dtype=np.float64))
+    return bool(determinant != 0.0 and np.isfinite(determinant))
+
+
 def _view_problem(op, surface_key) -> str | None:
     """Why the outlined `VIEW` op *op* cannot be drawn, as one of `GEOMETRY_REASONS`, or None."""
     obj = op.object
     if obj is None or obj.type != 'MESH':
         return 'SURFACE'
     # An object deleted in the viewport keeps the op's pointer as a user,
-    # so it stays in `bpy.data`; it is gone from the view layer.
-    if bpy.context.view_layer.objects.get(obj.name) != obj:
+    # so it stays in `bpy.data`; it is gone from the view layer. Compared
+    # by identity: a linked object can share its name with a local one.
+    if obj not in bpy.context.view_layer.objects.values():
         return 'SURFACE'
     if op.uv_map not in obj.data.uv_layers:
         return 'SURFACE'
     if min(op.region_size) <= 0:
         return 'VIEW'
-    determinant = obj.matrix_world.determinant()
-    if determinant == 0.0 or not np.isfinite(determinant):
+    # The view block inverts both: the world matrix now, and the stored
+    # view of an object that was flat when the op was drawn.
+    if not _invertible(obj.matrix_world) or not _invertible(op.view_matrix):
         return 'VIEW'
     if surface_key(op) is None:
         # The mesh may be in Edit Mode through a linked duplicate.

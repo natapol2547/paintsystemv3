@@ -49,8 +49,12 @@ def on_depsgraph_update_post(scene, depsgraph=None):
             surface.mark_suspect(original.session_uid)
             geometry_changed = True
     # Renaming or removing a UV map shows up only as a geometry update, and
-    # the live selection samples a layer's UV map by name (PS-091).
-    if geometry_changed:
+    # the live selection samples a layer's UV map by name (PS-091). While
+    # a view selection cannot be used, any update may be the fix: scaling
+    # its object back from zero or linking it back into the scene reports
+    # no geometry update (PS-093).
+    if geometry_changed or (depsgraph.updates
+                            and selection_session.current().reason in selection_raster.GEOMETRY_REASONS):
         selection_session.notify()
 
 
