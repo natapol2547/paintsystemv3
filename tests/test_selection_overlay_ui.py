@@ -14,7 +14,8 @@ Draws are counted by wrapping `overlay._uniforms`, which only a draw that
 gets as far as the GPU calls, and batch builds by wrapping
 `overlay._mesh_batch`. The redraw timer's ticks are recorded by wrapping
 `overlay._tick` before anything registers it, each with whether the
-session showed a selection when it ran. The timer checks count ticks
+session showed a selection when it ran, and so are the session's own
+ticks, with what each published. The timer checks count ticks
 and draws rather than time, because a software-rendered runner can take
 a third of a second per frame.
 
@@ -44,12 +45,14 @@ overlay = import_from("selection.overlay")
 draws = {"view3d": 0, "image": 0}
 builds = []
 ticks = []
+syncs = []
 captures = {}
 wanted = set()
 
 _uniforms = overlay._uniforms
 _mesh_batch = overlay._mesh_batch
 _tick = overlay._tick
+_session_tick = session._tick
 
 
 def _counting_uniforms(shader, *args, **kwargs):
@@ -67,10 +70,18 @@ def _recording_tick():
     return _tick()
 
 
+def _recording_session_tick():
+    result = _session_tick()
+    syncs.append((len(ticks), session.current().active))
+    return result
+
+
 overlay._uniforms = _counting_uniforms
 overlay._mesh_batch = _counting_mesh_batch
-# `ensure_timer`, `timer_running` and `unregister` look `_tick` up when called.
+# `ensure_timer`, `timer_running`, `notify`, `release` and `unregister`
+# look `_tick` up when called.
 overlay._tick = _recording_tick
+session._tick = _recording_session_tick
 
 
 def _capture():
@@ -373,14 +384,21 @@ def steps():
     yield from wait_for(overlay.timer_running)
     check(overlay.timer_running(), "the image editor showing the selection starts the timer")
     ticks.clear()
+    syncs.clear()
     tree().selection.clear()
     session.notify()
     yield from wait_for(lambda: not overlay.timer_running(), timeout=2.0)
     check(not overlay.timer_running() and not session.current().active,
           "the timer stops once the session has synced the cleared selection")
     yield from capture(editor)
-    # Ticks that ran before the session synced still saw the selection.
-    check(not overlay.timer_running() and ticks.count(False) == 1 and ticks[-1] is False,
+    # A timer registered while timers run is first due on the next pass, and
+    # runs after older timers. So the sync comes one pass later however long
+    # a frame takes, and a redraw tick may run in this pass and before the
+    # sync in the next: two at most, as a software-rendered runner shows.
+    synced_at = syncs[0][0] if syncs else None
+    check(bool(syncs) and not syncs[0][1] and synced_at <= 2,
+          f"the first session tick publishes the cleared selection, within two redraw ticks (syncs {syncs})")
+    check(not overlay.timer_running() and synced_at is not None and ticks[synced_at:] == [False],
           f"the first tick after the sync stops it, and a redraw does not restart it (ticks saw {ticks})")
 
     section("unregister leaves nothing behind")
@@ -417,6 +435,7 @@ def end():
     overlay.unregister()
     overlay._tick = _tick
     session.release()
+    session._tick = _session_tick
     raster.release()
     finish("SELECTION OVERLAY UI TEST")
 
