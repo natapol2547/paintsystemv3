@@ -27,8 +27,6 @@ selection_ops = import_from("ops.selection_ops")
 session = import_from("selection.session")
 raster = import_from("selection.raster")
 
-tools.register()
-
 OPERATORS = (
     (bpy.ops.paint_system.select_box, select_ops.PAINTSYSTEM_OT_select_box, 'BOX'),
     (bpy.ops.paint_system.select_ellipse, select_ops.PAINTSYSTEM_OT_select_ellipse, 'ELLIPSE'),
@@ -266,7 +264,6 @@ guarded(test_flat)
 guarded(test_execute)
 guarded(test_poll)
 
-tools.unregister()
 session.release()
 raster.release()
 finish("SELECTION TOOLS TEST")

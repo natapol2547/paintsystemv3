@@ -28,6 +28,7 @@ submodules = (
     "handlers",
     "preferences",
     "keymaps",
+    "tools",
 )
 
 _register, _unregister = register_submodule_factory(__name__, submodules)

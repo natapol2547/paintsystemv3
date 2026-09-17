@@ -44,8 +44,6 @@ raster = import_from("selection.raster")
 stencil = import_from("selection.stencil")
 overlay = import_from("selection.overlay")
 
-tools.register()
-
 RED_GREEN_ANTS = {
     "selection_ant_color_a": (1.0, 0.0, 0.0),
     "selection_ant_color_b": (0.0, 1.0, 0.0),
