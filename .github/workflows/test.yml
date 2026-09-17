@@ -141,11 +141,13 @@ jobs:
       # headless loop, and --ui runs every file in ui_tests in run.sh. The
       # GPU tests are in that list because 4.2 to 5.1 have no GPU context
       # in background mode. Files in run.sh's event_simulate list, the
-      # selection tools test, run with --enable-event-simulate and drive
-      # the tools through simulated mouse and key events. No check in
-      # them is skipped for a software renderer: the one that drags a box
-      # over the cube and expects a usable mask is what keeps the tools
-      # from shipping without the view rasteriser.
+      # selection tools and keymap tests, run with --enable-event-simulate
+      # and drive the tools and the add-on's shortcuts through simulated
+      # mouse and key events. The keymap test also fails when the build's
+      # default keyconfig binds Ctrl+D where the add-on's item runs. No
+      # check in them is skipped for a software renderer: the one that
+      # drags a box over the cube and expects a usable mask is what keeps
+      # the tools from shipping without the view rasteriser.
       - name: Windowed tests (Xvfb)
         env:
           BLENDER: ${{ env.BLENDER_DIR }}/blender

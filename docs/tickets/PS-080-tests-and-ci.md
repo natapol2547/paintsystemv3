@@ -153,6 +153,30 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   `bpy.ops.ed.undo_redo('EXEC_DEFAULT', True)`, and windowed undo on 4.2
   passes only `window` and `area` to `temp_override`: a region override
   segfaults 4.2.23 in `poll_select_mask`.
+- PS-093's Ctrl+D item adds `test_keymaps.py` and `test_keymaps_ui.py`.
+  The headless file reads the item from the add-on keyconfig field by
+  field (exactly one, Ctrl only, `PRESS`, no repeat, `DESELECT`) and
+  checks that unregister removes every add-on item and a new register
+  adds exactly one again. The windowed file is in `event_simulate`. It
+  first fails when the running build's default keyconfig binds Ctrl+D,
+  as a press or with `any` or a modifier set to any, in a keymap
+  consulted in the 3D view in texture paint or the image editor in
+  Paint mode, including the keymaps of every tool the two toolbars
+  list. It checks with left and with right click select, by setting the
+  preset preference, which rebuilds the keyconfig, and puts the setting
+  back. Like `test_icons.py`, it fails on a future Blender that takes
+  the combination. Bforartists' own keyconfig has no such preference
+  and is read as shipped, together with the Blender keyconfig it falls
+  back to. The file then wraps `select_all`'s `execute` to record each
+  call and presses Ctrl+D in the 3D view with the brush and with Lasso
+  Selection active, with nothing selected, and over the image editor in
+  Paint mode. It presses Alt+D and checks that nothing is cleared, and
+  presses Ctrl+D over the sidebar's Opacity field, which Blender's User
+  Interface keymap turns into a driver, and checks that the selection
+  is kept. Python cannot read a button's rectangle, so the test moves
+  the pointer down the sidebar until `context.property` names the
+  field. A key held through a drag is not recorded by simulated input,
+  so annotation with D held is not covered. The file takes about 8 s.
 - `tests/run.sh [--ui] [test files]` drives all of the above. Three
   arrays at the top list the special files: `window_only` files need a
   window and are skipped by the headless loop, `ui_tests` are run again
@@ -187,7 +211,7 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   `test_selection_session.py`, `test_selection_stencil.py`,
   `test_selection_overlay.py` and `test_selection_view_raster.py`; the
   OpenGL steps miss Vulkan-only faults), windowed tests under Xvfb (the
-  selection tools test with event simulation), then `extension
+  tools and keymap tests with event simulation), then `extension
   validate`, `build`, `install-file` and an enable check of the built
   package that also asserts its add-on preferences attach. The native
   stroke, overlay and preview pixel checks have not been run on llvmpipe

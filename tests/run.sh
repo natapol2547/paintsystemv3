@@ -28,6 +28,7 @@ window_only=(
     test_selection_overlay_ui.py
     test_selection_view_windowed.py
     test_selection_tools_ui.py
+    test_keymaps_ui.py
 )
 # Run again windowed under --ui: 4.2 to 5.1 have no background GPU context.
 ui_tests=(
@@ -42,10 +43,12 @@ ui_tests=(
     test_selection_view_raster.py
     test_selection_view_windowed.py
     test_selection_tools_ui.py
+    test_keymaps_ui.py
 )
 # Windowed with --enable-event-simulate: real input is ignored while they run.
 event_simulate=(
     test_selection_tools_ui.py
+    test_keymaps_ui.py
 )
 
 BLENDER="${BLENDER:-/home/tawan/Desktop/Blender Launcher/stable/blender-5.2.1-lts.9e2066aef7ef/blender}"

@@ -48,7 +48,9 @@ Guiding constraints for every ticket:
   No leftover code: unused imports, dead modules and stale preferences
   are removed. CI enforces what it can with ruff and the strict
   `blender-extension-builder` validator on every push (PS-080); the
-  keymap and third-party rules are read, not tested.
+  keymap and third-party rules are read, not tested, except that
+  `tests/test_keymaps_ui.py` checks the add-on's Ctrl+D against the
+  running build's default keyconfig in a window (PS-093).
 
 ## Milestones
 

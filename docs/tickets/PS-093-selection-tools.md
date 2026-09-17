@@ -24,11 +24,16 @@ Built in three parts, merged in order, each leaving the suite green:
 - **The tools** (`tools/`, `tests/test_selection_tools.py` and the
   windowed, event-simulated `tests/test_selection_tools_ui.py`).
 
+Added afterwards at the user's request: Ctrl+D clears the selection in
+texture paint (`keymaps/__init__.py`, `tests/test_keymaps.py` and the
+windowed `tests/test_keymaps_ui.py`; see Select all).
+
 Check counts on 5.2.1: `test_surface.py` 61,
 `test_selection_view_raster.py` 79 headless and 22 in
 `test_selection_view_windowed.py`, `test_selection_tools.py` 67 and
 `test_selection_tools_ui.py` 59 (52 on 4.2 to 5.0, which skip the undo
-step and Adjust Last Operation checks). The whole suite passes with
+step and Adjust Last Operation checks), `test_keymaps.py` 12 and
+`test_keymaps_ui.py` 13 (14 on Bforartists). The whole suite passes with
 `--ui` on 4.2.23, 4.5.13, 5.0.1, 5.1.2 and 5.2.1. The GPU files pass
 headless on Vulkan through lavapipe on 5.2.1, and the tools test passes
 windowed on Vulkan on 5.2.1. On 5.3 alpha the headless suite passes, and
@@ -160,8 +165,10 @@ select by face or UV island and the image editor tools are PS-097.
   It binds no A, Alt+A or Ctrl+I: in texture paint those belong to
   Blender's face mask selection (`paint.face_select_all`), which a tool
   keymap would shadow, and Blender's own select tools bind no select-all
-  keys either. `select_all` is reached from PS-091's Selection section
-  and F3 search.
+  keys either. Ctrl+D, which clears the selection, is not a tool keymap
+  item either: it lives in the Image Paint mode keymap, so it works
+  whichever tool is active (see Select all). `select_all` is also
+  reached from PS-091's Selection section and F3 search.
 - Default items the tool keymap shadows while one of the tools is
   active, by select mouse preset:
   - Left click select (factory): the paint curve `transform.translate`
@@ -247,10 +254,97 @@ is `GPU_ERROR` and retried.
 ### Select all
 
 `paint_system.select_all(action='SELECT'|'DESELECT'|'INVERT')` shipped
-with PS-091 milestone 1, with no keymap items (see above). `SELECT`
-appends `ALL` with `REPLACE`, `DESELECT` clears the ops, and `INVERT`
-calls `PaintSystemSelection.invert()`, which toggles a trailing `INVERT`
-and turns nothing and `ALL` into each other.
+with PS-091 milestone 1. `SELECT` appends `ALL` with `REPLACE`,
+`DESELECT` clears the ops, and `INVERT` calls
+`PaintSystemSelection.invert()`, which toggles a trailing `INVERT` and
+turns nothing and `ALL` into each other.
+
+**Ctrl+D clears the selection.** It is the add-on's first selection
+shortcut, added at the user's request after milestone 2: a Ctrl+D press
+runs `select_all(action='DESELECT')`, as Deselect does in Photoshop,
+Clip Studio Paint and Affinity. `keymaps/__init__.py` registers it with
+`keymaps.common.add_keymap_entry` in the add-on keyconfig's "Image
+Paint" keymap (`EMPTY` space, `WINDOW` region). That is a mode keymap,
+not a tool keymap, so it works with the brush, these tools or any other
+tool active. A, Alt+A and Ctrl+I stay unbound (see above). Alt+D is not
+used: straight-line annotation is Alt+LMB with D held, and a user who
+pressed Alt before D would clear the selection, with no undo step
+before 5.1 (PS-091, Undo).
+
+- **Where it runs.** Blender consults Image Paint in the main region of
+  the 3D view in texture paint and of the image editor in Paint mode. In
+  the image editor it runs with the brush tool on every version, even
+  while the object is in Object Mode, where `select_all` also polls.
+  Before 5.1 it also runs there with the annotate tool, and in View mode
+  while the object is in texture paint. Over the sidebar and header
+  panels it never runs; with region overlap, Ctrl+D over empty sidebar
+  space reaches the main region and clears the selection.
+- **What it shadows.** Nothing. On 4.2.23, 4.3.2, 4.4.3, 4.5.13, 5.0.1,
+  5.1.2, 5.2.1, 5.3 alpha and Bforartists 5.2.0, in every variant of
+  the Blender, Blender 27X, Industry Compatible and Bforartists presets,
+  no keymap consulted in those regions binds Ctrl+D, before or after
+  Image Paint. This was read from the preset data, and confirmed with
+  real key presses under Xephyr: on every build with the Blender preset,
+  with Industry Compatible and right click select on 4.2.23, 5.2.1 and
+  Bforartists, and with the Bforartists preset. With the item switched
+  off, the same press was handled by nothing in either region.
+  `keymaps/__init__.py` lists the keymaps. Elsewhere Ctrl+D is:
+  - `anim.driver_button_add` in User Interface, in the Blender, Blender
+    27X and Bforartists presets. Blender adds that keymap to button
+    regions such as the sidebar and headers, not to these main regions,
+    and a key event goes only to the region under the cursor. Over a
+    property button in the sidebar Ctrl+D adds a driver and the item is
+    not consulted; while a text field is edited the field takes the key.
+  - Industry Compatible's duplicate and similar items in Object Mode,
+    Mesh, Armature, Curve, Curves, Metaball, Sculpt, Sculpt Curves and
+    Mask Editing, whose polls fail in texture paint and in the image
+    editor's Paint mode. Ctrl+D still duplicates in Object Mode there.
+  - Items of other editors, such as Text and Outliner.
+- **Accepted interactions.**
+  - `select_all` returns `CANCELLED` when there is nothing to clear, and
+    a cancelled operator still consumes the event. While a Paint System
+    material is active, a Ctrl+D that a user or another add-on binds in
+    a keymap consulted after Image Paint (Object Non-modal, Frames, 3D
+    View Generic, 3D View, Image Generic, Image, Window, Screen) does not
+    run there. None of those binds Ctrl+D by default. Returning
+    `PASS_THROUGH` on that path would avoid it, and was not tried.
+  - A Ctrl+D bound by a user or another add-on in a keymap consulted
+    before Image Paint (the active tool's keymap, Grease Pencil, Paint
+    Face Mask) wins over the item.
+  - Annotation with D held is unaffected. Pressing Ctrl then D clears
+    the selection once, and D can stay held for a stroke, which is still
+    drawn. Pressing D then Ctrl clears nothing: the D presses that follow
+    are repeats, which the item ignores. No annotation gesture changed
+    with the item on or off.
+  - On macOS Blender's presets add a Cmd copy of every Ctrl item, so the
+    User Interface driver item also answers to Cmd+D there. The add-on
+    keyconfig is not converted, so the item stays Ctrl+D (the Control
+    key) on macOS. This was read from the preset code, not run on a Mac.
+  - A user's edit to the binding survives a restart, but disabling and
+    enabling the add-on in a session, as an extension update does,
+    resets it, and a later preferences save makes that permanent. This
+    is how every add-on keymap item behaves.
+  - The Keymap preferences list the item under Image Paint as
+    "(De)select All", the operator's label; the action shows only when
+    the row is expanded.
+- **Tests.** `tests/test_keymaps.py` (headless) reads the item field by
+  field: exactly one, Ctrl only, `PRESS`, no repeat, `DESELECT`, gone
+  after unregister and exactly one again after a new register.
+  `tests/test_keymaps_ui.py` (windowed, event simulated) fails when the
+  running build's default keyconfig binds Ctrl+D in any keymap consulted
+  in either region, the keymaps of every tool both toolbars show
+  included, with left and with right click select. It counts `any` items
+  and modifiers set to any. On Bforartists it reads the Bforartists
+  keyconfig and the Blender one it falls back to. It then presses Ctrl+D
+  in the 3D view with the brush and with Lasso Selection active, with
+  nothing selected, and over the image editor in Paint mode. It checks
+  that Alt+D clears nothing, and that Ctrl+D over the sidebar's Opacity
+  field adds a driver and keeps the selection. On 5.2.1, a default
+  Ctrl+D item added to 3D View Generic, Grease Pencil or Image by a
+  pre-script fails the keyconfig checks, and in Grease Pencil, which is
+  consulted before Image Paint, the presses that clear as well.
+  Annotation with D held needs a key held through a drag, which
+  simulated input does not record, so it is not tested.
 
 ### Surface keys (`gpu_passes/surface.py`)
 

@@ -449,9 +449,11 @@ material and never recompiles a shader.
   its own, where a step for a selection edit restores nothing and costs
   a Ctrl+Z. `SELECT` does nothing when the ops are already one `ALL`, and
   `DESELECT` nothing when they are empty.
-- No keymap items. A, Alt+A and Ctrl+I in texture paint belong to
-  Blender's face mask selection (`paint.face_select_all`); binding them
-  would shadow it. Users can bind `paint_system.select_all` themselves.
+- A, Alt+A and Ctrl+I stay unbound: in texture paint they belong to
+  Blender's face mask selection (`paint.face_select_all`), and binding
+  them would shadow it. Users can bind `paint_system.select_all`
+  themselves. Ctrl+D runs `select_all(action='DESELECT')` from the
+  Image Paint keymap since PS-093; see its Select all section.
 
 ## Undo
 
