@@ -226,6 +226,18 @@ def set_layout(quad, overlap, scale):
             bpy.ops.screen.region_quadview()
 
 
+def near_edges(region, screen, reach=2.0):
+    """Whether each screen point lies within *reach* pixels of a projected edge of the cube."""
+    corners = [region_point(region, cube().matrix_world @ vertex.co) for vertex in cube().data.vertices]
+    near = np.zeros(len(screen), dtype=bool)
+    for edge in cube().data.edges:
+        start, end = corners[edge.vertices[0]], corners[edge.vertices[1]]
+        step = end - start
+        t = np.clip((screen - start) @ step / max(float(step @ step), 1e-12), 0.0, 1.0)
+        near |= np.linalg.norm(screen - (start + t[:, None] * step), axis=1) <= reach
+    return near
+
+
 def check_region(label, index, region):
     """Record a box round the cube in *region* and compare the mask with where the texels project."""
     rv3d = region.data
@@ -252,7 +264,10 @@ def check_region(label, index, region):
     selected = island & (mask > 0.5)
     outside = selected & ~((screen >= lo - 1.0) & (screen <= hi + 1.0)).all(axis=1)
     inside = island & front & ((screen >= lo + 1.0) & (screen <= hi - 1.0)).all(axis=1)
-    missed = inside & ~selected
+    # Within a pixel or two of an edge the depth filter reads the face or
+    # background beyond it, which hides a steep face there (`TEXEL_SLOPE_CAP`).
+    at_edge = inside & near_edges(region, screen)
+    missed = inside & ~at_edge & ~selected
     rng = np.random.default_rng(index)
     picks = np.flatnonzero(selected)
     picks = rng.choice(picks, min(200, len(picks)), replace=False) if len(picks) else picks
@@ -265,7 +280,7 @@ def check_region(label, index, region):
           f"{label}, region {index} ({width}x{height}, {'perspective' if rv3d.is_perspective else 'orthographic'}): "
           f"{int(selected.sum())} texels selected, {int(outside.sum())} project more than 1 px outside the box "
           f"({api_outside} of {len(picks)} by location_3d_to_region_2d), {int(missed.sum())} of "
-          f"{int(inside.sum())} facing texels inside it missed")
+          f"{int(inside.sum())} facing texels inside it missed, {int(at_edge.sum())} within 2 px of an edge not counted")
 
 
 def steps():
