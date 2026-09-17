@@ -39,6 +39,8 @@ last_build_stats: BuildStats | None = None
 _BASE_NODE_PROPS = {p.identifier for p in bpy.types.Node.bl_rna.properties}
 # Identity and editing state that never reaches the shader.
 _HASH_EXCLUDED_PROPS = {'uuid', 'is_expanded', 'lock_layer', 'lock_alpha'}
+# Node class -> the property names node_state reads. See _hashed_props.
+_hashed_prop_names: dict[type, tuple[str, ...]] = {}
 
 
 # ── Tree helpers ─────────────────────────────────────────────────────
@@ -237,17 +239,30 @@ class CompileContext:
         return result
 
 
+def _hashed_props(node) -> tuple[str, ...]:
+    """The property names ``node_state`` reads, memoised per node class.
+
+    A class's RNA properties never change while it is registered, and walking
+    them is most of what hashing a subtree costs. The cache is keyed by the
+    class object and cleared in ``reset_state``, so an add-on reload cannot
+    answer with the names of a class that no longer exists.
+    """
+    cls = type(node)
+    names = _hashed_prop_names.get(cls)
+    if names is None:
+        names = tuple(
+            prop.identifier for prop in node.bl_rna.properties
+            if prop.identifier not in _BASE_NODE_PROPS
+            and prop.identifier not in _HASH_EXCLUDED_PROPS
+            and not prop.identifier.startswith(('cache_', 'rna_'))
+        )
+        _hashed_prop_names[cls] = names
+    return names
+
+
 def node_state(node) -> dict[str, Any]:
     """Node-specific properties (excluding base Node props, uuid, cache_*)."""
-    state: dict[str, Any] = {}
-    for prop in node.bl_rna.properties:
-        ident = prop.identifier
-        if ident in _BASE_NODE_PROPS or ident in _HASH_EXCLUDED_PROPS:
-            continue
-        if ident.startswith('cache_') or ident.startswith('rna_'):
-            continue
-        state[ident] = getattr(node, ident)
-    return state
+    return {ident: getattr(node, ident) for ident in _hashed_props(node)}
 
 
 def _is_ref(value: Any) -> bool:
@@ -562,6 +577,7 @@ class suspend_compile:
 
 def reset_state() -> None:
     global _dirty_all, _suspended, _blocked, _flushing
+    _hashed_prop_names.clear()
     _dirty_uuids.clear()
     _dirty_all = False
     _suspended = 0

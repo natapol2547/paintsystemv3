@@ -98,9 +98,14 @@ class IR:
 
     # -- hashing --------------------------------------------------------
 
-    def fingerprint(self) -> str:
-        payload = {
-            "meta": self.meta,
+    def payload(self) -> dict[str, Any]:
+        """Everything the fingerprint covers, as plain JSON data.
+
+        Nodes and links are ordered so that two IRs describing the same tree
+        produce the same payload whatever order they were emitted in.
+        """
+        return {
+            "meta": dict(self.meta),
             "sockets": [
                 [s.in_out, s.socket_type, s.name, _serialize(s.properties)]
                 for s in self.sockets
@@ -120,7 +125,9 @@ class IR:
                 for l in self.links
             ),
         }
-        return hash_payload(payload)
+
+    def fingerprint(self) -> str:
+        return hash_payload(self.payload())
 
     # -- applying -------------------------------------------------------
 
@@ -152,13 +159,38 @@ def hash_payload(payload: Any) -> str:
 
 
 def _serialize(value: Any) -> Any:
-    """Convert *value* into something json.dumps can handle deterministically."""
+    """Convert *value* into something json.dumps can handle deterministically.
+
+    Nearly every value in a payload is a float, a string or a dict of those,
+    so the exact type is checked first and anything else goes to the isinstance
+    chain in ``_serialize_other``. Dict keys are not sorted here: the payload
+    is dumped with ``sort_keys=True``, which orders them anyway.
+    """
+    kind = type(value)
+    if kind is float:
+        return round(value, 6)
+    if kind is str or kind is int or kind is bool or value is None:
+        return value
+    if kind is dict:
+        return {str(k): _serialize(v) for k, v in value.items()}
+    if kind is list or kind is tuple:
+        return [_serialize(v) for v in value]
+    return _serialize_other(value)
+
+
+def _serialize_other(value: Any) -> Any:
+    """The rest of ``_serialize``: wrappers, datablocks and subclasses.
+
+    Flexible comes before the container checks because it wraps a value the
+    build applies only once, and an ID before them because a datablock is
+    identified by name rather than by its contents.
+    """
     if isinstance(value, Flexible):
         return ["flexible", _serialize(value.value)]
     if isinstance(value, bpy.types.ID):
         return ["id", type(value).__name__, value.name_full]
     if isinstance(value, dict):
-        return {str(k): _serialize(v) for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))}
+        return {str(k): _serialize(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_serialize(v) for v in value]
     if isinstance(value, (bool, int, str)) or value is None:
