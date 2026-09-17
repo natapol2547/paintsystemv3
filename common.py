@@ -60,15 +60,6 @@ def blender_icon(*names: str) -> str:
     return next((name for name in names if name in blender_icons), 'NONE')
 
 
-def get_icon_from_socket_type(socket_type: str) -> int:
-    type_to_icon = {
-        'COLOR': 'color_socket',
-        'VECTOR': 'vector_socket',
-        'FLOAT': 'float_socket',
-    }
-    return get_icon(type_to_icon.get(socket_type, 'color_socket'))
-
-
 # Path
 def get_project_root_path() -> str:
     return os.path.dirname(os.path.abspath(__file__))

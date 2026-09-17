@@ -21,13 +21,8 @@ class PAINTSYSTEM_UL_channels(UIList):
     bl_idname = "PAINTSYSTEM_UL_channels"
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
-        type_icon = icon_kwargs(SOCKET_ICONS.get(item.type, 'NONE'))
-        if self.layout_type in {'DEFAULT', 'COMPACT'}:
-            row = layout.row(align=True)
-            row.prop(item, "name", text="", emboss=False, **type_icon)
-        elif self.layout_type == 'GRID':
-            layout.alignment = 'CENTER'
-            layout.label(text="", **type_icon)
+        row = layout.row(align=True)
+        row.prop(item, "name", text="", emboss=False, **icon_kwargs(SOCKET_ICONS.get(item.type, 'NONE')))
 
 
 def _draw_channel_list(layout, node_tree):
