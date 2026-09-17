@@ -19,6 +19,7 @@ from contextlib import contextmanager
 
 import bpy
 import numpy as np
+from mathutils import Matrix
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import before, check, finish, guarded, import_from, register_addon, section, since, skip  # noqa: E402
@@ -180,7 +181,8 @@ def test_apply_and_restore():
           f"through the layer's UV map ({state.uv_map})")
     check(image.colorspace_settings.name == 'Non-Color' and image.source == 'FILE' and not image.is_dirty,
           "the image is a clean Non-Color file image")
-    expected = stencil.BLOCK_FILE if state.reason else state.digest.hex() + ".png"
+    digest = t.selection.prefix_digests(*state.size, state.tile, surface_key=raster.view_key)[-1]
+    expected = stencil.BLOCK_FILE if state.reason else digest.hex() + ".png"
     check(file_name() == expected, f"it reads {expected} ({state.reason or 'mask available'})")
     check(stencil.is_applied(bpy.context.scene) and len(backups()) == 1
           and [(entry.mesh, entry.uv_name) for entry in bpy.context.scene.paint_system.stencil_meshes]
@@ -294,6 +296,85 @@ def test_stale_pixels_reload():
     t.selection.ops.remove(len(t.selection.ops) - 1)
     apply()
     check(np.array_equal(stencil_bytes(), mask_bytes(state_a)), "the next sync reloads A's pixels")
+    t.selection.clear()
+    apply()
+
+
+def add_view_box(selection, obj):
+    """A `VIEW` box over the whole of a 64 x 64 top view of *obj*, through its UVMap."""
+    view = Matrix.Translation((0.0, 0.0, -10.0)) @ obj.matrix_world
+    projection = Matrix.Identity(4)
+    projection[0][0] = projection[1][1] = 0.25
+    projection[2][2] = -2.0 / 19.0
+    projection[2][3] = -21.0 / 19.0
+    return selection.add_op('BOX', space='VIEW', points=[(-1.0, -1.0), (65.0, 65.0)], region_size=(64, 64),
+                            view_matrix=[value for column in view.col for value in column],
+                            projection_matrix=[value for column in projection.col for value in column],
+                            object=obj, uv_map="UVMap")
+
+
+def test_view_file_follows_the_surface():
+    section("a selection drawn in the 3D view gets a new file when its surface changes")
+    if not HAS_GPU:
+        skip("mask files need a GPU context (background Blender before 5.2)")
+        return
+    t = tree()
+    mesh = cube().data
+    vertex = mesh.vertices[0]
+    original = tuple(vertex.co)
+
+    def move(offset):
+        vertex.co = (original[0], original[1], original[2] + offset)
+        mesh.update()
+        bpy.context.view_layer.update()
+
+    try:
+        for label, add in (("a UV selection", lambda: t.selection.add_op('BOX', points=[(0.1, 0.1), (0.9, 0.9)])),
+                           ("a VIEW selection", lambda: add_view_box(t.selection, cube()))):
+            t.selection.clear()
+            add()
+            state = apply()
+            before_move = file_name()
+            move(0.25)
+            moved = apply()
+            after_move = file_name()
+            wanted = t.selection.prefix_digests(*moved.size, moved.tile, surface_key=raster.view_key)[-1]
+            check(not moved.reason and after_move == wanted.hex() + ".png"
+                  and np.array_equal(stencil_bytes(), mask_bytes(moved)),
+                  f"{label}: the file is named by the digest with surface keys and holds the mask ({moved.reason})")
+            if label == "a UV selection":
+                check(after_move == before_move and moved.digest == state.digest,
+                      f"{label}: a vertex move keeps the file name")
+            else:
+                check(after_move != before_move and moved.digest != state.digest,
+                      f"{label}: a vertex move changes the file name")
+            move(0.0)
+    finally:
+        move(0.0)
+        t.selection.clear()
+        apply()
+
+
+def test_empty_mask_restores():
+    section("a mask that selects nothing gives the user's stencil back")
+    if not HAS_GPU:
+        skip("mask builds need a GPU context (background Blender before 5.2)")
+        return
+    set_user_stencil()
+    t = tree()
+    t.selection.clear()
+    t.selection.add_op('BOX', points=[(0.2, 0.2), (0.6, 0.6)])
+    apply()
+    check(stencil.is_applied(bpy.context.scene), "a selection that covers texels takes the stencil")
+    t.selection.add_op('BOX', points=[(1.5, 1.5), (1.8, 1.8)])
+    state = session.sync()
+    check(state.empty and not state.reason and len(t.selection.ops) == 1,
+          f"a box beyond the tile replaces it with an empty mask ({state.empty}, {state.reason!r})")
+    check(user_stencil_back() and not stencil.is_applied(bpy.context.scene) and not len(backups()),
+          "the user's settings are back, so strokes are not clipped")
+    t.selection.add_op('BOX', 'ADD', points=[(0.2, 0.2), (0.6, 0.6)])
+    apply()
+    check(stencil.is_applied(bpy.context.scene), "adding a shape that covers texels takes the stencil again")
     t.selection.clear()
     apply()
 
@@ -634,6 +715,8 @@ guarded(test_session_reaches_the_stencil)
 guarded(test_second_sync_writes_nothing)
 guarded(test_digest_files_are_reused)
 guarded(test_stale_pixels_reload)
+guarded(test_view_file_follows_the_surface)
+guarded(test_empty_mask_restores)
 guarded(test_block_mode)
 guarded(test_other_scene_is_restored)
 guarded(test_removed_scene_gives_meshes_back)
@@ -652,4 +735,5 @@ with bpy.context.temp_override(window=bpy.context.window_manager.windows[0]):
 # GPU textures still referenced when Python exits are freed after the GPU context (see test_selection_raster).
 session.release()
 raster.release()
+import_from("gpu_passes.texel_map").release()
 finish("SELECTION STENCIL TEST")

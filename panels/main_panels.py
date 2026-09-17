@@ -58,7 +58,8 @@ def _draw_selection_section(layout, context, tree):
     row = header.row()
     row.label(text="Selection", icon='SELECT_SET')
     state = selection_session.current()
-    problem = state.tree_uid == tree.session_uid and state.selected and bool(state.reason)
+    live = state.tree_uid == tree.session_uid and state.selected
+    problem = live and bool(state.reason)
     if problem:
         row.label(text="", icon='ERROR')
     if body is None:
@@ -69,6 +70,8 @@ def _draw_selection_section(layout, context, tree):
     row.operator("paint_system.select_all", text="Invert").action = 'INVERT'
     if problem:
         body.label(text=selection_session.label(state), icon='ERROR')
+    elif live and state.empty:
+        body.label(text=selection_session.label(state), icon='INFO')
 
 
 def _draw_compiled_info(layout, tree):

@@ -21,8 +21,10 @@ The timer runs `sync()`. It resolves the target, compares a `State` with
 the one it last synced and stops there when nothing changed and the mask
 is still cached. Otherwise it builds the mask once, remembering a failure
 per digest so a mask that cannot be built is not tried again on every
-tick, and retrying `GPU_ERROR` a few times. A sync that gets past the
-comparison hands the state on to `stencil.sync`, then `overlay.sync`,
+tick, and retrying `GPU_ERROR` a few times. A built mask that selects
+nothing, such as a box dragged over empty background, counts as no
+selection (`State.empty`) while its ops stay on the tree. A sync that
+gets past the comparison hands the state on to `stencil.sync`, then `overlay.sync`,
 and tags the 3D views and image editors for redraw. A consumer that
 raises is logged, and the next sync reaches the consumers again.
 `notify(force=True)` forgets the last state first, so that sync reaches
@@ -71,7 +73,13 @@ _LABELS = {
     'TOO_COMPLEX': "Lasso too complex",
     'SELF_TEST': "GPU failed the selection self-test",
     'GPU_ERROR': "GPU error, retrying",
+    'SURFACE': "Selection's object or UV map is gone",
+    'VIEW': "Selection's view is invalid",
+    'EDIT_MODE': "Leave Edit Mode to use the selection",
 }
+
+NOTHING_SELECTED = "Nothing selected"
+"""Label of a selection whose mask selects no texel (`State.empty`)."""
 
 GPU_ERROR_GIVEN_UP = "GPU error, change the selection to retry"
 """Label of `GPU_ERROR` once `RETRY_LIMIT` tries have run and the timer has stopped."""
@@ -99,7 +107,10 @@ class State:
     is the mask's cache key, empty without a target. `reason` and
     `message` are empty when the mask is available, else a target problem
     (`NO_LAYER`, `NO_IMAGE`, `UDIM`, `NO_UV_MAP`) or a `MaskUnavailable`
-    reason, with its UI message.
+    reason, with its UI message. `empty` is True when the mask was built
+    and selects nothing (`SelectionMask.is_empty`): the ops stay, but it
+    counts as no selection, so painting is not clipped and nothing is
+    drawn.
     """
     scene_uid: int = 0
     tree_uid: int = 0
@@ -113,11 +124,12 @@ class State:
     paint_mode: bool = False
     reason: str = ""
     message: str = ""
+    empty: bool = False
 
     @property
     def active(self) -> bool:
-        """A selection exists and its mask is built and cached."""
-        return self.selected and not self.reason
+        """A selection exists, and its mask is built, cached and selects something."""
+        return self.selected and not self.reason and not self.empty
 
 
 EMPTY = State()
@@ -163,7 +175,10 @@ def _state(context) -> tuple[State, Target | None]:
                      reason=reason, message=_TARGET_MESSAGES[reason]), None
     selection = target.tree.selection
     selected = len(selection.ops) > 0
-    digest = selection.prefix_digests(*target.size, target.tile)[-1] if selected else b""
+    # The provider is called for outlined VIEW ops only, so a selection
+    # drawn in UV space resolves no surface.
+    digest = (selection.prefix_digests(*target.size, target.tile, surface_key=raster.view_key)[-1]
+              if selected else b"")
     reason, message = _failures.get(digest, ("", "")) if selected else ("", "")
     return State(scene_uid, target.tree.session_uid,
                  target.object.session_uid if target.object is not None else 0,
@@ -172,22 +187,32 @@ def _state(context) -> tuple[State, Target | None]:
 
 
 def _build(state: State, target: Target) -> State:
-    """Build the mask for *state*, turning a failure into the state's reason."""
+    """Build the mask for *state*, turning a failure into the state's reason and an empty mask into `empty`.
+
+    Failures that depend on the objects a `VIEW` op was drawn on
+    (`raster.GEOMETRY_REASONS`) are not remembered: several object states
+    share one digest, and fixing the cause changes no op.
+    """
     if core.gpu_known() is not True:
         # Never start a background GPU context from here (see gpu_passes.core).
-        return dataclasses.replace(state, reason='NO_GPU', message=raster.MESSAGES['NO_GPU'])
+        return dataclasses.replace(state, reason='NO_GPU', message=raster.MESSAGES['NO_GPU'], empty=False)
     try:
-        raster.get_mask(target.tree.selection, target.size, target.tile)
+        empty = raster.get_mask(target.tree.selection, target.size, target.tile).is_empty()
     except raster.MaskUnavailable as error:
         if error.reason == 'GPU_ERROR':
             _retries[state.digest] = _retries.get(state.digest, 0) + 1
-        else:
+        elif error.reason not in raster.GEOMETRY_REASONS:
             if len(_failures) >= FAILURE_MEMO_LIMIT:
                 _failures.clear()
             _failures[state.digest] = (error.reason, str(error))
-        return dataclasses.replace(state, reason=error.reason, message=str(error))
+        return dataclasses.replace(state, reason=error.reason, message=str(error), empty=False)
+    except RuntimeError as error:
+        # Reading the mask back raises when no GPU context is active.
+        log.debug("Selection mask could not be read back: %s", str(error))
+        _retries[state.digest] = _retries.get(state.digest, 0) + 1
+        return dataclasses.replace(state, reason='GPU_ERROR', message=raster.MESSAGES['GPU_ERROR'], empty=False)
     _retries.pop(state.digest, None)
-    return state
+    return dataclasses.replace(state, empty=empty)
 
 
 def sync(context=None, force: bool = False) -> State:
@@ -204,7 +229,10 @@ def sync(context=None, force: bool = False) -> State:
         _retries.clear()
     state, target = _state(context)
     built = False
-    if target is not None and state.active:
+    if target is not None and state.selected and not state.reason:
+        if _last is not None and state.digest == _last.digest:
+            # The same digest is the same mask, so it is still as empty.
+            state = dataclasses.replace(state, empty=_last.empty)
         if state != _last or raster.peek_mask(target.tree.selection, target.size, target.tile) is None:
             state = _build(state, target)
             # A mask rebuilt after an eviction is news even when the state
@@ -258,7 +286,12 @@ def current() -> State:
 
 
 def label(state: State) -> str:
-    """Short text for *state*'s problem that fits a sidebar line; `state.message` has the full sentence."""
+    """Short text for *state*'s problem that fits a sidebar line; `state.message` has the full sentence.
+
+    `NOTHING_SELECTED` for an empty mask, which is not a problem.
+    """
+    if state.empty:
+        return NOTHING_SELECTED
     if state.reason == 'GPU_ERROR' and _retries.get(state.digest, 0) >= RETRY_LIMIT:
         return GPU_ERROR_GIVEN_UP
     return _TARGET_MESSAGES.get(state.reason) or _LABELS.get(state.reason, state.message)

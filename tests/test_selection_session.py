@@ -13,6 +13,7 @@ import tempfile
 from types import SimpleNamespace
 
 import bpy
+from mathutils import Matrix
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import check, finish, guarded, import_from, register_addon, section, since, skip  # noqa: E402
@@ -118,8 +119,8 @@ def test_target_follows_the_active_layer():
     t.selection.clear()
     t.nodes[SMALL].image = small_image
     bpy.data.images.remove(tiled)
-    check(session.label(session.State(selected=True, reason='SURFACE', message="The surface is gone"))
-          == "The surface is gone", "a reason without a label falls back to the state's message")
+    check(session.label(session.State(selected=True, reason='UNLABELLED', message="Something is wrong"))
+          == "Something is wrong", "a reason without a label falls back to the state's message")
 
 
 def test_notify_schedules_one_tick():
@@ -165,7 +166,7 @@ def test_sync_compares_state():
     t.selection.add_op('BOX', points=[(0.1, 0.1), (0.6, 0.6)], feather=4.0)
     state = session.sync()
     check(state.selected and state.size == (1024, 1024)
-          and state.digest == t.selection.prefix_digests(1024, 1024, 1001)[-1],
+          and state.digest == t.selection.prefix_digests(1024, 1024, 1001, surface_key=raster.view_key)[-1],
           "an edit changes the digest and syncs")
     check(len(reaches) == 2, f"and reaches the consumers once ({len(reaches)})")
     select(SMALL)
@@ -250,6 +251,124 @@ def test_failures_are_remembered():
         core.gpu_known = original_known
         session.forget_failures()
         session.sync(force=True)
+
+
+def add_view_box(selection, obj, mode='REPLACE'):
+    """A `VIEW` box over the middle of a 64 x 64 top view of *obj*, through its UVMap."""
+    view = Matrix.Translation((0.0, 0.0, -10.0)) @ obj.matrix_world
+    projection = Matrix.Identity(4)
+    projection[0][0] = projection[1][1] = 0.25
+    projection[2][2] = -2.0 / 19.0
+    projection[2][3] = -21.0 / 19.0
+    return selection.add_op('BOX', mode, space='VIEW', points=[(16.2, 16.3), (47.7, 47.6)], region_size=(64, 64),
+                            view_matrix=[value for column in view.col for value in column],
+                            projection_matrix=[value for column in projection.col for value in column],
+                            object=obj, uv_map="UVMap")
+
+
+def test_view_selection_digest_and_reasons():
+    section("a selection drawn in the 3D view keys its digest by the surface and is not remembered as failed")
+    session.forget_failures()
+    select(BIG)
+    t = tree()
+    t.selection.clear()
+    calls = []
+    view_key = raster.view_key
+
+    def counting(op, peek=False):
+        calls.append(op.kind)
+        return view_key(op, peek)
+
+    raster.view_key = counting
+    try:
+        t.selection.add_op('BOX', points=[(0.1, 0.1), (0.6, 0.6)])
+        t.selection.add_op('INVERT')
+        session.sync()
+        check(not calls, f"a selection drawn in UV space calls no surface key provider ({len(calls)} calls)")
+    finally:
+        raster.view_key = view_key
+
+    mesh = cube().data.copy()
+    other = bpy.data.objects.new("PS Session View Object", mesh)
+    bpy.context.scene.collection.objects.link(other)
+    bpy.context.view_layer.update()
+    t.selection.clear()
+    op = add_view_box(t.selection, other)
+    state = session.sync()
+    check(state.digest == t.selection.prefix_digests(1024, 1024, 1001, surface_key=raster.view_key)[-1]
+          and state.digest != t.selection.prefix_digests(1024, 1024, 1001)[-1],
+          "the state's digest includes the key of the surface the op was drawn on")
+    bpy.data.objects.remove(other)
+    bpy.data.meshes.remove(mesh)
+    state = session.sync()
+    if not HAS_GPU:
+        check(state.reason == 'NO_GPU', f"without a GPU context the state says so first ({state.reason})")
+        skip("building a VIEW selection needs a GPU context (background Blender before 5.2)")
+        t.selection.clear()
+        session.sync(force=True)
+        return
+    check(state.reason == 'SURFACE' and session.label(state) == "Selection's object or UV map is gone"
+          and not session._failures,
+          f"a deleted object gives SURFACE with its label, and nothing is remembered ({state.reason})")
+    op.object = cube()
+    state = session.sync()
+    check(state.reason == '' and state.active, f"pointing the op at an object clears it on the next sync "
+                                                f"({state.reason})")
+    op.region_size = (0, 0)
+    state = session.sync()
+    check(state.reason == 'VIEW' and session.label(state) == "Selection's view is invalid" and not session._failures,
+          f"an empty region gives VIEW with its label, not remembered ({state.reason})")
+    t.selection.clear()
+    session.sync(force=True)
+
+
+def test_empty_mask_is_no_selection():
+    section("a mask that selects nothing counts as no selection")
+    if not HAS_GPU:
+        skip("mask builds need a GPU context (background Blender before 5.2)")
+        return
+    select(BIG)
+    t = tree()
+    t.selection.clear()
+    session.sync(force=True)
+    # Beyond the tile by more than the soft edge: nothing is covered.
+    t.selection.add_op('BOX', points=[(1.5, 1.5), (1.8, 1.8)])
+    reaches.clear()
+    state = session.sync()
+    check(state.selected and state.empty and not state.reason and not state.active and len(t.selection.ops) == 1,
+          f"the state is empty but selected, with no reason and the op kept ({state.empty}, {state.reason!r})")
+    check(session.label(state) == "Nothing selected" and len(reaches) == 1,
+          f"the label says so, and the consumers hear of it ({session.label(state)!r})")
+    mask = raster.peek_mask(t.selection, state.size)
+    reads = []
+    read_bytes = raster.SelectionMask.read_bytes
+
+    def counting(self):
+        reads.append(self.key)
+        return read_bytes(self)
+
+    raster.SelectionMask.read_bytes = counting
+    try:
+        again = session.sync()
+        forced = session.sync(force=True)
+        check(again == state and forced == state and mask.is_empty() and not reads,
+              f"further syncs keep it empty without reading the mask back again ({len(reads)} reads)")
+        raster.invalidate()
+        rebuilt = session.sync()
+        check(rebuilt == state and len(reads) == 1, f"a rebuilt mask is read back once ({len(reads)} reads)")
+    finally:
+        raster.SelectionMask.read_bytes = read_bytes
+
+    t.selection.add_op('BOX', 'ADD', points=[(0.2, 0.2), (0.4, 0.4)])
+    state = session.sync()
+    check(not state.empty and state.active and session.label(state) != "Nothing selected",
+          "adding a shape that covers texels makes it a selection again")
+    t.selection.add_op('BOX', 'SUBTRACT', points=[(0.0, 0.0), (1.0, 1.0)])
+    state = session.sync()
+    check(state.empty and not state.active, "subtracting everything empties it again")
+    t.selection.clear()
+    state = session.sync()
+    check(not state.selected and not state.empty, "clearing the selection is no selection, not an empty one")
 
 
 def test_select_all_operator():
@@ -459,6 +578,8 @@ guarded(test_target_follows_the_active_layer)
 guarded(test_notify_schedules_one_tick)
 guarded(test_sync_compares_state)
 guarded(test_failures_are_remembered)
+guarded(test_view_selection_digest_and_reasons)
+guarded(test_empty_mask_is_no_selection)
 guarded(test_select_all_operator)
 guarded(test_select_all_modes)
 guarded(test_consumer_failure_is_retried)
@@ -468,4 +589,5 @@ guarded(test_undo_and_load_force_a_sync)
 # GPU textures still referenced when Python exits are freed after the GPU context (see test_selection_raster).
 session.release()
 raster.release()
+import_from("gpu_passes.texel_map").release()
 finish("SELECTION SESSION TEST")

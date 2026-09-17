@@ -107,7 +107,10 @@ def _mask_file(selection, size: tuple[int, int], tile: int) -> str | None:
     None when not even the block file can be written.
     """
     width, height = raster.mask_size(size)
-    path = os.path.join(_file_dir(), selection.prefix_digests(width, height, tile)[-1].hex() + ".png")
+    # Named by the digest with surface keys, so a VIEW selection gets a new
+    # file when the surface it was drawn on changes.
+    digest = selection.prefix_digests(width, height, tile, surface_key=raster.view_key)[-1]
+    path = os.path.join(_file_dir(), digest.hex() + ".png")
     if os.path.exists(path):
         return path
     try:
@@ -289,7 +292,8 @@ def sync(state, target) -> None:
     *target* is the `session.Target` *state* was resolved from, or None.
     The selection applies in texture paint mode: through its mask file
     when the mask is available, blocking all paint when `state.reason`
-    says why it is not.
+    says why it is not. A mask that selects nothing (`state.empty`) is no
+    selection, so the user's settings come back.
     """
     scene = bpy.context.scene
     # Tool settings are per scene: another scene keeps nothing of the selection's.
@@ -298,7 +302,7 @@ def sync(state, target) -> None:
     for index in reversed(range(len(scenes))):
         if scenes[index].scene != scene:
             restore(scenes[index].scene)
-    if not (state.paint_mode and state.selected):
+    if not (state.paint_mode and state.selected) or state.empty:
         restore(scene)
         return
     if state.reason:
