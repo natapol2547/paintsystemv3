@@ -276,9 +276,10 @@ data structures or algorithms are ported.
   artifact's ID pointers once a fingerprint matches. PS-083: deleting an
   image and creating another under the freed name leaves the artifact's
   Texture Image empty, because the fingerprint matches the one stored
-  before the deletion and no compile runs. PS-084: renaming an image or
-  the tree changes the fingerprint without triggering a compile, so the
-  stored one is stale until the next edit and a baked layer loses its
+  before the deletion and no compile runs. PS-084: renaming a datablock a
+  layer points at changes the fingerprint without triggering a compile
+  (the tree's own name is already covered by a msgbus subscription), so
+  the stored one is stale until the next edit and a baked layer loses its
   cache. Both want the same fix and are cheaper done together; not
   scheduled, since neither misrenders a normal edit.
 

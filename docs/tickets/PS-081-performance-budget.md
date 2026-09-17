@@ -45,9 +45,12 @@ What landed, in merge order:
   chain of about 1000 nodes used to reach Python's recursion limit.
 - **The fingerprint payload is built without a redundant sort.**
   `_serialize` sorted dicts that `json.dumps(sort_keys=True)` sorts
-  again, 3.7 ms per compile of 100 layers. The output is byte-identical,
-  which matters because `compiler/bake.py` stores cache hashes computed
-  by `hash_payload`.
+  again, and reached the common types through a chain of `isinstance`
+  checks. Dropping the sort and dispatching on the exact type took the
+  fingerprint phase of a 100-layer compile from about 3.3 ms to about
+  1.6 ms, the sort itself being roughly 0.5 ms of that. The output is
+  byte-identical, which matters because `compiler/bake.py` stores cache
+  hashes computed by `hash_payload`.
 - **`PS_PROFILE=1` logs per-phase timings** (`compiler/profile.py`).
   Unset, a phase is one call into a shared no-op.
 - **The budget is a test** (`tests/test_perf.py`).
@@ -76,10 +79,13 @@ Against the budget: the structural change (35 ms of the 60 allowed) and
 still draws from one walk. The property patch is on the line at 15.0 ms
 median, 14.4 ms best, so it holds on a quiet machine and not on a busy
 one. The unchanged compile misses: 8.2 ms against 5 ms, of which 6.6 ms
-is `build_ir` and 1.8 ms the fingerprint. `tests/test_perf.py` asserts
-12 ms for it rather than the ticket's 5, and guards the shape instead:
-an unchanged compile of 100 layers must cost less than six times the
-same compile of 25, where the pre-PS-081 walk was about thirteen.
+is `build_ir` and 1.8 ms the fingerprint. `tests/test_perf.py` prints
+every measurement against its target and fails only at about twice it,
+because on a desktop under its own load these numbers run half again as
+high and a test that fails there gets ignored. What it guards strictly
+is the shape: an unchanged compile of 100 layers must cost less than six
+times the same compile of 25, where the pre-PS-081 walk was about
+thirteen.
 
 The same tree on Blender 4.2.23 LTS runs 1.3 to 1.5 times faster than on
 5.2.1 (an unchanged compile 6.0 ms, an opacity edit 10.2 ms), and the
