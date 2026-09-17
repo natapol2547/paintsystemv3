@@ -218,6 +218,52 @@ def over(backdrop, layer, opacity=1.0, clip=False, blend=mix_blend):
     return tuple(sum(w * c[i] for w, c in zip(weights, colors)) / alpha for i in range(3)) + (alpha,)
 
 
+# ── Simulated input ──────────────────────────────────────────────────
+#
+# Blender must run with --enable-event-simulate, which also makes it
+# ignore real input. Events are queued and handled by the window loop, so
+# the generators yield between them; a test's timer driver resumes them.
+
+MODIFIER_KEYS = {"shift": 'LEFT_SHIFT', "ctrl": 'LEFT_CTRL', "alt": 'LEFT_ALT'}
+
+
+def simulate(window, type, value, x, y, shift=False, ctrl=False, alt=False):
+    """Queue one event at window pixel ``(x, y)`` with the given modifiers held."""
+    window.event_simulate(type=type, value=value, x=int(x), y=int(y), shift=shift, ctrl=ctrl, alt=alt)
+
+
+def drag(window, start, end, steps=8, **modifiers):
+    """Yield between the events of a left-button drag from *start* to *end*, in window pixels.
+
+    The modifier keys named in *modifiers* (``shift``, ``ctrl``, ``alt``)
+    are pressed before the button and released after it. A drag whose
+    *end* is *start* is a click.
+    """
+    held = {}
+    simulate(window, 'MOUSEMOVE', 'NOTHING', *start)
+    yield
+    for name in ("shift", "ctrl", "alt"):
+        if modifiers.get(name):
+            held[name] = True
+            simulate(window, MODIFIER_KEYS[name], 'PRESS', *start, **held)
+            yield
+    simulate(window, 'LEFTMOUSE', 'PRESS', *start, **held)
+    yield
+    if tuple(end) != tuple(start):
+        for i in range(1, steps + 1):
+            t = i / steps
+            simulate(window, 'MOUSEMOVE', 'NOTHING',
+                     start[0] + (end[0] - start[0]) * t, start[1] + (end[1] - start[1]) * t, **held)
+            yield
+    simulate(window, 'LEFTMOUSE', 'RELEASE', *end, **held)
+    yield
+    for name in ("alt", "ctrl", "shift"):
+        if held.pop(name, False):
+            simulate(window, MODIFIER_KEYS[name], 'RELEASE', *end, **held)
+            yield
+    yield
+
+
 def summary(name):
     print()
     print(f"Blender {bpy.app.version_string}, {_checks} checks")

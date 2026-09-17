@@ -26,6 +26,7 @@ window_only=(
     test_selection_stencil_ui.py
     test_selection_overlay_ui.py
     test_selection_view_windowed.py
+    test_selection_tools_ui.py
 )
 # Run again windowed under --ui: 4.2 to 5.1 have no background GPU context.
 ui_tests=(
