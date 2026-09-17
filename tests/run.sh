@@ -17,6 +17,9 @@
 # GPU_BACKEND=<name>
 #          pass --gpu-backend <name> (opengl or vulkan) to the headless tests;
 #          when unset, Blender picks its default backend
+# PS_PERF_SCALE=<factor>
+#          multiply the test_perf.py budgets, for a machine slower or busier
+#          than the one they were measured on (default: 5 under CI, else 1)
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
