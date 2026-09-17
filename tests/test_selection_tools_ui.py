@@ -477,17 +477,25 @@ def run_sections():
         draws = len(styles)
         yield 0.6
         check(len(styles) - draws >= 2, f"the preview redraws with the mouse still ({len(styles) - draws} draws in 0.6 s)")
+        # The dash pattern repeats every 2 * DASH_PIXELS / DASH_SPEED seconds,
+        # four timer intervals, so one frame drawn that much later looks the
+        # same. Any of the next three untagged draws must differ.
+        rows = slice(empty_low[1] - 4, empty_low[1] + 5)
         first = yield from capture(area, tag=False)
-        yield 2 * overlay.REDRAW_INTERVAL
-        second = yield from capture(area, tag=False)
-        if first is None or second is None or first[1] is None or second[1] is None:
+        phases = []
+        moved = False
+        for _ in range(3):
+            later = yield from capture(area, tag=False)
+            if first is None or later is None or first[1] is None or later[1] is None:
+                break
+            phases.append(round(later[1][0][3], 2))
+            if later[1][0][3] != first[1][0][3] and not np.array_equal(dashes(first[0])[rows], dashes(later[0])[rows]):
+                moved = True
+                break
+        if first is None or first[1] is None or not phases:
             check(False, "two frames were drawn without a tag")
         else:
-            rows = slice(empty_low[1] - 4, empty_low[1] + 5)
-            changed = not np.array_equal(dashes(first[0])[rows], dashes(second[0])[rows])
-            check(first[1][0][3] != second[1][0][3] and changed,
-                  f"the dashes move between two frames {2 * overlay.REDRAW_INTERVAL} s apart "
-                  f"(phase {first[1][0][3]:.2f} then {second[1][0][3]:.2f})")
+            check(moved, f"the dashes move between untagged draws (phase {first[1][0][3]:.2f} then {phases})")
     finally:
         remove_capture_handlers()
     region_event('ESC', 'PRESS', empty_high)
