@@ -20,6 +20,14 @@ Guiding constraints for every ticket:
   with a fallback for the older path. CI runs the tests against the
   latest patch of every supported series plus the next alpha (PS-080), so
   a ticket is not done until the matrix is green.
+- Icon names go through a fallback lookup instead of straight to Blender.
+  Blender renames icons between versions and forks such as Bforartists
+  ship their own set (it has no `VIEW_LOCKED`), and an unknown name raises
+  in draw, or in `register_class` for a node's `bl_icon`. Layout calls
+  pass `**common.icon_kwargs(new, old, ...)`, node and node tree classes
+  set `bl_icon = common.blender_icon(new, old, ...)`, and only
+  `icon='NONE'` and `WorkSpaceTool.bl_icon` file names stay literal.
+  `tests/test_icons.py` fails on any other literal (PS-080).
 - UI strings are English literals that can be translated later without
   restructuring (see Deferred: Multilingual UI).
 - Extension platform rules, as given by the Blender extensions review

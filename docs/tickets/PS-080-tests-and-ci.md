@@ -73,6 +73,18 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   `bpy.types.X`, `bpy.ops.x.y`, `bpy.app.handlers.x` and `bl_ui.x`
   references and resolves each of them, so a new dependency is checked
   without editing the list.
+- `tests/test_icons.py` parses the addon sources with `ast` and checks
+  every icon they name against the running Blender: `icon_kwargs` lists
+  and `ps_icon` tuples need one Blender icon or `icons/` file,
+  `blender_icon` lists for node and node tree `bl_icon` need one name in
+  that class's RNA enum, and `WorkSpaceTool.bl_icon` needs a `.dat` file
+  in the datafiles icons folder. It fails on a literal `icon=` other than
+  `'NONE'` or a literal node `bl_icon`, and on any icon expression it
+  cannot resolve to literals (a conditional, a name assigned once, a
+  dict literal lookup), with file and line. Names that are missing but
+  have a fallback are printed, so a rename shows up before the fallback
+  runs out. On Bforartists 5.2.0, which reports itself as 5.3.0 Alpha,
+  `VIEW_LOCKED` falls back to `LOCKED`.
 - `tests/test_ui_draw.py` runs windowed (Xvfb on CI). It wraps the
   `draw`, `draw_header`, `draw_item`, `filter_items` and `poll` methods of
   every class the addon registers with same-signature recorders, builds a
