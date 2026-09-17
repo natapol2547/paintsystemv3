@@ -41,6 +41,15 @@ PaintSystemNodeTree  --compile-->  IR  --NodeTreeBuilder-->  ShaderNodeTree (tre
    keeps the value of any input the IR does not set, so an emitter sets
    an input on every compile or never.
 
+The builder writes a value only when RNA does not already hold it (floats
+compared as float32, datablocks by identity), because every write on the
+artifact tags the tree and the materials using it. The fingerprint is
+stamped whether or not anything was written, so a comparison that wrongly
+reports "equal" leaves the artifact stale for good; `tests/test_parity.py`
+is the net for that. What a build did reach — nodes created, values
+written, links created and removed, whether it arranged — is counted in
+`NodeTreeBuilder.stats` and left on `compiler.core.last_build_stats`.
+
 The compiler never writes back into the document beyond the normalize
 repairs, so a nested compile request only needs a re-entrancy flag.
 

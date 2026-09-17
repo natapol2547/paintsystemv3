@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import struct
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
@@ -18,6 +19,74 @@ def node_identifier(node) -> str:
     return node.get(IDENTIFIER_KEY) or node.name
 
 
+# ── Value comparison ─────────────────────────────────────────────────
+
+_pack_float32 = struct.Struct('f').pack
+_unpack_float32 = struct.Struct('f').unpack
+
+# Stands in for a property that cannot be read back, so it is always written.
+_UNREADABLE = object()
+
+
+def _as_float32(value: float) -> float:
+    """*value* as RNA would store it: rounded to float32, widened back."""
+    try:
+        return _unpack_float32(_pack_float32(value))[0]
+    except (OverflowError, struct.error):
+        return value
+
+
+def _same_id(current: Any, desired: Any) -> bool:
+    """Whether two datablock pointers refer to the same datablock.
+
+    Two wrappers of one datablock are different Python objects, so they are
+    compared by address.
+    """
+    if current is None or desired is None:
+        return current is None and desired is None
+    if not (isinstance(current, bpy.types.ID) and isinstance(desired, bpy.types.ID)):
+        return False
+    return current.as_pointer() == desired.as_pointer()
+
+
+def same_value(current: Any, desired: Any) -> bool:
+    """Whether writing *desired* over *current* would store the same thing.
+
+    RNA keeps floats as float32, so *desired* is compared rounded to float32:
+    ``0.1`` reads back as ``0.10000000149011612`` and would otherwise look
+    different on every build. A difference RNA *can* store always compares
+    unequal. Datablocks compare by identity, sequences element by element.
+
+    Answering "no" only costs a redundant write; answering "yes" wrongly
+    leaves the artifact stale for good, so anything unrecognised is "no".
+    """
+    if isinstance(desired, str):
+        return isinstance(current, str) and current == desired
+    if isinstance(desired, (bool, int, float)):
+        if not isinstance(current, (bool, int, float)):
+            return False
+        if isinstance(current, float) or isinstance(desired, float):
+            return current == _as_float32(desired)
+        return current == desired
+    if desired is None:
+        return current is None
+    if isinstance(desired, bpy.types.ID) or isinstance(current, bpy.types.ID):
+        return _same_id(current, desired)
+    if isinstance(desired, (set, frozenset)):
+        try:
+            return set(current) == set(desired)
+        except TypeError:
+            return False
+    try:
+        desired_items = list(desired)
+        current_items = list(current)
+    except TypeError:
+        return False
+    if len(current_items) != len(desired_items):
+        return False
+    return all(same_value(c, d) for c, d in zip(current_items, desired_items))
+
+
 # ── Layout constants ─────────────────────────────────────────────────
 H_MARGIN = 50.0       # horizontal gap between columns
 V_MARGIN = 30.0       # vertical gap between siblings in a column
@@ -30,6 +99,21 @@ DEFAULT_NODE_WIDTH = 140.0
 class Flexible:
     """Wrap a value to apply it only when the node/socket is first created."""
     value: Any
+
+
+@dataclass
+class BuildStats:
+    """What a build actually changed in the tree.
+
+    Counted on every build so a test or the profiler can tell a patch from a
+    rebuild; nothing in the add-on branches on it. ``values_written`` counts
+    the RNA writes that happened, not the ones that were asked for.
+    """
+    nodes_created: int = 0
+    values_written: int = 0
+    links_created: int = 0
+    links_removed: int = 0
+    arranged: bool = False
 
 
 @dataclass
@@ -66,6 +150,7 @@ class NodeTreeBuilder:
         self._socket_instructions: list[SocketInstruction] = []
         self._existing_nodes: dict[str, bpy.types.Node] = {}
         self._newly_created: set[str] = set()
+        self.stats = BuildStats()
         self._hydrate_existing_nodes()
 
     # ── Instruction API (all return self for chaining) ───────────────
@@ -187,6 +272,7 @@ class NodeTreeBuilder:
                 node[IDENTIFIER_KEY] = identifier
                 self._existing_nodes[identifier] = node
                 self._newly_created.add(identifier)
+                self.stats.nodes_created += 1
 
             self._apply_node_properties(node, instr.properties, is_new)
             self._apply_socket_properties(node.inputs, instr.inputs, is_new)
@@ -204,6 +290,7 @@ class NodeTreeBuilder:
         for link in list(self.node_tree.links):
             if self._link_to_key(link) not in desired_link_keys:
                 self.node_tree.links.remove(link)
+                self.stats.links_removed += 1
 
         # Create missing links
         for from_id, from_sock_id, to_id, to_sock_id in self._link_instructions:
@@ -213,6 +300,7 @@ class NodeTreeBuilder:
             to_socket = self._resolve_socket(to_node.inputs, to_sock_id)
             if not self._link_exists(from_socket, to_socket):
                 self.node_tree.links.new(to_socket, from_socket)
+                self.stats.links_created += 1
 
         if arrange:
             self.arrange_nodes()
@@ -284,7 +372,8 @@ class NodeTreeBuilder:
                 is_flexible = isinstance(value, Flexible)
                 if is_flexible and not sock_is_new:
                     continue
-                setattr(sock, prop, value.value if is_flexible else value)
+                self._write_if_changed(
+                    sock, prop, value.value if is_flexible else value)
 
     # ── Hydration ────────────────────────────────────────────────────
 
@@ -313,9 +402,27 @@ class NodeTreeBuilder:
         raise ValueError(
             f"Socket name '{socket_id}' not found; available: {names}")
 
-    @staticmethod
+    def _write(self, owner: Any, prop: str, value: Any) -> None:
+        setattr(owner, prop, value)
+        self.stats.values_written += 1
+
+    def _write_if_changed(self, owner: Any, prop: str, value: Any) -> None:
+        """Write *value* onto *owner* unless RNA already holds it.
+
+        Every RNA write on a node tree tags the tree and the materials using
+        it for an update, which costs about as much as the tree is large. A
+        compile rewrites the whole artifact, so on an unchanged tree those
+        no-op writes were most of the cost of an edit.
+
+        A property that cannot be read is written anyway, so this never turns
+        a write that used to work into an error.
+        """
+        current = getattr(owner, prop, _UNREADABLE)
+        if current is _UNREADABLE or not same_value(current, value):
+            self._write(owner, prop, value)
+
     def _apply_node_properties(
-        node: bpy.types.Node, properties: dict[str, Any],
+        self, node: bpy.types.Node, properties: dict[str, Any],
         is_new: bool = True,
     ) -> None:
         for prop, value in properties.items():
@@ -332,27 +439,27 @@ class NodeTreeBuilder:
                 if collection:
                     ptr = collection.get(actual_value)
                     if ptr is not None:
-                        setattr(node, prop, ptr)
+                        self._write_if_changed(node, prop, ptr)
             else:
-                setattr(node, prop, actual_value)
+                self._write_if_changed(node, prop, actual_value)
 
-    @staticmethod
     def _apply_socket_properties(
+        self,
         sockets: bpy.types.NodeInputs | bpy.types.NodeOutputs,
         socket_specs: dict[int | str, dict[str, Any]],
         is_new: bool = True,
     ) -> None:
         for socket_id, props in socket_specs.items():
-            socket = NodeTreeBuilder._resolve_socket(sockets, socket_id)
+            socket = self._resolve_socket(sockets, socket_id)
             for prop, value in props.items():
                 is_flexible = isinstance(value, Flexible)
                 if is_flexible and not is_new:
                     continue
-                setattr(socket, prop, value.value if is_flexible else value)
+                self._write_if_changed(
+                    socket, prop, value.value if is_flexible else value)
 
-    @staticmethod
     def _apply_props_recursive(
-        idblock: Any, prop_dict: dict[str, Any],
+        self, idblock: Any, prop_dict: dict[str, Any],
         is_new: bool = True,
     ) -> None:
         for key, value in prop_dict.items():
@@ -371,9 +478,9 @@ class NodeTreeBuilder:
                     if collection:
                         ptr = collection.get(actual_value)
                         if ptr is not None:
-                            setattr(idblock, key, ptr)
+                            self._write_if_changed(idblock, key, ptr)
                 else:
-                    setattr(idblock, key, actual_value)
+                    self._write_if_changed(idblock, key, actual_value)
 
             elif prop.type == "COLLECTION":
                 if not isinstance(actual_value, list):
@@ -400,13 +507,15 @@ class NodeTreeBuilder:
                         else:
                             obj = collection[i]
 
+                        # No comparison here: the collection was just cleared,
+                        # so every element is new and every value is a change.
                         for k, v in item.items():
                             if k not in used_keys:
-                                setattr(obj, k, v)
+                                self._write(obj, k, v)
                 else:
                     for i, item in enumerate(actual_value):
                         if i < len(collection):
-                            NodeTreeBuilder._apply_props_recursive(
+                            self._apply_props_recursive(
                                 collection[i], item, is_new
                             )
 
@@ -454,6 +563,7 @@ class NodeTreeBuilder:
         if not self._newly_created or not self._existing_nodes:
             return
 
+        self.stats.arranged = True
         successors, predecessors = self._build_adjacency()
         new_ids = set(self._newly_created)
         positioned_ids = set(self._existing_nodes) - new_ids

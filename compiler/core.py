@@ -17,6 +17,7 @@ from typing import Any, Iterable
 import bpy
 
 from .ir import IR, Ref, SocketId, hash_payload, _serialize
+from ..nodes.builder import BuildStats
 from ..nodetree.stack_ops import (alpha_partner, feeding_link, feeds_clip_run, link_index,
                                   paired_color_input)
 from ..props.channel import channel_socket_specs
@@ -29,6 +30,11 @@ ARTIFACT_OWNER_KEY = "ps_owner"
 # describes the nodes it sits next to whichever copy undo restores.
 ARTIFACT_FINGERPRINT_KEY = "ps_fingerprint"
 BAKE_TREE_NAME = ".PS Bake Target"
+
+# What the last ``compile_tree`` wrote into an artifact, ``None`` when it hit
+# the fingerprint and wrote nothing. Tests and profiling read it to tell a
+# value patch from a rebuild; no add-on code branches on it.
+last_build_stats: BuildStats | None = None
 
 _BASE_NODE_PROPS = {p.identifier for p in bpy.types.Node.bl_rna.properties}
 # Identity and editing state that never reaches the shader.
@@ -377,13 +383,16 @@ def artifact_fingerprint(tree) -> str:
 
 def compile_tree(tree, *, force: bool = False) -> str:
     """Bring ``tree.compiled`` up to date. Returns the IR fingerprint."""
+    global last_build_stats
     normalize_tree(tree)
     ir = build_ir(tree)
     fingerprint = ir.fingerprint()
     artifact = ensure_artifact(tree)
     if force or artifact.get(ARTIFACT_FINGERPRINT_KEY) != fingerprint:
-        ir.apply(artifact)
+        last_build_stats = ir.apply(artifact)
         artifact[ARTIFACT_FINGERPRINT_KEY] = fingerprint
+    else:
+        last_build_stats = None
     return fingerprint
 
 

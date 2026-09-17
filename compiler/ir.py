@@ -14,7 +14,7 @@ from typing import Any
 
 import bpy
 
-from ..nodes.builder import NodeTreeBuilder, Flexible
+from ..nodes.builder import BuildStats, NodeTreeBuilder, Flexible
 
 
 SocketId = int | str
@@ -124,7 +124,8 @@ class IR:
 
     # -- applying -------------------------------------------------------
 
-    def apply(self, node_tree: bpy.types.NodeTree, *, arrange: bool = True) -> None:
+    def apply(self, node_tree: bpy.types.NodeTree, *, arrange: bool = True) -> BuildStats:
+        """Patch *node_tree* into this IR. Returns what the build changed."""
         builder = NodeTreeBuilder(node_tree)
         for sock in self.sockets:
             builder.add_socket(sock.in_out, sock.socket_type, sock.name, **sock.properties)
@@ -139,6 +140,7 @@ class IR:
         for link in self.links:
             builder.link_nodes(link.from_id, link.to_id, link.from_socket, link.to_socket)
         builder.build(arrange=arrange)
+        return builder.stats
 
 
 # -- serialization helpers ---------------------------------------------
