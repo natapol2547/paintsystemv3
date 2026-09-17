@@ -50,6 +50,11 @@ is the net for that. What a build did reach — nodes created, values
 written, links created and removed, whether it arranged — is counted in
 `NodeTreeBuilder.stats` and left on `compiler.core.last_build_stats`.
 
+Node locations follow the same rule, in the builder's layout and in
+`arrange_stack`, even though they are outside the IR and the fingerprint:
+laying a stack out rewrites the position of every layer, and nearly all of
+them keep the position they had.
+
 The compiler never writes back into the document beyond the normalize
 repairs, so a nested compile request only needs a re-entrancy flag.
 

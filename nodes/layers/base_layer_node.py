@@ -166,13 +166,18 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
 
     def emit(self, ctx):
         if ctx.is_cached(self):
-            self.cache_stale = False
+            # Writing an RNA property tags the tree and the materials using
+            # it, so only write when the value actually changes.
+            if self.cache_stale:
+                self.cache_stale = False
             color, alpha = emit_image_texture(ctx, self, 'cache', self.cache_image,
                                               self.cache_uv_map)
             ctx.alias_output(self, 'Color', color)
             ctx.alias_output(self, 'Alpha', alpha)
             return
-        self.cache_stale = bool(self.cache_enabled and self.cache_image is not None)
+        stale = bool(self.cache_enabled and self.cache_image is not None)
+        if self.cache_stale != stale:
+            self.cache_stale = stale
 
         color, alpha = self.emit_source(ctx)
         base = clip_base(self)

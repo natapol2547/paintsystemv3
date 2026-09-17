@@ -27,6 +27,7 @@ from dataclasses import dataclass
 
 import bpy
 
+from ..nodes.builder import same_value
 from ..props.channel import channel_alpha_name
 
 
@@ -516,6 +517,20 @@ def repair_alpha_links(tree) -> int:
     return fixes
 
 
+def _move_node(node, x: float, y: float) -> None:
+    """Write ``node.location`` only when that would move the node.
+
+    Every RNA write tags the tree and the materials using it, work that is
+    linear in the tree, so putting a node back where it already is costs as
+    much as a real move. A stack edit re-lays out every layer, and all but a
+    few of them keep their place.
+    """
+    location = node.location
+    if same_value(location[0], x) and same_value(location[1], y):
+        return
+    node.location = (x, y)
+
+
 def arrange_stack(tree, channel_name: str) -> None:
     """Lay the stack out right to left from the Group Output, folder content above its folder."""
     output = tree.get_output_node()
@@ -524,7 +539,8 @@ def arrange_stack(tree, channel_name: str) -> None:
     items = stack(tree, channel_name)
     x, y = output.location
     for index, item in enumerate(items):
-        item.node.location = (x - COLUMN_WIDTH * (index + 1), y + ROW_HEIGHT * item.level)
+        _move_node(item.node, x - COLUMN_WIDTH * (index + 1),
+                   y + ROW_HEIGHT * item.level)
     group_input = tree.get_input_node()
     if group_input is not None:
-        group_input.location = (x - COLUMN_WIDTH * (len(items) + 1), y)
+        _move_node(group_input, x - COLUMN_WIDTH * (len(items) + 1), y)

@@ -95,6 +95,29 @@ SOCKET_HEIGHT = 22.0  # approximate per-socket row height in px
 DEFAULT_NODE_WIDTH = 140.0
 
 
+def _set_loc(node: bpy.types.Node, axis: int, value: float) -> None:
+    """Put one component of *node*'s location at *value*, if it is not there.
+
+    Layout assigns a position to every node it visits, and most of those
+    positions are the ones the node already has. A location write tags the
+    tree and the materials using it like any other RNA write does, so a
+    redundant one costs as much as a real move.
+    """
+    location = node.location
+    if location[axis] != _as_float32(value):
+        location[axis] = value
+
+
+def _shift_loc(node: bpy.types.Node, axis: int, delta: float) -> None:
+    """Move one component of *node*'s location by *delta*, if that moves it."""
+    if not delta:
+        return
+    location = node.location
+    current = location[axis]
+    if _as_float32(current + delta) != current:
+        location[axis] = current + delta
+
+
 @dataclass
 class Flexible:
     """Wrap a value to apply it only when the node/socket is first created."""
@@ -718,27 +741,40 @@ class NodeTreeBuilder:
     def _compute_depths(
         self, successors: dict[str, list],
     ) -> dict[str, int]:
-        """Depth-from-sink. Sinks have depth 0; cycles default to 0."""
+        """Depth-from-sink. Sinks have depth 0; cycles default to 0.
+
+        Walked on an explicit stack rather than by recursion: an artifact is
+        one long chain of layers, so a deep enough stack would raise
+        RecursionError here, and a raise anywhere in layout aborts the compile
+        before the fingerprint is stamped, leaving the artifact unmarked.
+        """
         depths: dict[str, int] = {}
-
-        def _depth(nid: str, stack: set[str]) -> int:
-            if nid in depths:
-                return depths[nid]
-            if nid in stack:
-                depths[nid] = 0
-                return 0
-            stack.add(nid)
-            succs = successors.get(nid, [])
-            if not succs:
-                d = 0
-            else:
-                d = 1 + max(_depth(t[1], stack) for t in succs)
-            stack.discard(nid)
-            depths[nid] = d
-            return d
-
-        for nid in self._existing_nodes:
-            _depth(nid, set())
+        for start in self._existing_nodes:
+            if start in depths:
+                continue
+            on_path = {start}
+            stack = [(start, iter(successors.get(start, ())))]
+            while stack:
+                nid, pending = stack[-1]
+                for _from_sock, target, _to_sock in pending:
+                    if target in depths:
+                        continue
+                    if target in on_path:
+                        # Cut the cycle here. The node keeps this 0 only until
+                        # its own frame finishes and overwrites it.
+                        depths[target] = 0
+                        continue
+                    on_path.add(target)
+                    stack.append((target, iter(successors.get(target, ()))))
+                    break
+                else:
+                    stack.pop()
+                    on_path.discard(nid)
+                    succs = successors.get(nid, ())
+                    depths[nid] = (
+                        1 + max(depths.get(t[1], 0) for t in succs)
+                        if succs else 0
+                    )
         return depths
 
     def _connected_components(
@@ -802,7 +838,7 @@ class NodeTreeBuilder:
 
         for nid, d in depths.items():
             node = self._existing_nodes[nid]
-            node.location.x = col_right_x[d] - self._node_width(node)
+            _set_loc(node, 0, col_right_x[d] - self._node_width(node))
 
         y_cursor = 0.0
         for component in components:
@@ -823,7 +859,7 @@ class NodeTreeBuilder:
                     column_occupied=column_occupied,
                 )
                 placed.add(sink_id)
-                self._place_predecessors_recursive(
+                self._place_predecessors(
                     sink_id, placed, column_occupied, depths, predecessors,
                 )
                 bottoms = [
@@ -863,11 +899,30 @@ class NodeTreeBuilder:
             if not overlap:
                 break
         bottom = top - height
-        node.location.y = top
+        _set_loc(node, 1, top)
         column_occupied[depth].append((top, bottom))
         return top
 
-    def _place_predecessors_recursive(
+    def _sorted_predecessors(
+        self, node_id: str, predecessors: dict[str, list],
+    ) -> list[tuple[int, str, int]]:
+        """Predecessors of *node_id* as (input index, id, output index).
+
+        Ordered by the input they feed, so a node's upstream neighbours are
+        placed top to bottom in the order its sockets appear.
+        """
+        node = self._existing_nodes[node_id]
+        annotated = []
+        for to_sock, from_id, from_sock in predecessors.get(node_id, []):
+            to_idx = self._socket_idx(node.inputs, to_sock)
+            from_idx = self._socket_idx(
+                self._existing_nodes[from_id].outputs, from_sock,
+            )
+            annotated.append((to_idx, from_id, from_idx))
+        annotated.sort(key=lambda t: t[0])
+        return annotated
+
+    def _place_predecessors(
         self,
         node_id: str,
         placed: set[str],
@@ -875,38 +930,41 @@ class NodeTreeBuilder:
         depths: dict[str, int],
         predecessors: dict[str, list],
     ) -> None:
-        node = self._existing_nodes[node_id]
-        preds = predecessors.get(node_id, [])
+        """Place everything upstream of *node_id*, depth first.
 
-        annotated = []
-        for to_sock, from_id, from_sock in preds:
-            to_idx = self._socket_idx(node.inputs, to_sock)
-            from_idx = self._socket_idx(
-                self._existing_nodes[from_id].outputs, from_sock,
-            )
-            annotated.append((to_idx, from_id, from_idx))
-        annotated.sort(key=lambda t: t[0])
+        The walk keeps its own stack of part-consumed predecessor lists for
+        the same reason ``_compute_depths`` does: a layer chain is long enough
+        to overflow Python's, and a raise inside layout would abort the
+        compile before the fingerprint is stamped.
+        """
+        stack = [(node_id, iter(self._sorted_predecessors(node_id, predecessors)))]
+        while stack:
+            current_id, pending = stack[-1]
+            node = self._existing_nodes[current_id]
+            for to_idx, from_id, from_idx in pending:
+                if from_id in placed:
+                    continue
+                pred_node = self._existing_nodes[from_id]
+                pred_depth = depths.get(from_id, 0)
 
-        for to_idx, from_id, from_idx in annotated:
-            if from_id in placed:
-                continue
-            pred_node = self._existing_nodes[from_id]
-            pred_depth = depths.get(from_id, 0)
+                node_input_y = self._socket_y(node, to_idx, is_input=True)
+                pred_out_offset = (
+                    self._socket_y(pred_node, from_idx, is_input=False)
+                    - float(pred_node.location.y)
+                )
+                target_top = node_input_y - pred_out_offset
 
-            node_input_y = self._socket_y(node, to_idx, is_input=True)
-            pred_out_offset = (
-                self._socket_y(pred_node, from_idx, is_input=False)
-                - float(pred_node.location.y)
-            )
-            target_top = node_input_y - pred_out_offset
-
-            self._place_in_column(
-                pred_node, pred_depth, target_top, column_occupied,
-            )
-            placed.add(from_id)
-            self._place_predecessors_recursive(
-                from_id, placed, column_occupied, depths, predecessors,
-            )
+                self._place_in_column(
+                    pred_node, pred_depth, target_top, column_occupied,
+                )
+                placed.add(from_id)
+                stack.append(
+                    (from_id,
+                     iter(self._sorted_predecessors(from_id, predecessors))),
+                )
+                break
+            else:
+                stack.pop()
 
     # ── Incremental layout ───────────────────────────────────────
 
@@ -1106,7 +1164,7 @@ class NodeTreeBuilder:
             for nid in col_members:
                 node = self._existing_nodes[nid]
                 # X: left-align inside the column slot
-                node.location.x = col_x[k]
+                _set_loc(node, 0, col_x[k])
                 # Y: align to immediate neighbor on the anchor side
                 target_top = self._neighbor_aligned_y(nid, meta, up_id)
 
@@ -1123,7 +1181,7 @@ class NodeTreeBuilder:
                             break
                     if not hit:
                         break
-                node.location.y = target_top
+                _set_loc(node, 1, target_top)
                 column_intervals[k].append((target_top, target_top - height))
                 all_placed_members.append(nid)
 
@@ -1206,10 +1264,10 @@ class NodeTreeBuilder:
 
         if len(up_cluster) <= len(down_cluster):
             for nid in up_cluster:
-                self._existing_nodes[nid].location.x -= deficit
+                _shift_loc(self._existing_nodes[nid], 0, -deficit)
         else:
             for nid in down_cluster:
-                self._existing_nodes[nid].location.x += deficit
+                _shift_loc(self._existing_nodes[nid], 0, deficit)
 
     def _reachable(
         self,
@@ -1302,14 +1360,14 @@ class NodeTreeBuilder:
                     exclude=set(group_members),
                 )
                 for cid in cluster:
-                    self._existing_nodes[cid].location.x -= shift_amount
+                    _shift_loc(self._existing_nodes[cid], 0, -shift_amount)
             else:
                 cluster = self._reachable(
                     worst, successors, positioned_ids,
                     exclude=set(group_members),
                 )
                 for cid in cluster:
-                    self._existing_nodes[cid].location.x += shift_amount
+                    _shift_loc(self._existing_nodes[cid], 0, shift_amount)
 
         log.debug("arrange_nodes: overlap resolution did not converge after %d iterations",
                   max_iter)
@@ -1331,8 +1389,8 @@ class NodeTreeBuilder:
         y = 0.0
         for nid in members:
             node = self._existing_nodes[nid]
-            node.location.x = x
-            node.location.y = y
+            _set_loc(node, 0, x)
+            _set_loc(node, 1, y)
             y -= self._node_height(node) + V_MARGIN
 
 
