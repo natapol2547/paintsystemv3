@@ -12,13 +12,16 @@ checks draw the ants in pure red and green and count those instead.
 
 Draws are counted by wrapping `overlay._uniforms`, which only a draw that
 gets as far as the GPU calls, and batch builds by wrapping
-`overlay._mesh_batch`.
+`overlay._mesh_batch`. The redraw timer's ticks are recorded by wrapping
+`overlay._tick` before anything registers it, each with whether the
+session showed a selection when it ran. The timer checks count ticks
+and draws rather than time, because a software-rendered runner can take
+a third of a second per frame.
 
 Run:  blender --factory-startup --python tests/test_selection_overlay_ui.py
 """
 import os
 import sys
-import time
 import traceback
 
 import bpy
@@ -40,11 +43,13 @@ overlay = import_from("selection.overlay")
 
 draws = {"view3d": 0, "image": 0}
 builds = []
+ticks = []
 captures = {}
 wanted = set()
 
 _uniforms = overlay._uniforms
 _mesh_batch = overlay._mesh_batch
+_tick = overlay._tick
 
 
 def _counting_uniforms(shader, *args, **kwargs):
@@ -57,8 +62,15 @@ def _counting_mesh_batch(*args, **kwargs):
     return _mesh_batch(*args, **kwargs)
 
 
+def _recording_tick():
+    ticks.append(session.current().active)
+    return _tick()
+
+
 overlay._uniforms = _counting_uniforms
 overlay._mesh_batch = _counting_mesh_batch
+# `ensure_timer`, `timer_running` and `unregister` look `_tick` up when called.
+overlay._tick = _recording_tick
 
 
 def _capture():
@@ -212,9 +224,10 @@ def steps():
     check(session.current().active and draws["view3d"] > 0,
           f"the 3D view draws in Texture Paint mode ({draws['view3d']} draws, {session.current().reason})")
     check(overlay.timer_running(), "the redraw timer runs while it shows")
-    before = draws["view3d"]
-    yield 0.6
-    check(draws["view3d"] - before >= 2, f"the timer keeps redrawing the view ({draws['view3d'] - before} draws in 0.6 s)")
+    before, ticked = draws["view3d"], len(ticks)
+    yield from wait_for(lambda: len(ticks) - ticked >= 2 and draws["view3d"] - before >= 2)
+    check(len(ticks) - ticked >= 2 and draws["view3d"] - before >= 2,
+          f"the timer keeps redrawing the view ({draws['view3d'] - before} draws over {len(ticks) - ticked} ticks)")
     pixels = yield from capture(view3d)
     partial_ants = int(red_green_ants(pixels).sum()) if pixels is not None else -1
     check(baseline_ants >= 0 and partial_ants > baseline_ants + 200,
@@ -359,12 +372,16 @@ def steps():
     redraw()
     yield from wait_for(overlay.timer_running)
     check(overlay.timer_running(), "the image editor showing the selection starts the timer")
+    ticks.clear()
     tree().selection.clear()
     session.notify()
-    cleared = time.monotonic()
     yield from wait_for(lambda: not overlay.timer_running(), timeout=2.0)
-    elapsed = time.monotonic() - cleared
-    check(not overlay.timer_running() and elapsed <= 0.6, f"within 0.6 s ({elapsed:.2f} s)")
+    check(not overlay.timer_running() and not session.current().active,
+          "the timer stops once the session has synced the cleared selection")
+    yield from capture(editor)
+    # Ticks that ran before the session synced still saw the selection.
+    check(not overlay.timer_running() and ticks.count(False) == 1 and ticks[-1] is False,
+          f"the first tick after the sync stops it, and a redraw does not restart it (ticks saw {ticks})")
 
     section("unregister leaves nothing behind")
     select_box(0.25, 0.25, 0.75, 0.75)
@@ -398,6 +415,7 @@ def end():
     overlay._uniforms = _uniforms
     overlay._mesh_batch = _mesh_batch
     overlay.unregister()
+    overlay._tick = _tick
     session.release()
     raster.release()
     finish("SELECTION OVERLAY UI TEST")

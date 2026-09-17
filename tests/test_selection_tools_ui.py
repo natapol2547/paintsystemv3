@@ -9,7 +9,9 @@ The preview is read back from a draw handler added after the drag starts,
 so it runs after the preview's own handler, and the dashes are drawn in
 pure red and green (`RED_GREEN_ANTS`) so nothing else in the overlay
 layer counts. The dash phase each draw used is recorded by wrapping
-`overlay.ant_style`, which only the preview calls.
+`overlay.ant_style`, which only the preview calls. The preview's timer
+events are counted by wrapping `preview.Preview.tick`, so the redraw
+check waits on events and draws rather than a fixed time.
 
 Two groups of checks wait on the view raster: a drag over the cube builds
 a mask, and a drag over empty background counts as no selection.
@@ -67,6 +69,17 @@ def _recording_ant_style(context):
 
 
 overlay.ant_style = _recording_ant_style
+
+preview_ticks = []
+_preview_tick = preview.Preview.tick
+
+
+def _counting_preview_tick(self):
+    preview_ticks.append(self.kind)
+    return _preview_tick(self)
+
+
+preview.Preview.tick = _counting_preview_tick
 
 
 def _capture():
@@ -474,9 +487,11 @@ def run_sections():
             check(drawn.mean() > 0.9 and agree > 0.95,
                   f"the dashes follow ANT_GLSL at the draw's phase ({agree:.3f} agree, {drawn.mean():.2f} covered)")
         # Nothing tags the region from here: the preview's timer has to.
-        draws = len(styles)
-        yield 0.6
-        check(len(styles) - draws >= 2, f"the preview redraws with the mouse still ({len(styles) - draws} draws in 0.6 s)")
+        draws, ticked = len(styles), len(preview_ticks)
+        yield from wait_for(lambda: len(preview_ticks) - ticked >= 2 and len(styles) - draws >= 2)
+        check(len(preview_ticks) - ticked >= 2 and len(styles) - draws >= 2,
+              f"the preview redraws with the mouse still ({len(styles) - draws} draws over "
+              f"{len(preview_ticks) - ticked} timer events)")
         # The dash pattern repeats every 2 * DASH_PIXELS / DASH_SPEED seconds,
         # four timer intervals, so one frame drawn that much later looks the
         # same. Any of the next three untagged draws must differ.
@@ -721,7 +736,7 @@ def run_sections():
     try:
         with bpy.context.temp_override(window=preferences):
             bpy.ops.wm.window_close()
-        yield 0.5
+        yield from wait_for(lambda: active_tool(texture_paint) == brush)
         check(active_tool(texture_paint) == brush,
               f"disabled from Preferences, the second window gets the brush ({active_tool(texture_paint)})")
         middle = (second_region.x + second_region.width // 2, second_region.y + second_region.height // 2)
@@ -733,7 +748,7 @@ def run_sections():
         # Below the earlier strokes, whose pixels already have the brush colour.
         before = image_sum()
         yield from drag(second, (middle[0] - 80, middle[1] + 50), (middle[0] + 80, middle[1] + 60))
-        yield 0.6
+        yield from wait_for(lambda: image_sum() != before)
         check(image_sum() != before, "a drag in the second window paints")
         with bpy.context.temp_override(window=second):
             bpy.ops.wm.window_close()
@@ -759,6 +774,7 @@ def driver_for(gen):
 def end():
     remove_capture_handlers()
     overlay.ant_style = _ant_style
+    preview.Preview.tick = _preview_tick
     overlay.unregister()
     preview.release()
     session.release()
