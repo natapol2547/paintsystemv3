@@ -124,7 +124,29 @@ like the settings themselves. `selection/overlay.py` draws the tint and
 marching ants from draw handlers that only read the cached mask, and
 calls `notify()` when what they would draw is out of step. Nothing but
 the tick builds a mask. The selection edits no material and never
-compiles.
+compiles. A mask that selects nothing counts as no selection: the
+stencil is restored and nothing is drawn.
+
+Selections drawn in the 3D view (PS-093) are `VIEW` ops: an outline in
+region pixels, the view it was drawn in (stored relative to the object,
+so the selection stays on its texels when the object moves), the object
+and its UV map. `selection/view_raster.py` rasterises them into the
+same UV-space mask through the texel map (PS-092), which holds the world
+position of every texel: a signed distance to the outline at region
+size, a depth pass of the painted object, and one pass over the texels.
+The tools in `tools/` only append ops and notify, like every other
+selection writer.
+
+Per-object GPU caches (texel maps, depth batches, overlay batches) and
+`VIEW` digests are keyed by the content of the evaluated surface,
+through `gpu_passes/surface.py`, so events that report a geometry
+update without changing the mesh (a stroke on 5.3, a stroke undo,
+entering texture paint) rebuild nothing. The contract has three sides:
+handlers mark surfaces suspect and never evaluate, timers and operators
+resolve a key (reading the mesh arrays only when suspect and hashing
+only on a real change), and draw callbacks only peek at the last key,
+requesting a resolve when it is not fresh, so a draw shows the previous
+result for one frame at most.
 
 Painted pixels live in memory until the file is saved. `save_pre`
 (`handlers/node_tree_handlers.py`) passes every image a Paint System node
@@ -176,16 +198,22 @@ derives is document data, so it syncs on a timer. Its triggers:
   `update_active_image` (every active layer, tree, object or material
   change), the message bus subscriptions on `Object.mode` and
   `Window.scene` in `handlers/paint_handlers.py`, an Object geometry
-  update in `depsgraph_update_post` (a renamed or removed UV map), and
-  the overlay's draw callbacks when the mask or image size is out of
-  step.
+  update in `depsgraph_update_post` (a renamed or removed UV map, an
+  edited surface), any depsgraph update while a `VIEW` selection cannot
+  be used for a geometry reason, `frame_change_post` (an animated
+  deformation reports no depsgraph update), a surface key resolve that
+  found a change, and the overlay's draw callbacks when the mask or
+  image size is out of step.
 - `notify(force=True)` from `undo_post` and `redo_post`, `load_post` and
   `load_post_fail` (after `session.forget_failures()`), and the stencil's
   own message bus subscriptions on `ImagePaint.use_stencil_layer`,
   `invert_stencil`, `stencil_image` and `Mesh.uv_layer_stencil_index`,
   so a user edit to settings the selection holds is set back.
-- `depsgraph_update_post` also drops the overlay's batch of an object
-  with a geometry update; `load_post` and `load_post_fail` drop them all.
+- `depsgraph_update_post` marks the surface of an object with a
+  geometry update suspect, and `undo_post`, `redo_post` and
+  `frame_change_post` mark every surface suspect; nothing is dropped.
+  `load_post` and `load_post_fail` forget every surface key, texel map
+  and overlay batch.
 - `load_post` calls `stencil.on_file_loaded()` before the forced notify:
   it forgets the old backups, resets a stencil a file saved without
   `save_pre` still holds, and subscribes again.
@@ -255,13 +283,17 @@ The Epic J tests cover the texel map (`test_texel_map.py`), pixel undo
 (`test_pixel_undo.py`) and the selection: `test_selection_model.py`,
 `test_selection_outline.py` and `test_selection_raster.py` for the ops
 and the mask, `test_selection_session.py`, `test_selection_stencil.py`
-and `test_selection_overlay.py` for the session and its consumers, and
-the windowed `test_selection_session_ui.py`,
-`test_selection_stencil_ui.py` and `test_selection_overlay_ui.py` for
-message bus triggers, native strokes through the stencil and the
-overlay in real editors. GPU checks run headless from Blender 5.2 and
-windowed under `--ui` on every version, since 4.2 to 5.1 have no
-background GPU context.
+and `test_selection_overlay.py` for the session and its consumers,
+`test_surface.py`, `test_selection_view_raster.py` and
+`test_selection_tools.py` for surface keys, `VIEW` ops and the tool
+operators, and the windowed `test_selection_session_ui.py`,
+`test_selection_stencil_ui.py`, `test_selection_overlay_ui.py`,
+`test_selection_view_windowed.py` and `test_selection_tools_ui.py` for
+message bus triggers, native strokes through the stencil, the overlay
+in real editors, selections recorded from a real 3D view and the tools
+driven by simulated input (`--enable-event-simulate`). GPU checks run
+headless from Blender 5.2 and windowed under `--ui` on every version,
+since 4.2 to 5.1 have no background GPU context.
 `.github/workflows/test.yml` runs all of this against the latest patch of
 every supported Blender series, lints with ruff (`uvx ruff check .`
 locally) and validates the built package with the strict

@@ -5,9 +5,10 @@ Epic J. Size M. Milestone M3b.
 ## Status
 
 Done for the texel map. `gpu_passes/core.py`, `gpu_passes/texel_map.py`
-and `tests/test_texel_map.py`; `handlers/node_tree_handlers.py` drops
-cached maps on a geometry or transform update, an undo, a redo and a file
-read. 25 checks pass on 5.2.1 headless and on 4.2.23 windowed.
+and `tests/test_texel_map.py`. 25 checks passed on 5.2.1 headless and on
+4.2.23 windowed when it landed; with PS-093's surface keys and depth
+batches the file has 39 checks, all passing on 5.2.1 headless and on
+4.2.23 windowed.
 
 Four things the plan had wrong or had not reached:
 
@@ -36,21 +37,26 @@ Four things the plan had wrong or had not reached:
   against 128). World transforms are applied with numpy while the vertex
   arrays are built, which leaves 24 bytes of push constants.
 
-Open for PS-093, found while building PS-091 milestone 1:
+Found while building PS-091 milestone 1 and resolved by PS-093:
 
-- `_triangle_arrays` falls back to the mesh's active UV map when the
-  named one is missing. `VIEW` selection ops must not: a silent fallback
-  changes the selection without telling the user. PS-093 adds
-  `fallback_to_active=False` for them and reports `SURFACE` instead.
-- Maps are dropped on every geometry update, and undo, redo and a stroke
-  undo all report one, as does entering texture paint mode. On 5.3 alpha
-  every native stroke reports an Object geometry update too, so the map
-  is dropped after each stroke there. PS-093's surface fingerprint
-  (`gpu_passes/surface.py`) could key the maps instead, so a map
-  survives when the mesh content is unchanged.
+- `_triangle_arrays` fell back to the mesh's active UV map when the
+  named one was missing. `VIEW` selection ops must not: a silent fallback
+  changes the selection without telling the user. `get_texel_map`,
+  `get_position_batch` and `_triangle_arrays` take `fallback_to_active`,
+  and `VIEW` ops pass False and report `SURFACE` instead. A UV map name
+  of `''` resolves to the active render map's name first
+  (`resolve_uv_map`), so the cache key names a real map.
+- Maps were dropped on every geometry update, and undo, redo and a
+  stroke undo all report one, as does entering texture paint mode. On
+  5.3 alpha every native stroke reports an Object geometry update too.
+  Maps are now keyed by the surface key (`gpu_passes/surface.py`,
+  PS-093), and nothing drops them on a geometry update, an undo or a
+  redo: the handlers only mark surfaces suspect. A map survives while
+  the mesh content is unchanged, and undoing a vertex move finds the map
+  built before it.
 - The selection stencil writes `mesh.uv_layer_stencil_index`, which is a
-  geometry update and drops the object's maps. It writes only when the
-  index differs, so this happens once per holding, not per sync.
+  geometry update. It used to drop the object's maps once per holding;
+  it no longer drops anything.
 
 Also settled: `GPUFrameBuffer.viewport_set` takes no arguments at all on
 4.2, not even keywords. It is never called, because binding a framebuffer
@@ -93,19 +99,29 @@ instead of once per operation.
     in alpha, then again at its real size writing 1.0. A tool that wants
     real surface tests alpha `> 0.75`; one that wants every paintable
     texel tests `> 0.0`.
-  - `get_texel_map(obj, uv_map, size, tile, margin)` caches maps per key.
-    The key includes the object's `session_uid`, the UV map name, the
-    size, the tile, the margin and the world matrix;
-    `depsgraph_update_post` drops maps of objects whose geometry or
-    transform changed, and undo, redo and a file read drop all of them.
-    The cache evicts least recently used maps over `CACHE_BUDGET`
-    (1 GB), since two 4K maps alone come to 768 MB.
-- `gpu_passes/view.py` moves to PS-093, which is the first consumer:
-  - `ViewDepth(region, rv3d)` or from stored matrices: a depth render of
-    the visible mesh objects, for occlusion.
-  - Shared GLSL: `project_texel(position, view_projection)` returns the
-    screen coordinate, and `visible(...)` combines inside-region, the
-    depth test with a small slack and facing (`dot(normal, view_dir)`).
+  - `get_texel_map(obj, uv_map, size, tile, margin, *,
+    fallback_to_active=True)` caches maps per key. The key is the
+    object's `session_uid`, the resolved UV map name, the size, the tile,
+    the margin, the world matrix and the surface key from
+    `surface.resolve_key`. Maps store world positions, so a move gives a
+    new key; the surface key leaves the transform out. Without a surface
+    key (Edit Mode) the map is built and not cached.
+    `depsgraph_update_post`, undo and redo only mark surfaces suspect
+    (PS-093); a file read drops every map.
+  - `get_position_batch(obj, uv_map, *, fallback_to_active=False)`: the
+    same triangles as a world-position `TRIS` batch for depth passes,
+    keyed like the maps. A map and a batch that both miss in one build
+    share one `_triangle_arrays` extraction.
+  - The cache evicts least recently used maps and batches over
+    `CACHE_BUDGET` (1 GB), since two 4K maps alone come to 768 MB. A
+    batch is counted as 12 bytes per vertex. Maps of a surface that
+    changed are not dropped at once, so up to the budget of old maps can
+    stay on the GPU.
+- The view pass lives in `selection/view_raster.py` (PS-093), its first
+  consumer: a depth render of the painted object only, at region size,
+  and one banded texel pass that projects each position, tests it
+  against the screen shape, facing and depth, and combines it into the
+  selection mask.
 - UDIM: one map per tile the object's UVs touch (PS-009).
 - Modifiers, shape keys and mirror come from the evaluated mesh.
 - The map stays on the GPU. A numpy read back is a separate call for

@@ -107,13 +107,43 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   resize safety net). Checks that need a GPU run headless from 5.2 and
   are skipped headless before that; the rest of each file still runs.
   Background tests give GPU objects back (`session.release()`,
-  `raster.release()` or the module's `unregister`) before they exit,
-  because a texture freed after the GPU context has gone segfaults 5.2.
-- `tests/run.sh [--ui] [test files]` drives all of the above. Two arrays
-  at the top list the special files: `window_only` files need a window
-  and are skipped by the headless loop, and `ui_tests` are run again
+  `raster.release()`, `surface.release()`, `texel_map.release()` or the
+  module's `unregister`) before they exit, because a texture freed after
+  the GPU context has gone segfaults 5.2.
+- PS-091 milestone 2 (PS-092, PS-093) adds `test_surface.py` (headless,
+  no GPU: surface keys, suspect marks, the resolved sentinel, the entry
+  and key limits, view layers and the handlers), `test_selection_tools.py`
+  (headless: outline geometry, the operators' `execute`, undo flags,
+  default brush ids) and `test_selection_view_raster.py` (headless from
+  5.2 and windowed under `--ui`: the view self-test, `view_eye`, Through,
+  occlusion, region clipping, moved objects, depth bias at scale, region
+  targets, digests and the geometry reasons). Two windowed files:
+  `test_selection_view_windowed.py` (a `VIEW` op recorded from a real 3D
+  view in single view, quad view and region overlap selects what
+  `location_3d_to_region_2d` puts inside it, a native stroke is clipped
+  and the ants draw) and `test_selection_tools_ui.py`, which drives the
+  tools through Blender's own event handling with simulated input: the
+  toolbar group and keymaps, modifier modes, click and cancel, the
+  preview's dashes and width, the tool header, an empty drag, undo and
+  Adjust Last Operation, and the brush coming back after unregister in
+  every window and workspace. Its check that a box dragged over the cube
+  builds a usable mask held the merge order of the tools after the view
+  rasteriser, and no software renderer gate may skip it.
+  `tests/harness.py` gains `simulate` and `drag` around
+  `Window.event_simulate`. A simulated drag reaches no keymap until the
+  window has handled a key event, so the test sends Esc first. Tests
+  that repeat the last operation call
+  `bpy.ops.ed.undo_redo('EXEC_DEFAULT', True)`, and windowed undo on 4.2
+  passes only `window` and `area` to `temp_override`: a region override
+  segfaults 4.2.23 in `poll_select_mask`.
+- `tests/run.sh [--ui] [test files]` drives all of the above. Three
+  arrays at the top list the special files: `window_only` files need a
+  window and are skipped by the headless loop, `ui_tests` are run again
   windowed under `--ui`, which includes the GPU tests because 4.2 to
-  5.1 have no background GPU context. `BLENDER` selects the executable;
+  5.1 have no background GPU context, and windowed files in
+  `event_simulate` also get `--enable-event-simulate` (before `--python`,
+  in both the display and the `xvfb-run` form), which makes Blender
+  ignore real input while they run. `BLENDER` selects the executable;
   `XVFB=1` forces the windowed tests through `xvfb-run` with Mesa
   software rendering and the OpenGL backend; `GPU_BACKEND` passes
   `--gpu-backend` to the headless tests. Blender falls back to OpenGL
@@ -137,14 +167,19 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   job per Blender version: download (cached per release), headless tests,
   from 5.2 the GPU tests again headless on Vulkan through Mesa's lavapipe
   (`test_selection_raster.py`, `test_texel_map.py`,
-  `test_selection_session.py`, `test_selection_stencil.py` and
-  `test_selection_overlay.py`; the OpenGL steps miss Vulkan-only faults),
-  windowed tests under Xvfb, then `extension validate`, `build`,
-  `install-file` and an enable check of the built package that also
-  asserts its add-on preferences attach. The native stroke and overlay
-  pixel checks have not been run on llvmpipe under Xvfb yet; if they
-  flake there, those checks get a software GL gate and the logic checks
-  stay. Experimental builds may fail without failing the
+  `test_selection_session.py`, `test_selection_stencil.py`,
+  `test_selection_overlay.py` and `test_selection_view_raster.py`; the
+  OpenGL steps miss Vulkan-only faults), windowed tests under Xvfb (the
+  selection tools test with event simulation), then `extension
+  validate`, `build`, `install-file` and an enable check of the built
+  package that also asserts its add-on preferences attach. The native
+  stroke, overlay and preview pixel checks have not been run on llvmpipe
+  under Xvfb yet; event simulation and the view self-test passed under
+  Xephyr with llvmpipe. No software GL gate exists. If pixel checks
+  flake in CI, a gate variable set in the Xvfb step skips those checks
+  only, and the tools test's mask check is never gated. Each windowed
+  file has 300 s; the tools test takes about 30 s locally. Experimental
+  builds may fail without failing the
   workflow. A weekly failure opens or updates an issue labelled
   `ci-compat`.
 - `.github/workflows/release.yml` (manual) reuses the test workflow, then

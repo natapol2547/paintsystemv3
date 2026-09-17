@@ -51,17 +51,24 @@ are from 5.2.1; the builds without a background GPU context skip the
 mask checks headless and run every GPU file again windowed. The whole
 suite passes with `--ui` on 4.2.23, 4.5.13, 5.0.1, 5.1.2 and 5.2.1, and
 the GPU files pass headless on Vulkan through lavapipe on 5.2.1. On 5.3
-alpha everything passes except two checks of
-`test_selection_overlay_ui.py`, "three strokes build no batch" and "a
-modifier change builds it once": 5.3 alpha reports an Object geometry
-update for every native stroke, so the overlay rebuilds its batch after
-each stroke there (see Overlays). Whether to accept that or key the
-batch on a content fingerprint is open. Blender 5.0 does not save a
-mesh's stencil UV map at all, so on 5.0 a user's stencil UV map does not
+alpha two checks of `test_selection_overlay_ui.py` failed at the time,
+"three strokes build no batch" and "a modifier change builds it once":
+5.3 alpha reports an Object geometry update for every native stroke, so
+the overlay rebuilt its batch after each stroke there. Milestone 2 fixed
+that by keying the batch on the surface's content (see Overlays), and
+both checks pass on 5.3 alpha. Blender 5.0 does not save a mesh's
+stencil UV map at all, so on 5.0 a user's stencil UV map does not
 survive a save, with or without a selection.
 
-M1 has no selection tools: selections with shapes come from PS-093. A
-developer script outside the repository adds shapes for manual testing.
+**Milestone 2. Done.** Selections drawn in the 3D view: the Rectangle,
+Ellipse and Lasso Selection tools, outlined `VIEW` ops rasterised
+through the texel map, and surface content keys for every per-object
+GPU cache. PS-093 records the design, the measurements and what it
+found; this ticket records what changed in the model, the session and
+the consumers. The whole suite passes with `--ui` on 4.2.23, 4.5.13,
+5.0.1, 5.1.2 and 5.2.1, the GPU files pass headless on Vulkan through
+lavapipe on 5.2.1, and on 5.3 alpha the headless suite and every GPU,
+selection and tools file windowed on Vulkan pass.
 
 **The session (`selection/session.py`).** One selection is live at a
 time: the selection of the active object's active tree, applied to the
@@ -69,12 +76,17 @@ active layer. Everything that can change what it shows calls
 `session.notify()`, which only registers a timer, so a burst of calls
 gives one sync and it is safe from operators, handlers, message bus
 callbacks and draw callbacks. The tick resolves a `State` (scene, tree,
-object and image `session_uid`, UV map, size, tile, digest, paint mode
-and a reason) and stops when it equals the last one and the mask is
-still cached. Otherwise it builds the mask once, calls `stencil.sync`,
+object and image `session_uid`, UV map, size, tile, digest, paint mode,
+a reason, and whether the built mask is empty) and stops when it equals
+the last one and the mask is still cached. The digest of a selection
+with outlined `VIEW` ops includes the key of each op's surface
+(PS-093), resolved here, so an edited mesh changes the digest. Otherwise
+it builds the mask once, calls `stencil.sync`,
 then `overlay.sync`, and tags the 3D views and image editors. A digest
 that fails for a lasting reason is remembered (64 entries) so it is not
-built on every tick; `GPU_ERROR` is retried 4 times at 0.25 s, then the
+built on every tick, except the `raster.GEOMETRY_REASONS` (`SURFACE`,
+`VIEW`, `EDIT_MODE`), which depend on objects rather than ops and
+several object states share one digest; `GPU_ERROR` is retried 4 times at 0.25 s, then the
 panel says "GPU error, change the selection to retry". A consumer that
 raises is logged, and the next sync reaches the consumers again even
 with an equal state. `notify(force=True)` forgets the last state, so
@@ -136,8 +148,21 @@ way the artifact is derived from the tree.
 - `invert()` drops a trailing `INVERT` and otherwise appends one, so
   inverting twice gives back the same ops, digest and cached mask. An
   empty selection inverts to `ALL`, and a selection ending in an `ALL`
-  with `REPLACE` or `ADD` inverts to empty: an empty mask kept as a
-  selection would block painting with no outline to show for it.
+  with `REPLACE` or `ADD` inverts to empty, so inverting a full
+  selection leaves painting unrestricted.
+- **A mask that selects nothing is no selection** (milestone 2). When no
+  texel of the built mask reaches 0.5/255, nothing the 8-bit stencil
+  could keep, `State.empty` is set: the stencil is restored, so painting
+  works everywhere, the overlay draws nothing, and the Selection section
+  shows the info line "Nothing selected" with no error icon. The ops stay
+  on the tree, so undo and redo stay consistent and a later Add drag
+  builds on them. A tool drag over empty background is the usual cause.
+  `SelectionMask.is_empty()` reads the 8-bit mask back once per mask and
+  remembers it, sharing the read the stencil does anyway (about 15 ms at
+  4K), and the session copies `empty` from its last state while the
+  digest is unchanged, so emptiness is never checked per draw. Empty is
+  not a reason: a selection that exists but cannot be used still blocks
+  painting.
 
 ## Rasterisation (`selection/raster.py`)
 
@@ -171,20 +196,32 @@ GPU passes build the mask at the image's size, or at a UDIM tile's.
   0.25 texels (anti-alias on, or a feather of 0.5 or more); below that
   they grow as `0.25 / hw`, because the slope `1.5 / (2 hw)` amplifies
   float32 distance error.
-- `UV` ops rasterise in texel space. `VIEW` ops rasterise the shape in
-  screen space at region size (feather measured in screen pixels, as the
-  user drew it), then reach texels through the texel map (PS-092): each
-  texel is projected with the stored matrices, sampled from the screen
-  shape, and kept only when it faces the view and passes the depth test
-  unless `through` is set.
+- `UV` ops rasterise in texel space. `VIEW` ops (milestone 2,
+  `selection/view_raster.py`, PS-093) rasterise the shape in screen space
+  at region size (feather measured in screen pixels, as the user drew
+  it), then reach texels through the texel map (PS-092): each texel is
+  projected with the stored view, sampled from the screen shape, and kept
+  only when it faces the view and the painted object does not hide it.
+  With `through` every texel inside the shape is kept, back faces and
+  hidden faces included. The op also stores its `object` pointer and UV
+  map name, its view as object-to-view so the selection stays on the
+  same texels when the object moves, and its digest includes the
+  surface's content key.
 - `FACES` draws the UV triangles of the mesh's selected faces
   (`use_paint_mask` face selection) in texel space.
-- Until PS-093 and PS-094 add them, `FACES`, `RASTER`, `TRANSFORM` and
-  outlined `VIEW` ops make `get_mask` raise `MaskUnavailable` with reason
-  `UNSUPPORTED`; a limited edit never runs as if there were no selection.
-  The digests already include the `RASTER` image's `session_uid` and the
-  `TRANSFORM` matrix; the content fingerprint of the surface that
-  `FACES` and `VIEW` need comes with PS-093.
+- Until PS-093 and PS-094 add them, `FACES`, `RASTER` and `TRANSFORM`
+  ops make `get_mask` raise `MaskUnavailable` with reason `UNSUPPORTED`;
+  a limited edit never runs as if there were no selection. The digests
+  already include the `RASTER` image's `session_uid` and the `TRANSFORM`
+  matrix.
+- A `VIEW` op whose surface cannot be used raises one of
+  `GEOMETRY_REASONS`: `SURFACE` when its object or UV map is gone (the
+  object deleted or not in the view layer, not a mesh, the UV map
+  renamed or removed, or dropped by a modifier), `VIEW` when its view
+  cannot be used (a region size of 0, a world matrix or stored view that
+  cannot be inverted) and `EDIT_MODE` while its mesh is in Edit Mode.
+  `peek_mask` returns None for them, and the session does not remember
+  them.
 - Any other mask that cannot be built raises `MaskUnavailable` too, with
   a reason and a message fit for the UI. An op whose `points` ID property
   is not a flat array of even length, such as a list of pairs written to
@@ -209,7 +246,12 @@ GPU passes build the mask at the image's size, or at a UDIM tile's.
   texture. A GPU that fails gets `SELF_TEST` for the rest of the session
   instead of wrong masks. A hard ellipse, cells wider than 32 texels,
   distance tables past one data texture row and tiles other than 1001
-  are not checked.
+  are not checked. `VIEW` ops have a self-test of their own
+  (`view_self_test`, PS-093), run before the first build that holds one;
+  its failure gives only `VIEW` selections `SELF_TEST`.
+- The stencil file is named by the same digest the session uses,
+  surface keys included, so a `VIEW` selection gets a new file after its
+  mesh changes.
 - The mask stays a `GPUTexture` for passes and overlays. For the
   stencil, the session tick writes it once per selection change through
   `SelectionMask.read_bytes` (an `R8` pass and a UBYTE read, 7–24 ms at
@@ -265,14 +307,18 @@ GPU passes build the mask at the image's size, or at a UDIM tile's.
   backup is Blender's defaults.
 - **Block mode.** When a selection exists but its mask cannot be used
   (`state.reason`: UDIM, a missing layer, image or UV map, an operation
-  not supported yet, too complex, no GPU, a GPU error while it retries),
+  not supported yet, too complex, no GPU, a GPU error while it retries,
+  and for `VIEW` ops an object or UV map that is gone, an invalid view
+  or Edit Mode),
   the stencil image shows `block.png`, one black pixel, and nothing gets
   painted, so a selection that cannot be shown never lets paint land
   outside it. The panel says why. When the mask file cannot be written
   it blocks too, with a logged warning; when not even `block.png` can be written, `.PS Selection
   Block`, a generated black image with no pixels of its own and never
   dirty, blocks instead. Nothing retries the mask file until the state
-  changes, and the panel shows no message for that case.
+  changes, and the panel shows no message for that case. A mask that
+  selects nothing is not a reason and does not block: the stencil is
+  restored as if there were no selection.
 - **UDIM is unsupported.** A tiled stencil image is sampled from tile
   1001 only (UVs in 1002 read 1001's pixels), so clipping per tile is
   impossible with one stencil. A UDIM layer with a selection reports
@@ -327,7 +373,8 @@ material and never recompiles a shader.
   pass shifts clip-space z by Blender's own polygon offset
   (`GPU_polygon_offset_calc`, distance 1), so it does not fight the
   surface in Solid mode. The batch is cached per object in local space,
-  so moving the object costs nothing, and dropped on a geometry update.
+  so moving the object costs nothing, and keyed by the surface's content
+  key (below).
 - Image editor (`POST_PIXEL`): one pass over the image the selection
   applies to, in View and Paint mode, with a manual bilinear read of the
   mask and neighbours at `±dFdx/dFdy`, which lines up with the texels at
@@ -353,12 +400,23 @@ material and never recompiles a shader.
   ("Outline Dash Color", black) and `selection_ant_color_b` ("Outline Gap
   Color", white). `overlay.settings()` falls back to these defaults when
   the add-on has no preferences entry.
-- The batch is dropped and rebuilt lazily after every undo, redo and
-  entry to texture paint mode, which all report a geometry update: 48–98
-  ms at about 100k triangles. A content fingerprint (PS-093) would avoid
-  it but costs more than the rebuild on typical meshes. On 5.3 alpha
-  every native stroke also reports an Object geometry update, so the
-  batch is rebuilt after each stroke there; 5.2 reports only the image.
+- Milestone 1 dropped the batch after every undo, redo and entry to
+  texture paint mode, which all report a geometry update, and rebuilt it
+  lazily (48–98 ms at about 100k triangles). On 5.3 alpha every native
+  stroke also reports an Object geometry update, so the batch was
+  rebuilt after each stroke there. Since milestone 2 the batch is stored
+  with the surface key it was built for (`gpu_passes/surface.py`,
+  PS-093), and a geometry update only marks the surface suspect. A draw
+  whose key is not fresh draws the cached batch and requests a resolve;
+  the timer tick resolves it, and only a changed key rebuilds the batch.
+  After a real surface change (a vertex edit, a modifier change, an undo
+  past one) the ants therefore show the previous outline for one frame.
+  A stroke on 5.3 alpha costs one array read and compare (23–26 ms at 1M
+  triangles), and no rebuild. The same applies to the selection mask of
+  a `VIEW` selection: draws peek at surface keys, the session resolves
+  them.
+- A selection that selects nothing (`state.empty`) draws nothing and
+  starts no timer.
 
 ## UI
 
@@ -366,10 +424,14 @@ material and never recompiles a shader.
   in texture paint mode, after Brush and Color: All, None and Invert
   (`paint_system.select_all`). When a selection exists but cannot be
   used, the header gets an error icon and the body a short line from
-  `session.label(state)`, such as "Layer's UV map is missing".
-- The section does not draw feather or anti-alias: M1 only creates `ALL`
-  and `INVERT`, which have no edge. PS-093's tools carry their own
-  header settings.
+  `session.label(state)`, such as "Layer's UV map is missing". Milestone
+  2 adds "Selection's object or UV map is gone", "Selection's view is
+  invalid" and "Leave Edit Mode to use the selection". A selection whose
+  mask selects nothing shows the line "Nothing selected" with an info
+  icon and no error icon.
+- The section does not draw feather or anti-alias: `ALL` and `INVERT`
+  have no edge, and PS-093's tools carry feather, anti-alias and Through
+  in their tool header.
 - `select_all` polls only in Object and Texture Paint mode
   (`ops.selection_ops.undoable_mode`): an edit mode has an undo stack of
   its own, where a step for a selection edit restores nothing and costs
@@ -392,7 +454,9 @@ texture paint mode before 5.1:
 `ops.selection_ops.UNDO_OPTIONS` is `{'REGISTER', 'UNDO'}` from 5.1 and
 `{'REGISTER'}` before, and `push_undo(context, message)` pushes a step by
 hand only before 5.1 and outside texture paint mode. Every selection
-operator uses both, PS-093's tools included. On 4.2 to 5.0 a selection
+operator uses both, and PS-093's tool drags follow the same rules as
+`select_all`: from 5.1 a drag is an undo step in order with strokes, and
+Adjust Last Operation replaces the last op. On 4.2 to 5.0 a selection
 edit in texture paint mode therefore has no undo step: the selection
 stays when strokes are undone, and there is no dead Ctrl+Z. Undo, redo
 and a file read force a session sync, because memfile undo restores the

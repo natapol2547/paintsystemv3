@@ -234,8 +234,8 @@ data structures or algorithms are ported.
 | [PS-096](tickets/PS-096-selection-transform-spikes.md) | Spikes for selection and transform | S | – |
 | [PS-090](tickets/PS-090-pixel-undo-stack.md) | Pixel undo for scripted image edits | S | 096 |
 | [PS-092](tickets/PS-092-texel-position-map.md) | Texel position map | M | 096 |
-| [PS-091](tickets/PS-091-selection-model-and-overlays.md) | Selection model and overlays. Slices 1 to 4 done: model, mask, stroke clipping and overlays; tools come with 093 | L | 050 092 096 |
-| [PS-093](tickets/PS-093-selection-tools.md) | Selection tools: box, ellipse, lasso, wand, faces | M | 091 092 |
+| [PS-091](tickets/PS-091-selection-model-and-overlays.md) | Selection model and overlays. Slices 1 to 4 and milestone 2 surface keys done: model, mask, stroke clipping, overlays, view selections | L | 050 092 096 |
+| [PS-093](tickets/PS-093-selection-tools.md) | Selection tools: box, ellipse, lasso, wand, faces. Rectangle, Ellipse and Lasso Selection in the 3D view done; wand, faces and the image editor remain | M | 091 092 |
 | [PS-094](tickets/PS-094-transform-tool.md) | Transform tool and pixel clipboard | L | 008 081 090 091 092 |
 | [PS-095](tickets/PS-095-fill-tool.md) | Fill tool | M | 050 090 091 092 |
 
