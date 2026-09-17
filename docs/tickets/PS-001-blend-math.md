@@ -123,3 +123,31 @@ way so toggling `enabled` is a value patch, not a graph change.
 PS-070 migration notes should mention that clipped layers over partly
 transparent pixels render differently from v2 (v2 overshoots there), so
 users comparing v2 and v3 renders of the same file know it is expected.
+
+### One group for every blend mode: tried and dropped
+
+On 2026-09-17 the blend-mode Mix node was moved out of the group and
+into the compiled tree, so that a single library group with a Blended
+Color input served every blend mode. MIX layers linked their colour
+straight into that input. Renders were unchanged (171 Cycles float bakes
+over every mode, clip runs, folders and float channels matched exactly,
+and so did an EEVEE render). It was dropped because the per-mode groups
+cost little: a file only carries the groups of the modes its layers
+use, their names start with a dot so most of the UI hides them, and an
+unused group is not saved. The
+shared group cost every stack instead. Measured on Blender 5.2.1 under
+heavy unrelated machine load:
+
+- MIX layers pay one more link each, and a divide and a colour mix
+  inside the group that the MIX group skips. With 50 MIX image layers,
+  EEVEE compiled the material about 6% slower (95% interval 3% to 17%)
+  and rendered about 3% slower; an opacity edit with its compile took
+  9% longer, and 16% longer at 100 layers.
+- Other modes pay an extra node in the compiled tree. With 50 MULTIPLY
+  layers an opacity edit went from 230 ms to 512 ms and a first build
+  from 0.5 s to 4.8 s. Most of that is `NodeTreeBuilder` scaling
+  quadratically with links and positioned nodes (PS-081).
+
+Keeping a MIX-only group next to the shared one caps a file at two
+groups and leaves MIX layers as they are, but still costs other modes the
+extra node, for a cosmetic gain.

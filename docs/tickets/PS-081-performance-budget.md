@@ -31,6 +31,17 @@ Keep the compile step invisible during painting and layer editing.
   path: a property whose IR effect is a single socket value can patch
   that socket and the stored fingerprint without rebuilding the IR, as
   long as the result equals what a full compile would produce.
+- `NodeTreeBuilder._link_exists` (`nodes/builder.py`) walks
+  `from_socket.links`, and `NodeSocket.links` scans every link in the
+  tree, so a build is quadratic in the link count. Check links against a
+  set built once per build instead. A prototype of that took a 50-layer
+  opacity edit from 273 ms to 187 ms and a 100-layer one from 1135 ms to
+  645 ms (measured on 2026-09-17 during the PS-001 shared blend group
+  experiment, whose layout has more links, under heavy machine load).
+- `NodeTreeBuilder._resolve_overlaps_for_group` is quadratic in the
+  positioned nodes. The first build of that experiment's 50-layer
+  MULTIPLY stack, 152 nodes, spent 4.4 s of 5.4 s there, which a first
+  setup or a v2 migration of a large stack would feel.
 
 Baseline on 2026-09-15 (Blender 5.2, before any of the above), opacity
 edit plus compile: 5 layers 2 ms, 20 layers 14 ms, 50 layers 85 ms;

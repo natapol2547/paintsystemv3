@@ -53,3 +53,14 @@ survive recompiles and copy with the layer.
 - UDIM creation on a two-tile mesh.
 - `color_output = 'ALPHA'` compiles the Alpha socket into the colour path.
 - Smoke test extended with interpolation/extension patches (no churn).
+
+## Notes
+
+EEVEE limits the texture samplers of a material. On Blender 5.2.1 over
+OpenGL a stack of 50 image layers with distinct images failed with
+"uses too many samplers (52/32)" and rendered EEVEE's error shader, so a
+material holds roughly 30 distinct images today. Every image layer
+compiles to its own Texture Image node, as in v2; Cycles is not
+affected. Not yet checked on Vulkan, Metal or Blender 4.2. Options to
+weigh: warn in the layers panel as a material nears the limit, and let
+layer caches or channel bakes (PS-007) replace the images below them.
