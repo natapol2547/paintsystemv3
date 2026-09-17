@@ -34,10 +34,12 @@ def on_depsgraph_update_post(scene, depsgraph=None):
             tree.initialize()
     if depsgraph is None:
         return
-    # Texel maps are keyed by the content of the evaluated surface, so a
-    # geometry update only marks it suspect, and the next resolve compares
-    # arrays. A move changes no surface key; the texel map cache keys the
-    # world matrix (PS-092).
+    # Texel maps and overlay batches are keyed by the content of the
+    # evaluated surface, so a geometry update only marks it suspect, and
+    # the next resolve compares arrays. A texture paint stroke reports a
+    # geometry update on 5.3 without changing the surface, and dropping the
+    # caches here rebuilt them after every stroke (PS-092, PS-093). A move
+    # changes no surface key; the texel map cache keys the world matrix.
     geometry_changed = False
     for update in depsgraph.updates:
         if not update.is_updated_geometry:
@@ -45,7 +47,6 @@ def on_depsgraph_update_post(scene, depsgraph=None):
         original = getattr(update.id, 'original', None)
         if isinstance(original, bpy.types.Object):
             surface.mark_suspect(original.session_uid)
-            selection_overlay.invalidate_object(original.session_uid)
             geometry_changed = True
     # Renaming or removing a UV map shows up only as a geometry update, and
     # the live selection samples a layer's UV map by name (PS-091).

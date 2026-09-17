@@ -27,7 +27,8 @@ register_addon()
 common = import_from("common")
 preferences = import_from("preferences")
 core = import_from("gpu_passes.core")
-raster = import_from("selection.raster")
+surface = import_from("gpu_passes.surface")
+raster =import_from("selection.raster")
 session = import_from("selection.session")
 overlay = import_from("selection.overlay")
 overlay_shader = import_from("selection.overlay_shader")
@@ -339,25 +340,104 @@ def test_mesh_batch():
         session.sync(force=True)
         cancel_tick()
 
+    overlay._cached_batch(obj, "UVMap", tree(), bpy.context.evaluated_depsgraph_get())
+    overlay.sync(session.State(object_uid=obj.session_uid + 1), None)
+    check(not overlay._batches, "a state for another object drops the batch")
+    check(not hasattr(overlay, "invalidate_object"), "no handler drops batches per object any more")
+
+
+def cancel_surface_tick():
+    """Unregister the surface tick, keeping its requests for the test to run."""
+    if bpy.app.timers.is_registered(surface._tick):
+        bpy.app.timers.unregister(surface._tick)
+
+
+def draw_batch(obj, uv_map="UVMap"):
+    """One draw's batch lookup; returns whether it queued a surface request."""
+    surface._requests.clear()
+    cancel_surface_tick()
+    overlay._cached_batch(obj, uv_map, tree(), bpy.context.evaluated_depsgraph_get())
+    requested = bool(surface._requests)
+    cancel_surface_tick()
+    return requested
+
+
+def run_surface_tick():
+    surface._tick()
+    cancel_tick()
+
+
+def test_batch_follows_surface_key():
+    section("the batch is rebuilt when the surface key changes, not on every geometry update")
+    if not available():
+        return
+    obj = cube()
+    overlay.invalidate_all()
+    surface.forget()
     builds.clear()
     batch_arrays.clear()
+    draw_batch(obj)
+    check(len(builds) == 1, f"the first draw builds ({len(builds)} builds)")
+
+    obj.data.update()
+    bpy.context.view_layer.update()
+    requested = draw_batch(obj)
+    check(requested and len(builds) == 1, f"after a geometry update a draw uses the batch and requests a resolve "
+                                          f"({len(builds)} builds, requested {requested})")
+    run_surface_tick()
+    requested = draw_batch(obj)
+    check(not requested and len(builds) == 1,
+          f"an unchanged key keeps the batch ({len(builds)} builds, requested {requested})")
+
     modifier = obj.modifiers.new("PS Overlay Subsurf", 'SUBSURF')
     modifier.levels = 1
     bpy.context.view_layer.update()
     try:
-        overlay.invalidate_object(obj.session_uid)
-        depsgraph = bpy.context.evaluated_depsgraph_get()
-        overlay._cached_batch(obj, "UVMap", tree(), depsgraph)
+        requested = draw_batch(obj)
+        check(requested and len(builds) == 1,
+              f"a content change draws the cached batch once and requests ({len(builds)} builds)")
+        run_surface_tick()
+        draw_batch(obj)
+        draw_batch(obj)
         count = len(batch_arrays[-1]["position"]) if batch_arrays else 0
-        check(len(builds) == 1 and count == 120,
-              f"invalidate_object rebuilds from the evaluated mesh, subdivided ({len(builds)} builds, {count} vertices)")
+        check(len(builds) == 2 and count == 120,
+              f"after the tick it rebuilds once from the subdivided mesh ({len(builds)} builds, {count} vertices)")
     finally:
         obj.modifiers.remove(modifier)
         bpy.context.view_layer.update()
+        draw_batch(obj)
+        run_surface_tick()
+        draw_batch(obj)
 
-    overlay._cached_batch(obj, "UVMap", tree(), bpy.context.evaluated_depsgraph_get())
-    overlay.sync(session.State(object_uid=obj.session_uid + 1), None)
-    check(not overlay._batches, "a state for another object drops the batch")
+    section("an evaluated mesh without the UV map builds once and asks nothing")
+    remesh = obj.modifiers.new("PS Overlay Remesh", 'REMESH')
+    bpy.context.view_layer.update()
+    try:
+        surface.forget()
+        overlay.invalidate_all()
+        builds.clear()
+        requests = sum(draw_batch(obj) for _ in range(5))
+        check(len(builds) == 1 and requests == 0 and not bpy.app.timers.is_registered(surface._tick),
+              f"five draws: {len(builds)} builds and {requests} requests")
+    finally:
+        obj.modifiers.remove(remesh)
+        bpy.context.view_layer.update()
+
+    section("a dropped surface entry costs no rebuild")
+    surface.forget()
+    overlay.invalidate_all()
+    builds.clear()
+    draw_batch(obj)
+    for index in range(surface.ENTRY_LIMIT):
+        surface.resolve_key(obj, f"PS Overlay Map {index}")
+    check((obj.session_uid, "UVMap") not in surface._entries, "the batch's entry was dropped")
+    requested = draw_batch(obj)
+    run_surface_tick()
+    later = [draw_batch(obj) for _ in range(2)]
+    check(requested and not any(later) and len(builds) == 1,
+          f"a draw uses the batch and requests once, then hits ({len(builds)} builds, "
+          f"requests {[requested, *later]})")
+    surface.forget()
 
 
 def test_target_mask():
@@ -429,8 +509,9 @@ def test_wiring():
     modifier = obj.modifiers.new("PS Overlay Wiring", 'SUBSURF')
     try:
         bpy.context.view_layer.update()
-        check(not any(key[0] == obj.session_uid for key in overlay._batches),
-              "a geometry update of the object drops its batch")
+        check(any(key[0] == obj.session_uid for key in overlay._batches)
+              and not surface.peek_key(obj, "UVMap", bpy.context.evaluated_depsgraph_get())[1],
+              "a geometry update of the object keeps its batch and marks its surface suspect")
     finally:
         obj.modifiers.remove(modifier)
         bpy.context.view_layer.update()
@@ -441,6 +522,7 @@ guarded(test_preferences_and_colours)
 guarded(test_shaders)
 guarded(test_two_passes_draw_no_seam)
 guarded(test_mesh_batch)
+guarded(test_batch_follows_surface_key)
 guarded(test_target_mask)
 guarded(test_wiring)
 # Free the shaders, batches and masks while the GPU context is still up;
@@ -450,4 +532,5 @@ overlay._mesh_batch = _mesh_batch
 overlay.unregister()
 session.release()
 raster.release()
+surface.release()
 finish("SELECTION OVERLAY TEST")

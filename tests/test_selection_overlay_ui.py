@@ -259,6 +259,18 @@ def steps():
     yield from wait_for(lambda: draws["view3d"] >= 3)
     check(draws["view3d"] >= 3 and not builds,
           f"three strokes build no batch ({len(builds)} builds over {draws['view3d']} draws)")
+    with override(view3d):
+        bpy.ops.paint.image_paint('EXEC_DEFAULT', True, stroke=stroke, mode='NORMAL')
+    yield from settle()
+    builds.clear()
+    # A region in the override segfaults undo on 4.2.
+    for step in (bpy.ops.ed.undo, bpy.ops.ed.redo):
+        with bpy.context.temp_override(window=window(), area=view3d):
+            step()
+        draws["view3d"] = 0
+        yield from wait_for(lambda: draws["view3d"] >= 3)
+    check(draws["view3d"] >= 3 and not builds,
+          f"undoing and redoing a stroke builds no batch ({len(builds)} builds over {draws['view3d']} draws)")
     modifier = obj.modifiers.new("PS Overlay UI Subsurf", 'SUBSURF')
     modifier.levels = 1
     yield from wait_for(lambda: builds)

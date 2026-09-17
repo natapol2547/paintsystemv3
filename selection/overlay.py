@@ -21,8 +21,14 @@ event.
   show.
 
 The mesh batch is cached per object in local space, so moving the object
-costs nothing. `handlers.node_tree_handlers` drops it on a geometry update
-of the object and drops every batch when a file is read.
+costs nothing, together with the surface key it was built from
+(`gpu_passes.surface`). A draw only peeks at the key. While the key is not
+fresh, after a geometry update, an undo or a frame change, the draw uses
+the cached batch and requests a resolve; the batch is rebuilt once the
+resolved key differs. A texture paint stroke, which reports a geometry
+update on 5.3, therefore rebuilds nothing, and a real surface change
+shows the previous batch for one frame. `handlers.node_tree_handlers`
+drops every batch when a file is read.
 """
 import logging
 import time
@@ -34,7 +40,7 @@ from gpu_extras.batch import batch_for_shader
 
 from ..common import ADDON_ID
 from ..context import get_active_tree, get_ps_object
-from ..gpu_passes import core
+from ..gpu_passes import core, surface
 from . import overlay_shader, raster
 
 log = logging.getLogger(__name__)
@@ -73,8 +79,9 @@ _handles: list[tuple[type, object]] = []
 _shaders: dict[str, gpu.types.GPUShader] = {}
 # Region pointer -> the coverage buffer of that region.
 _offscreens: dict[int, gpu.types.GPUOffScreen] = {}
-# (object session_uid, UV map, per slot whether it uses the tree) -> batch, or None without triangles.
-_batches: dict[tuple, gpu.types.GPUBatch | None] = {}
+# (object session_uid, UV map, per slot whether it uses the tree) -> (surface key or None, batch or None
+# without triangles).
+_batches: dict[tuple, tuple[bytes | None, gpu.types.GPUBatch | None]] = {}
 
 
 def srgb_to_linear(color) -> tuple[float, float, float]:
@@ -127,12 +134,6 @@ def clip_offset(rv3d, distance: float) -> float:
             view_distance = 1.0 / max(abs(winmat[0][0]), abs(winmat[1][1]))
         return 0.00001 * distance * view_distance
     return winmat[2][3] * -0.0025 * distance
-
-
-def invalidate_object(session_uid: int) -> None:
-    """Drop the batches of one object, whose geometry changed."""
-    for key in [key for key in _batches if key[0] == session_uid]:
-        del _batches[key]
 
 
 def invalidate_all() -> None:
@@ -247,10 +248,26 @@ def _mesh_batch(obj, uv_map: str, tree, depsgraph) -> gpu.types.GPUBatch | None:
 
 
 def _cached_batch(obj, uv_map: str, tree, depsgraph) -> gpu.types.GPUBatch | None:
+    """The mesh batch to draw now, built at most once per surface key.
+
+    A cached batch whose key is not fresh is drawn as it is while the
+    timer resolves the key, also when the key is None or its entry was
+    dropped. A fresh key equal to the cached one, None included, draws the
+    cached batch. Anything else resolves the key and builds.
+    """
     key = (obj.session_uid, uv_map, _slot_uses(obj, tree))
-    if key not in _batches:
-        _batches[key] = _mesh_batch(obj, uv_map, tree, depsgraph)
-    return _batches[key]
+    cached = _batches.get(key)
+    if cached is not None:
+        surface_key, fresh = surface.peek_key(obj, uv_map, depsgraph)
+        if not fresh:
+            surface.request(obj, uv_map)
+            return cached[1]
+        if cached[0] == surface_key:
+            return cached[1]
+    # A miss builds in the draw; resolving the key costs little next to it.
+    surface_key = surface.resolve_key(obj, uv_map, depsgraph)
+    _batches[key] = (surface_key, _mesh_batch(obj, uv_map, tree, depsgraph))
+    return _batches[key][1]
 
 
 def _offscreen(region) -> gpu.types.GPUOffScreen | None:
