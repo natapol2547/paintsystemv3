@@ -22,6 +22,7 @@ import math
 import os
 import sys
 import traceback
+import types
 
 import bpy
 import gpu
@@ -53,7 +54,8 @@ RED_GREEN_ANTS = {
 }
 """Overlay settings for the pixel checks: dash colours nothing else in the 3D view draws, and no wash."""
 
-TOOL_IDS = ("paint_system.select_box", "paint_system.select_ellipse", "paint_system.select_lasso")
+TOOL_IDS = ("paint_system.select_lasso", "paint_system.select_box", "paint_system.select_ellipse")
+"""The group in toolbar order."""
 
 styles = []
 captures = {}
@@ -134,6 +136,47 @@ class LayoutRecorder:
 
     def __getattr__(self, name):
         return lambda *args, **kwargs: self
+
+
+class ButtonRecorder:
+    """Stands in for a `UILayout` and keeps every operator button drawn into it, in order.
+
+    Each entry is (kind, text, menu, properties), where kind is "operator"
+    or "menu_hold" and properties receives what the caller sets, such as
+    the tool id `wm.tool_set_by_id` takes.
+    """
+
+    def __init__(self):
+        self.buttons = []
+
+    def _button(self, kind, operator, text="", menu=None, **kwargs):
+        properties = types.SimpleNamespace()
+        self.buttons.append((kind, text, menu, properties))
+        return properties
+
+    def operator(self, operator, **kwargs):
+        return self._button("operator", operator, **kwargs)
+
+    def operator_menu_hold(self, operator, **kwargs):
+        return self._button("menu_hold", operator, **kwargs)
+
+    def tool_buttons(self):
+        """(kind, text, menu, tool id) of each button that sets one of this add-on's tools."""
+        return [(kind, text, menu, properties.name) for kind, text, menu, properties in self.buttons
+                if getattr(properties, "name", "").startswith("paint_system.")]
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class ButtonContext:
+    """`bpy.context` as a menu opened from a toolbar button sees it: `button_operator` names the button's tool."""
+
+    def __init__(self, tool_id):
+        self.button_operator = types.SimpleNamespace(name=tool_id)
+
+    def __getattr__(self, name):
+        return getattr(bpy.context, name)
 
 
 def window():
@@ -328,6 +371,30 @@ def run_sections():
         check(group == mask + 2, f"the group follows the Mask tool ({group}, Mask at {mask})")
     else:
         check(group == len(listing) - 1, f"without a builtin_brush.mask tool the group is last ({group} of {len(listing)})")
+
+    # Before any tool of the group is active: once one has been drawn
+    # active, Blender shows that one for the rest of the session.
+    lasso_first = [("Lasso Selection", "paint_system.select_lasso"), ("Rectangle Selection", "paint_system.select_box"),
+                   ("Ellipse Selection", "paint_system.select_ellipse")]
+    from bl_ui.space_toolsystem_common import WM_MT_toolsystem_submenu
+    recorder = ButtonRecorder()
+    with override():
+        brush_active = active_tool() == tools.default_brush_tool()
+        toolbar.draw_cls(recorder, bpy.context, detect_layout=False)
+    check(brush_active and recorder.tool_buttons()
+          == [("menu_hold", "Lasso Selection", "WM_MT_toolsystem_submenu", "paint_system.select_lasso")],
+          f"with the brush active the toolbar shows the group as one Lasso Selection button "
+          f"(brush active: {brush_active}; {recorder.tool_buttons()})")
+    popups = {}
+    for _label, tool_id in lasso_first:
+        menu = types.SimpleNamespace(layout=ButtonRecorder(),
+                                     _tool_group_from_button=WM_MT_toolsystem_submenu._tool_group_from_button)
+        with override():
+            WM_MT_toolsystem_submenu.draw(menu, ButtonContext(tool_id))
+        popups[tool_id] = [(text, name) for _kind, text, _menu, name in menu.layout.tool_buttons()]
+    check(all(popup == lasso_first for popup in popups.values()),
+          f"the group's popup lists Lasso, Rectangle and Ellipse Selection in that order ({popups})")
+
     keyconfigs = bpy.context.window_manager.keyconfigs
     for tool in workspace_tools.TOOLS:
         keymaps = [km for km in keyconfigs.addon.keymaps

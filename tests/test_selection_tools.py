@@ -147,12 +147,12 @@ def test_clockwise_and_quads():
 def test_keymap_and_tools():
     section("tools and keymap")
     check([tool.bl_label for tool in workspace_tools.TOOLS]
-          == ["Rectangle Selection", "Ellipse Selection", "Lasso Selection"], "tool labels")
+          == ["Lasso Selection", "Rectangle Selection", "Ellipse Selection"], "tool labels, Lasso Selection first")
     check([tool.bl_idname for tool in workspace_tools.TOOLS]
-          == ["paint_system.select_box", "paint_system.select_ellipse", "paint_system.select_lasso"],
+          == ["paint_system.select_lasso", "paint_system.select_box", "paint_system.select_ellipse"],
           "each tool runs the operator of the same id")
     check([tool.bl_icon for tool in workspace_tools.TOOLS]
-          == ["ops.generic.select_box", "ops.generic.select_circle", "ops.generic.select_lasso"],
+          == ["ops.generic.select_lasso", "ops.generic.select_box", "ops.generic.select_circle"],
           "Blender's own select icons")
     items = workspace_tools.shape_keymap("paint_system.select_box")
     summary = [(idname, event.get("shift", False), event.get("ctrl", False), event["value"], dict(props["properties"]))

@@ -143,9 +143,13 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   toolbar group and keymaps, modifier modes, click and cancel, the
   preview's dashes and width, the tool header, an empty drag, undo and
   Adjust Last Operation, and the brush coming back after unregister in
-  every window and workspace. Its check that a box dragged over the cube
-  builds a usable mask held the merge order of the tools after the view
-  rasteriser, and no software renderer gate may skip it.
+  every window and workspace. It draws the toolbar and the group's popup
+  into a recording layout, to check that the group shows Lasso Selection
+  and lists Lasso, Rectangle and Ellipse, before any tool of the group
+  is used: Blender then shows the last one used for the session. Its
+  check that a box dragged over the cube builds a usable mask held the
+  merge order of the tools after the view rasteriser, and no software
+  renderer gate may skip it.
   `tests/harness.py` gains `simulate` and `drag` around
   `Window.event_simulate`. A simulated drag reaches no keymap until the
   window has handled a key event, so the test sends Esc first. Tests

@@ -26,12 +26,14 @@ Built in three parts, merged in order, each leaving the suite green:
 
 Added afterwards at the user's request: Ctrl+D clears the selection in
 texture paint (`keymaps/__init__.py`, `tests/test_keymaps.py` and the
-windowed `tests/test_keymaps_ui.py`; see Select all).
+windowed `tests/test_keymaps_ui.py`; see Select all), and Lasso
+Selection is the first tool of the group, the one the toolbar shows by
+default (see Tools and operators).
 
 Check counts on 5.2.1: `test_surface.py` 61,
 `test_selection_view_raster.py` 79 headless and 22 in
 `test_selection_view_windowed.py`, `test_selection_tools.py` 67 and
-`test_selection_tools_ui.py` 59 (52 on 4.2 to 5.0, which skip the undo
+`test_selection_tools_ui.py` 61 (54 on 4.2 to 5.0, which skip the undo
 step and Adjust Last Operation checks), `test_keymaps.py` 12 and
 `test_keymaps_ui.py` 13 (14 on Bforartists). The whole suite passes with
 `--ui` on 4.2.23, 4.5.13, 5.0.1, 5.1.2 and 5.2.1. The GPU files pass
@@ -123,14 +125,39 @@ select by face or UV island and the image editor tools are PS-097.
   `WorkSpaceTool` classes). The top-level `__init__.py` registers it
   after `keymaps`. `paint_system.select_all` lives in
   `ops/selection_ops.py` (PS-091 milestone 1).
-- `WorkSpaceTool` subclasses for `VIEW_3D` in `PAINT_TEXTURE` mode:
-  `paint_system.select_box` ("Rectangle Selection"),
-  `paint_system.select_ellipse` ("Ellipse Selection") and
-  `paint_system.select_lasso` ("Lasso Selection"), with Blender's
-  `ops.generic.select_box`, `select_circle` and `select_lasso` icons.
+- `WorkSpaceTool` subclasses for `VIEW_3D` in `PAINT_TEXTURE` mode, in
+  toolbar order: `paint_system.select_lasso` ("Lasso Selection"),
+  `paint_system.select_box` ("Rectangle Selection") and
+  `paint_system.select_ellipse` ("Ellipse Selection"), with Blender's
+  `ops.generic.select_lasso`, `select_box` and `select_circle` icons.
   They form one group, registered after `builtin_brush.mask` with a
   separator. 4.2 has no such item, so the group goes to the end of the
   toolbar and Blender prints "could not find 'after'".
+- **Lasso Selection is the group's default.** `workspace_tools.TOOLS`
+  registers its first tool as the group's head and appends the others
+  after it, and Blender's toolbar shows a group's first item until a
+  tool of the group is used. The press-and-hold popup lists the group
+  in the same order. Lasso was moved first at the user's request; the
+  tools shipped with Rectangle first. Entering texture paint still
+  makes the brush active. Consequences:
+  - Blender remembers the last tool used in a group for the session, in
+    the toolbar class and not in the file. After a user picks Rectangle
+    or Ellipse the group shows that tool until Blender restarts, across
+    file opens and add-on reloads. A file saved with Rectangle or
+    Ellipse active shows that tool when opened with its UI.
+  - Files store tool ids, not positions, so existing files keep their
+    tool. So do shortcuts made with "Assign Shortcut", which bind the
+    tool id; that was read from Blender's code, not tried.
+  - Numbers that follow toolbar position swap between the three tools:
+    the keys the toolbar popup (Shift+Space) assigns to tools without a
+    shortcut, 7, 8 and 9 from 4.3 (0, Shift+1 and Shift+2 on 4.2), and
+    the Blender 27X keyconfig's `wm.tool_set_by_index` keys.
+  - PS-097's tools must be appended after the current head, or the
+    default changes with them.
+  - `tests/test_selection_tools_ui.py` draws the toolbar with the brush
+    active, before any tool of the group has been used, and checks the
+    group's button is Lasso Selection, then draws the popup from each
+    member and checks its order.
 - Each operator only appends a `VIEW` op to the selection (PS-091), then
   calls `push_undo(context, bl_label)` and `selection.session.notify()`,
   and returns without GPU work. The session tick builds the mask and

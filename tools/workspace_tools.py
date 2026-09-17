@@ -1,12 +1,14 @@
-"""The Rectangle, Ellipse and Lasso Selection tools in the 3D view's Texture Paint toolbar (PS-093).
+"""The Lasso, Rectangle and Ellipse Selection tools in the 3D view's Texture Paint toolbar (PS-093).
 
 The three tools form one group after Blender's Mask tool, behind a
 separator; where the toolbar has no Mask tool (4.2) the group goes at the
-end. Each tool's keymap is created by Blender in the add-on keyconfig and
-is active only while the tool is, so it shadows default items only then.
-It binds exactly five items: a drag for each mode, and a click that clears
-the selection. The header shows the settings the tool's operator saves:
-feather, anti-alias and through.
+end. Lasso Selection is the group's first item, so the toolbar shows it
+until another tool of the group is used; Blender then shows that one for
+the rest of the session. Each tool's keymap is created by Blender in the
+add-on keyconfig and is active only while the tool is, so it shadows
+default items only then. It binds exactly five items: a drag for each
+mode, and a click that clears the selection. The header shows the
+settings the tool's operator saves: feather, anti-alias and through.
 """
 import bpy
 from bpy.types import WorkSpaceTool
@@ -72,10 +74,11 @@ class PAINTSYSTEM_WT_select_lasso(WorkSpaceTool):
 
 
 TOOLS = (
+    PAINTSYSTEM_WT_select_lasso,
     PAINTSYSTEM_WT_select_box,
     PAINTSYSTEM_WT_select_ellipse,
-    PAINTSYSTEM_WT_select_lasso,
 )
+"""Toolbar order. The first is the group's head and the item it shows by default; add new tools after it."""
 
 
 def register() -> None:

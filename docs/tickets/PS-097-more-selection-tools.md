@@ -29,7 +29,9 @@ The selection tools PS-093 did not build:
 `select_polygon` and `select_wand` join PS-093's tool group in the 3D
 view, and `IMAGE_EDITOR` tools follow in `PAINT` and `VIEW` modes with
 the same operators. They keep PS-093's keymap rules: the modifiers pick
-the mode, and no A, Alt+A or Ctrl+I items.
+the mode, and no A, Alt+A or Ctrl+I items. They are added after Lasso
+Selection in `workspace_tools.TOOLS`: its first tool is the one the
+group shows by default, and the toolbar tests check that it is Lasso.
 
 ### Polygon lasso
 

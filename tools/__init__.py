@@ -1,4 +1,4 @@
-"""Selection tools in the 3D view: Rectangle, Ellipse and Lasso Selection (PS-093).
+"""Selection tools in the 3D view: Lasso, Rectangle and Ellipse Selection (PS-093).
 
 `shapes` holds the outline geometry, `preview` draws a drag's outline,
 `select_ops` holds the modal operators that append `VIEW` ops, and
