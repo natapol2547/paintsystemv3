@@ -133,9 +133,6 @@ class SocketInstruction:
     properties: dict[str, Any] = field(default_factory=dict)
 
 
-LinkKey = tuple[str, int, str, int]
-
-
 class NodeTreeBuilder:
     def __init__(self, node_tree: bpy.types.NodeTree):
         """Initialize the NodeTreeBuilder.
@@ -150,6 +147,12 @@ class NodeTreeBuilder:
         self._socket_instructions: list[SocketInstruction] = []
         self._existing_nodes: dict[str, bpy.types.Node] = {}
         self._newly_created: set[str] = set()
+        # (node pointer, is_input) -> (sockets, name -> socket), filled during
+        # the link phase only. See _socket_by_id.
+        self._socket_cache: dict[
+            tuple[int, bool],
+            tuple[list[bpy.types.NodeSocket], dict[str, bpy.types.NodeSocket]],
+        ] = {}
         self.stats = BuildStats()
         self._hydrate_existing_nodes()
 
@@ -285,25 +288,67 @@ class NodeTreeBuilder:
                 else:
                     log.warning("special %s not found on node %s", attr_name, node.name)
 
-        # Remove excess links
-        desired_link_keys = self._build_desired_link_keys()
-        for link in list(self.node_tree.links):
-            if self._link_to_key(link) not in desired_link_keys:
-                self.node_tree.links.remove(link)
-                self.stats.links_removed += 1
-
-        # Create missing links
-        for from_id, from_sock_id, to_id, to_sock_id in self._link_instructions:
-            from_node = self._existing_nodes[from_id]
-            to_node = self._existing_nodes[to_id]
-            from_socket = self._resolve_socket(from_node.outputs, from_sock_id)
-            to_socket = self._resolve_socket(to_node.inputs, to_sock_id)
-            if not self._link_exists(from_socket, to_socket):
-                self.node_tree.links.new(to_socket, from_socket)
-                self.stats.links_created += 1
+        self._sync_links()
 
         if arrange:
             self.arrange_nodes()
+
+    # ── Link sync ────────────────────────────────────────────────────
+
+    def _sync_links(self) -> None:
+        """Make the tree's links exactly the declared ones.
+
+        Links are matched by the pair of socket addresses they connect, never
+        by ``ps_identifier``: the tag is copied when a user duplicates an
+        artifact node by hand, so identifier matching would mistake the copy's
+        link for the real one and leave the real link uncreated.
+
+        Addresses also keep this off ``NodeSocket.links``, which is a Python
+        property that scans every link of the tree on each read. One pass over
+        ``node_tree.links`` decides every removal, and creation then only
+        looks up a socket address in a dict.
+        """
+        # The cache may only be filled now: up to here a bl_idname change
+        # could still recreate a node, which frees its sockets.
+        self._socket_cache.clear()
+
+        # to socket address -> from socket addresses, for the declared links
+        # and for the ones the tree already has.
+        wanted: dict[int, set[int]] = {}
+        declared: list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = []
+        for from_id, from_sock_id, to_id, to_sock_id in self._link_instructions:
+            from_socket = self._socket_by_id(
+                self._existing_nodes[from_id], False, from_sock_id)
+            to_socket = self._socket_by_id(
+                self._existing_nodes[to_id], True, to_sock_id)
+            declared.append((from_socket, to_socket))
+            wanted.setdefault(to_socket.as_pointer(), set()).add(
+                from_socket.as_pointer())
+
+        present: dict[int, set[int]] = {}
+        for link in list(self.node_tree.links):
+            to_pointer = link.to_socket.as_pointer()
+            from_pointer = link.from_socket.as_pointer()
+            if from_pointer in wanted.get(to_pointer, ()):
+                present.setdefault(to_pointer, set()).add(from_pointer)
+            else:
+                self.node_tree.links.remove(link)
+                self.stats.links_removed += 1
+
+        for from_socket, to_socket in declared:
+            to_pointer = to_socket.as_pointer()
+            from_pointer = from_socket.as_pointer()
+            linked = present.get(to_pointer)
+            if linked is not None and from_pointer in linked:
+                continue
+            self.node_tree.links.new(to_socket, from_socket)
+            self.stats.links_created += 1
+            if linked is None or not to_socket.is_multi_input:
+                # An input that holds one link drops what it held when the new
+                # link lands on it, so the replaced pair is gone.
+                present[to_pointer] = {from_pointer}
+            else:
+                linked.add(from_pointer)
 
     # ── Interface socket sync ────────────────────────────────────────
 
@@ -519,36 +564,39 @@ class NodeTreeBuilder:
                                 collection[i], item, is_new
                             )
 
-    def _link_to_key(self, link: bpy.types.NodeLink) -> LinkKey:
-        from_id = self._get_node_identifier(link.from_node)
-        to_id = self._get_node_identifier(link.to_node)
-        from_idx = _socket_index(link.from_node.outputs, link.from_socket)
-        to_idx = _socket_index(link.to_node.inputs, link.to_socket)
-        return (from_id, from_idx, to_id, to_idx)
+    def _socket_by_id(
+        self, node: bpy.types.Node, is_input: bool, socket_id: int | str,
+    ) -> bpy.types.NodeSocket:
+        """Like ``_resolve_socket``, but keeps *node*'s socket list around.
 
-    def _build_desired_link_keys(self) -> set[LinkKey]:
-        keys: set[LinkKey] = set()
-        for from_id, from_sock_id, to_id, to_sock_id in self._link_instructions:
-            from_node = self._existing_nodes.get(from_id)
-            to_node = self._existing_nodes.get(to_id)
-            if from_node is None or to_node is None:
-                continue
-            from_idx = _resolve_socket_index(from_node.outputs, from_sock_id)
-            to_idx = _resolve_socket_index(to_node.inputs, to_sock_id)
-            keys.add((from_id, from_idx, to_id, to_idx))
-        return keys
-
-    @staticmethod
-    def _link_exists(
-        from_socket: bpy.types.NodeSocket, to_socket: bpy.types.NodeSocket
-    ) -> bool:
-        for link in from_socket.links:
-            if link.to_socket == to_socket:
-                return True
-        return False
-
-    def _get_node_identifier(self, node: bpy.types.Node) -> str:
-        return node_identifier(node)
+        A declared link names each of its sockets by index or by name, and the
+        same node is named by many of them, so building the lookup once per
+        node turns the name scans into dict reads. Only valid while the socket
+        lists cannot change, which is why it is confined to the link phase.
+        """
+        key = (node.as_pointer(), is_input)
+        cached = self._socket_cache.get(key)
+        if cached is None:
+            sockets = list(node.inputs if is_input else node.outputs)
+            by_name: dict[str, bpy.types.NodeSocket] = {}
+            for socket in sockets:
+                # First match wins, as a scan over the collection would.
+                by_name.setdefault(socket.name, socket)
+            cached = (sockets, by_name)
+            self._socket_cache[key] = cached
+        sockets, by_name = cached
+        if isinstance(socket_id, int):
+            if 0 <= socket_id < len(sockets):
+                return sockets[socket_id]
+            raise ValueError(
+                f"Socket index {socket_id} out of range (0..{len(sockets) - 1})"
+            )
+        socket = by_name.get(socket_id)
+        if socket is None:
+            names = [s.name for s in sockets]
+            raise ValueError(
+                f"Socket name '{socket_id}' not found; available: {names}")
+        return socket
 
     # ── Arrangement ──────────────────────────────────────────────────
 
@@ -1306,25 +1354,3 @@ def _get_data_collection(id_type):
         if id_type is None:
             return None
     return getattr(bpy.data, result)
-
-
-def _socket_index(
-    sockets: bpy.types.NodeInputs | bpy.types.NodeOutputs,
-    target: bpy.types.NodeSocket,
-) -> int:
-    for i, s in enumerate(sockets):
-        if s == target:
-            return i
-    raise ValueError(f"{target!r} not found in sockets")
-
-
-def _resolve_socket_index(
-    sockets: bpy.types.NodeInputs | bpy.types.NodeOutputs,
-    socket_id: int | str,
-) -> int:
-    if isinstance(socket_id, int):
-        return socket_id
-    for i, s in enumerate(sockets):
-        if s.name == socket_id:
-            return i
-    raise ValueError(f"Socket name '{socket_id}' not found")
