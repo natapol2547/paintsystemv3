@@ -135,10 +135,10 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
 
     def draw_layer_settings(self, context, layout):
         row = layout.row(align=True)
-        row.prop(self, "lock_layer", text="", icon='LOCKED' if self.lock_layer else 'UNLOCKED')
+        row.prop(self, "lock_layer", text="", **icon_kwargs('LOCKED' if self.lock_layer else 'UNLOCKED'))
         settings = row.row(align=True)
         settings.enabled = not self.lock_layer
-        settings.prop(self, "is_clip", text="", icon='SELECT_INTERSECT')
+        settings.prop(self, "is_clip", text="", **icon_kwargs('SELECT_INTERSECT'))
         settings.prop(self, "enabled", text="")
         settings.prop(self, "opacity")
         settings = layout.column()
@@ -151,10 +151,10 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         row.prop(self, "cache_enabled", text="Cache")
         if self.cache_image is not None and self.cache_enabled:
             if self.cache_stale:
-                row.label(text="Stale", icon='ERROR')
+                row.label(text="Stale", **icon_kwargs('ERROR'))
             else:
-                row.label(text="Baked", icon='CHECKMARK')
-        row.operator("paint_system.bake_cache", text="", icon='RENDER_STILL')
+                row.label(text="Baked", **icon_kwargs('CHECKMARK'))
+        row.operator("paint_system.bake_cache", text="", **icon_kwargs('RENDER_STILL'))
         if self.cache_enabled:
             box.template_ID(self, "cache_image")
 

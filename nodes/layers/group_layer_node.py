@@ -5,6 +5,7 @@ from bpy.props import PointerProperty
 from bpy.utils import register_classes_factory
 
 from ..base_node import PaintSystemBaseNode
+from ...common import blender_icon, icon_kwargs
 from ...props.channel import channel_socket_specs
 from ...nodetree.tree import sync_sockets
 from ...compiler.core import compile_tree, mark_dirty
@@ -49,7 +50,7 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
     """
     bl_idname = 'PaintSystemGroupLayerNode'
     bl_label = 'Group'
-    bl_icon = 'NODETREE'
+    bl_icon = blender_icon('NODETREE')
     bl_width_default = 200
 
     node_tree: PointerProperty(
@@ -79,7 +80,7 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
     def draw_buttons(self, context, layout):
         row = layout.row(align=True)
         row.template_ID(self, "node_tree")
-        row.operator("paint_system.edit_node_group", text="", icon='NODETREE')
+        row.operator("paint_system.edit_node_group", text="", **icon_kwargs('NODETREE'))
 
     def draw_label(self):
         if self.node_tree:

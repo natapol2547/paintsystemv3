@@ -2,7 +2,7 @@ from bpy.types import AddonPreferences
 from bpy.props import BoolProperty, FloatProperty, FloatVectorProperty, EnumProperty
 from bpy.utils import register_classes_factory
 
-from .common import ADDON_ID
+from .common import ADDON_ID, icon_kwargs
 
 
 class PaintSystemPreferences(AddonPreferences):
@@ -158,11 +158,11 @@ class PaintSystemPreferences(AddonPreferences):
                     text="Use Panel Quick Access")
 
         dev_box = layout.box()
-        dev_box.label(text="Advanced", icon='PREFERENCES')
+        dev_box.label(text="Advanced", **icon_kwargs('PREFERENCES'))
         dev_box.prop(self, "developer_mode", text="Developer Mode")
 
         selection_box = layout.box()
-        selection_box.label(text="Selection", icon='SELECT_SET')
+        selection_box.label(text="Selection", **icon_kwargs('SELECT_SET'))
         selection_box.use_property_split = True
         selection_box.prop(self, "show_selection_3d")
         selection_box.prop(self, "selection_wash_color")
@@ -172,7 +172,7 @@ class PaintSystemPreferences(AddonPreferences):
 
         # --- Color popover ---
         popover_box = layout.box()
-        popover_box.label(text="Color Popover", icon='COLOR')
+        popover_box.label(text="Color Popover", **icon_kwargs('COLOR'))
         popover_box.prop(self, "color_picker_scale_popover",
                          text="Color Wheel Scale")
         popover_box.prop(self, "show_hsv_sliders_popover",

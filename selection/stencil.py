@@ -45,6 +45,7 @@ import bpy
 import numpy as np
 
 from . import raster
+from ..common import icon_kwargs
 
 log = logging.getLogger(__name__)
 
@@ -336,7 +337,7 @@ def draw_image_header(self, context) -> None:
     space = context.space_data
     if space is None or space.mode != 'PAINT' or not is_applied(context.scene):
         return
-    self.layout.label(text="Selection does not limit painting here", icon='INFO')
+    self.layout.label(text="Selection does not limit painting here", **icon_kwargs('INFO'))
 
 
 def _on_settings_changed(*args) -> None:

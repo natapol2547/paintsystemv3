@@ -76,7 +76,7 @@ class PAINTSYSTEM_UL_layers(UIList):
             if level == row_state.level - 1:
                 row.label(text="", **icon_kwargs('folder_indent'))
             else:
-                row.label(text="", icon='BLANK1')
+                row.label(text="", **icon_kwargs('BLANK1'))
         row.active = item.enabled and item.opacity > 0
         if item.is_clip:
             clip = row.row()
@@ -89,9 +89,9 @@ class PAINTSYSTEM_UL_layers(UIList):
         row = main_row.row(align=True)
         row.alignment = 'RIGHT'
         if item.lock_layer:
-            row.label(text="", icon='VIEW_LOCKED')
+            row.label(text="", **icon_kwargs('VIEW_LOCKED', 'LOCKED'))
         row.prop(item, "enabled", text="", emboss=False,
-                 icon='HIDE_OFF' if item.enabled else 'HIDE_ON')
+                 **icon_kwargs('HIDE_OFF' if item.enabled else 'HIDE_ON'))
 
 
 class PAINTSYSTEM_MT_add_layer(Menu):
@@ -122,10 +122,10 @@ def draw_layer_properties(layout, context, node):
     row = split.row(align=True)
     clip = row.row(align=True)
     clip.enabled = not node.lock_layer
-    clip.prop(node, "is_clip", text="", icon='SELECT_INTERSECT')
+    clip.prop(node, "is_clip", text="", **icon_kwargs('SELECT_INTERSECT'))
     if node.paint_image is not None:
-        clip.prop(node, "lock_alpha", text="", icon='TEXTURE')
-    row.prop(node, "lock_layer", text="", icon='VIEW_LOCKED')
+        clip.prop(node, "lock_alpha", text="", **icon_kwargs('TEXTURE'))
+    row.prop(node, "lock_layer", text="", **icon_kwargs('VIEW_LOCKED', 'LOCKED'))
     blend = row.row(align=True)
     blend.enabled = not node.lock_layer
     blend.prop(node, "blend_mode", text="")
@@ -144,8 +144,8 @@ def draw_layer_sidebar(col):
     col.separator(type='LINE')
     col.operator("paint_system.remove_layer", text="", **icon_kwargs('trash'))
     col.separator(type='LINE')
-    col.operator("paint_system.move_layer_up", text="", icon='TRIA_UP')
-    col.operator("paint_system.move_layer_down", text="", icon='TRIA_DOWN')
+    col.operator("paint_system.move_layer_up", text="", **icon_kwargs('TRIA_UP'))
+    col.operator("paint_system.move_layer_down", text="", **icon_kwargs('TRIA_DOWN'))
 
 
 class LayersPanel:

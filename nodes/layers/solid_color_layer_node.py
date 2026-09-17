@@ -4,6 +4,7 @@ from bpy.utils import register_classes_factory
 
 from .base_layer_node import PaintSystemLayerNode
 from ..base_node import mark_tree_dirty
+from ...common import blender_icon
 
 
 SOLID_LAYER_COLOR = (0.17, 0.235, 0.19)
@@ -12,7 +13,7 @@ SOLID_LAYER_COLOR = (0.17, 0.235, 0.19)
 class PaintSystemSolidColorLayerNode(PaintSystemLayerNode, Node):
     bl_idname = 'PaintSystemSolidColorLayerNode'
     bl_label = 'Solid Color'
-    bl_icon = 'COLOR'
+    bl_icon = blender_icon('COLOR')
 
     ps_type = 'SOLID_COLOR'
     ps_label = "Solid Color"

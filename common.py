@@ -22,24 +22,42 @@ def is_newer_than(major, minor=0, patch=0):
 _blender_icons: set[str] | None = None
 
 
-def icon_kwargs(*names: str) -> dict:
-    """Layout keyword arguments for the first of *names* that exists.
-
-    A name is an addon icon from ``icons/`` or a Blender icon. Blender
-    renames icons between versions, and an unknown name makes the layout
-    call raise, so list the old name after the new one.
-    """
+def _blender_icon_names() -> set[str]:
     global _blender_icons
     if _blender_icons is None:
         parameter = bpy.types.UILayout.bl_rna.functions['prop'].parameters['icon']
         _blender_icons = set(parameter.enum_items.keys())
+    return _blender_icons
+
+
+def icon_kwargs(*names: str) -> dict:
+    """Layout keyword arguments for the first of *names* that exists.
+
+    A name is an addon icon from ``icons/`` or a Blender icon. Blender
+    renames icons between versions, and forks such as Bforartists ship
+    their own set, and an unknown name makes the layout call raise. So
+    every icon a layout call draws goes through here, with the old name
+    listed after the new one.
+    """
+    blender_icons = _blender_icon_names()
     for name in names:
         icon_id = get_icon(name)
         if icon_id is not None:
             return {'icon_value': icon_id}
-        if name in _blender_icons:
+        if name in blender_icons:
             return {'icon': name}
     return {'icon': 'NONE'}
+
+
+def blender_icon(*names: str) -> str:
+    """The first of *names* that is a Blender icon, else ``'NONE'``.
+
+    For ``bl_icon`` on node and node tree classes: an unknown name there
+    makes ``register_class`` raise, so the class resolves it when it is
+    defined. List the old name after the new one, as for ``icon_kwargs``.
+    """
+    blender_icons = _blender_icon_names()
+    return next((name for name in names if name in blender_icons), 'NONE')
 
 
 def get_icon_from_socket_type(socket_type: str) -> int:

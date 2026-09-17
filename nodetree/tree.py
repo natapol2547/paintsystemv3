@@ -7,6 +7,7 @@ from bpy.utils import register_classes_factory
 from bpy_extras.node_utils import connect_sockets
 
 from . import stack_ops
+from ..common import blender_icon
 from ..props.channel import PaintSystemChannel, channel_socket_specs, channel_alpha_name
 from ..props.collection_manager import CollectionManager
 from ..props.selection import PaintSystemSelection
@@ -86,7 +87,7 @@ def _set_active_layer_index(tree, index: int) -> None:
 class PaintSystemNodeTree(NodeTree):
     bl_idname = 'PaintSystemNodeTree'
     bl_label = 'Paint System'
-    bl_icon = 'BRUSH_DATA'
+    bl_icon = blender_icon('BRUSH_DATA')
     bl_use_group_interface = False
 
     version: IntProperty(name="Version", default=2)

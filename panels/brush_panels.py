@@ -65,7 +65,7 @@ def draw_color_header(layout, context, brush):
     split = row.split(factor=0.5, align=True)
     UnifiedPaintPanel.prop_unified_color(split, context, brush, "color", text="")
     UnifiedPaintPanel.prop_unified_color(split, context, brush, "secondary_color", text="")
-    row.operator("paint.brush_colors_flip", icon='FILE_REFRESH', text="")
+    row.operator("paint.brush_colors_flip", text="", **icon_kwargs('FILE_REFRESH'))
 
 
 def draw_color_body(layout, context, settings):

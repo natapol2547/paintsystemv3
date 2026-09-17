@@ -9,22 +9,25 @@ from ..context import get_active_tree, parse_context
 from ..selection import session as selection_session
 
 
+# Add-on icon of each channel type, for ``icon_kwargs``.
+SOCKET_ICONS = {
+    'COLOR': 'color_socket',
+    'FLOAT': 'float_socket',
+    'VECTOR': 'vector_socket',
+}
+
+
 class PAINTSYSTEM_UL_channels(UIList):
     bl_idname = "PAINTSYSTEM_UL_channels"
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
-        socket_icons = {
-            'COLOR': get_icon('color_socket'),
-            'FLOAT': get_icon('float_socket'),
-            'VECTOR': get_icon('vector_socket'),
-        }
+        type_icon = icon_kwargs(SOCKET_ICONS.get(item.type, 'NONE'))
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
             row = layout.row(align=True)
-            row.prop(item, "name", text="", emboss=False,
-                     icon_value=socket_icons.get(item.type, 'NONE'))
+            row.prop(item, "name", text="", emboss=False, **type_icon)
         elif self.layout_type == 'GRID':
             layout.alignment = 'CENTER'
-            layout.label(text="", icon=socket_icons.get(item.type, 'NONE'))
+            layout.label(text="", **type_icon)
 
 
 def _draw_channel_list(layout, node_tree):
@@ -36,11 +39,11 @@ def _draw_channel_list(layout, node_tree):
         rows=3,
     )
     col = row.column(align=True)
-    col.operator("paint_system.add_channel", icon='ADD', text="")
-    col.operator("paint_system.remove_channel", icon='REMOVE', text="")
+    col.operator("paint_system.add_channel", text="", **icon_kwargs('ADD'))
+    col.operator("paint_system.remove_channel", text="", **icon_kwargs('REMOVE'))
     col.separator()
-    col.operator("paint_system.move_channel_up", icon='TRIA_UP', text="")
-    col.operator("paint_system.move_channel_down", icon='TRIA_DOWN', text="")
+    col.operator("paint_system.move_channel_up", text="", **icon_kwargs('TRIA_UP'))
+    col.operator("paint_system.move_channel_down", text="", **icon_kwargs('TRIA_DOWN'))
 
 
 def _draw_paint_mode_row(layout, context):
@@ -56,12 +59,12 @@ def _draw_selection_section(layout, context, tree):
     """Select all, none and invert, and why the selection cannot be used when it cannot."""
     header, body = layout.panel("paint_system_selection", default_closed=False)
     row = header.row()
-    row.label(text="Selection", icon='SELECT_SET')
+    row.label(text="Selection", **icon_kwargs('SELECT_SET'))
     state = selection_session.current()
     live = state.tree_uid == tree.session_uid and state.selected
     problem = live and bool(state.reason)
     if problem:
-        row.label(text="", icon='ERROR')
+        row.label(text="", **icon_kwargs('ERROR'))
     if body is None:
         return
     row = body.row(align=True)
@@ -69,9 +72,9 @@ def _draw_selection_section(layout, context, tree):
     row.operator("paint_system.select_all", text="None").action = 'DESELECT'
     row.operator("paint_system.select_all", text="Invert").action = 'INVERT'
     if problem:
-        body.label(text=selection_session.label(state), icon='ERROR')
+        body.label(text=selection_session.label(state), **icon_kwargs('ERROR'))
     elif live and state.empty:
-        body.label(text=selection_session.label(state), icon='INFO')
+        body.label(text=selection_session.label(state), **icon_kwargs('INFO'))
 
 
 def _draw_compiled_info(layout, tree):
@@ -82,12 +85,12 @@ def _draw_compiled_info(layout, tree):
     box = body.box()
     compiled = tree.compiled
     if compiled is None:
-        box.label(text="Not compiled yet", icon='INFO')
+        box.label(text="Not compiled yet", **icon_kwargs('INFO'))
     else:
-        box.label(text=compiled.name, icon='NODETREE')
+        box.label(text=compiled.name, **icon_kwargs('NODETREE'))
         box.label(text=f"{len(compiled.nodes)} nodes, {len(compiled.links)} links, "
                        f"fingerprint {artifact_fingerprint(tree)[:8]}")
-    box.operator("paint_system.compile_tree", icon='FILE_REFRESH')
+    box.operator("paint_system.compile_tree", **icon_kwargs('FILE_REFRESH'))
 
 
 class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
@@ -106,12 +109,12 @@ class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
         mat = obj.active_material if obj is not None else None
 
         if mat is None or mat.paint_system.tree is None:
-            layout.operator("paint_system.setup_material", icon='ADD')
+            layout.operator("paint_system.setup_material", **icon_kwargs('ADD'))
             layout.separator()
             layout.prop(context.scene.paint_system, "active_node_tree", text="Tree")
         else:
             row = layout.row(align=True)
-            row.label(text=mat.name, icon='MATERIAL')
+            row.label(text=mat.name, **icon_kwargs('MATERIAL'))
             row.prop(mat.paint_system, "tree", text="")
 
         tree = get_active_tree(context)

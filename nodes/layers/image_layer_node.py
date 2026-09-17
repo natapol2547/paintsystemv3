@@ -5,6 +5,7 @@ from bpy.props import PointerProperty, StringProperty
 from bpy.utils import register_classes_factory
 
 from .base_layer_node import PaintSystemLayerNode, emit_image_texture, update_tree_and_painting
+from ...common import blender_icon
 from ...compiler.bake import create_managed_image
 
 
@@ -14,7 +15,7 @@ IMAGE_LAYER_COLOR = (0.235291, 0.215529, 0.170224)
 class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
     bl_idname = 'PaintSystemImageLayerNode'
     bl_label = 'Image Layer'
-    bl_icon = 'IMAGE_DATA'
+    bl_icon = blender_icon('IMAGE_DATA')
 
     ps_type = 'IMAGE'
     ps_label = "Image"

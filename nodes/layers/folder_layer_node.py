@@ -3,7 +3,7 @@ from bpy.props import BoolProperty
 from bpy.utils import register_classes_factory
 
 from .base_layer_node import PaintSystemLayerNode
-from ...common import icon_kwargs
+from ...common import blender_icon, icon_kwargs
 
 
 FOLDER_LAYER_COLOR = (0.235291, 0.196, 0.121)
@@ -18,7 +18,7 @@ class PaintSystemFolderLayerNode(PaintSystemLayerNode, Node):
     """
     bl_idname = 'PaintSystemFolderLayerNode'
     bl_label = 'Folder'
-    bl_icon = 'FILE_FOLDER'
+    bl_icon = blender_icon('FILE_FOLDER')
 
     ps_type = 'FOLDER'
     ps_label = "Folder"

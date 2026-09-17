@@ -3,17 +3,24 @@
 Blender renames icons between versions, and forks such as Bforartists ship
 a different icon set. An unknown name in a layout call raises while the
 panel draws, and an unknown ``bl_icon`` on a node or node tree class makes
-``register_class`` raise. This test parses the add-on source with ``ast``
-and checks every name it finds against this Blender:
+``register_class`` raise. The add-on therefore resolves icon names at run
+time through ``common.icon_kwargs`` and ``common.blender_icon``, which fall
+back to later names and finally to no icon. This test parses the add-on
+source with ``ast`` and checks every name it finds against this Blender, so
+a rename shows up here rather than as a missing icon:
 
-- ``icon=`` on any call names an item of the ``UILayout`` icon enum.
 - ``icon_kwargs(...)`` and ``ps_icon`` tuples list names in fallback order;
   at least one must be a Blender icon or a file in ``icons/``.
+- ``bl_icon`` on a node or node tree class is ``blender_icon(...)``; at
+  least one name must be in the ``bl_icon`` enum of the ``bpy.types`` class
+  it derives from.
 - ``bl_icon`` on a ``WorkSpaceTool`` names a ``.dat`` file in Blender's
-  datafiles icons folder. Blender only prints a warning for a missing
-  one when the toolbar draws, so this test is what catches it.
-- ``bl_icon`` on any other class names an item of the ``bl_icon`` enum of
-  the ``bpy.types`` class it derives from.
+  datafiles icons folder. Blender only prints a warning for a missing one
+  when the toolbar draws, so it stays a literal and this test catches it.
+- ``icon=`` with a literal name fails, as it bypasses the fallback. The
+  exceptions are ``icon='NONE'`` and the sites in ``LITERAL_ICON_SITES``,
+  which the layout API gives no ``icon_value`` alternative; their names
+  must still be in the ``UILayout`` icon enum.
 
 A value that is not a string literal is resolved to the literals it can
 take, by these rules only:
@@ -41,6 +48,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import REPO, check, fail, finish, section  # noqa: E402
 
 SKIP_DIRS = {"tests", "docs", "icons", "__pycache__", "dist", "build"}
+
+# (file, icon name) -> why the call cannot take ``**icon_kwargs(...)``.
+# Empty while every icon the add-on draws goes through a layout call that
+# accepts ``icon_value``.
+LITERAL_ICON_SITES = {}
 
 
 class Unresolved(Exception):
@@ -172,6 +184,8 @@ class Report:
     def __init__(self):
         self.counts = {}
         self.problems = []
+        # Names this Blender lacks where a later name in the list stands in.
+        self.fallbacks = []
 
     def count(self, kind):
         self.counts[kind] = self.counts.get(kind, 0) + 1
@@ -190,17 +204,37 @@ def check_enum_names(report, source, node, names, enum, enum_label):
             report.problem(source, node, f"{name!r} is not in the {enum_label} enum")
 
 
-def check_fallbacks(report, source, node, lists, label):
+def check_fallbacks(report, source, node, lists, label, available, available_label):
     for names in lists:
         report.count(label)
-        if not any(name in BLENDER_ICONS or name in ADDON_ICONS for name in names):
-            report.problem(source, node, f"{label} {names}: none is a Blender icon or a file in icons/")
+        if not any(name in available for name in names):
+            report.problem(source, node, f"{label} {names}: none is {available_label}")
+        elif names[0] not in available:
+            fallback = next(name for name in names if name in available)
+            report.fallbacks.append((source.rel, node.lineno, f"{names[0]!r} is missing, {fallback!r} is used"))
+
+
+def check_literal_icon(report, source, keyword):
+    names = source.resolve(keyword.value) - {'NONE'}
+    for name in sorted(names):
+        if (source.rel, name) not in LITERAL_ICON_SITES:
+            report.problem(source, keyword, f"icon={name!r} bypasses the fallback: use **icon_kwargs({name!r})")
+    check_enum_names(report, source, keyword, names, BLENDER_ICONS, "UILayout icon")
+
+
+def is_bl_icon_value(source, node):
+    parent = source.parents.get(node)
+    return (isinstance(parent, ast.Assign) and parent.value is node
+            and any(isinstance(t, ast.Name) and t.id == "bl_icon" for t in parent.targets)
+            and isinstance(source.parents.get(parent), ast.ClassDef))
 
 
 def scan_call(report, source, call):
     for keyword in call.keywords:
         if keyword.arg == "icon":
-            check_enum_names(report, source, keyword, source.resolve(keyword.value), BLENDER_ICONS, "UILayout icon")
+            check_literal_icon(report, source, keyword)
+    if call_name(call) == "blender_icon" and not is_bl_icon_value(source, call):
+        raise Unresolved(call, "blender_icon is only for bl_icon class attributes; layout calls use icon_kwargs")
     if call_name(call) != "icon_kwargs":
         return
     starred = [arg for arg in call.args if isinstance(arg, ast.Starred)]
@@ -208,7 +242,8 @@ def scan_call(report, source, call):
         if len(call.args) == 1 and isinstance(starred[0].value, ast.Attribute) and starred[0].value.attr == "ps_icon":
             return
         raise Unresolved(call, "icon_kwargs with an unpacked argument other than a ps_icon tuple")
-    check_fallbacks(report, source, call, source.fallback_lists(call.args), "icon_kwargs")
+    check_fallbacks(report, source, call, source.fallback_lists(call.args), "icon_kwargs",
+                    BLENDER_ICONS | ADDON_ICONS, "a Blender icon or a file in icons/")
 
 
 def rna_base(source, cls, addon_classes):
@@ -235,7 +270,8 @@ def scan_class(report, source, cls, addon_classes):
             value = source.definition(stmt.value)
             if not isinstance(value, ast.Tuple):
                 raise Unresolved(stmt, f"ps_icon of {cls.name} is not a tuple literal")
-            check_fallbacks(report, source, stmt, source.fallback_lists(value.elts), "ps_icon")
+            check_fallbacks(report, source, stmt, source.fallback_lists(value.elts), "ps_icon",
+                            BLENDER_ICONS | ADDON_ICONS, "a Blender icon or a file in icons/")
         if "bl_icon" in targets:
             if any(getattr(b, "id", getattr(b, "attr", None)) == "WorkSpaceTool" for b in cls.bases):
                 for name in sorted(source.resolve(stmt.value)):
@@ -244,8 +280,14 @@ def scan_class(report, source, cls, addon_classes):
                         report.problem(source, stmt, f"{name!r} has no .dat file in {TOOL_ICON_DIR}")
                 continue
             base_name, rna_type = rna_base(source, cls, addon_classes)
-            enum = enum_names(rna_type.bl_rna.properties["bl_icon"])
-            check_enum_names(report, source, stmt, source.resolve(stmt.value), enum, f"{base_name}.bl_icon")
+            value = stmt.value
+            if not (isinstance(value, ast.Call) and call_name(value) == "blender_icon"):
+                report.problem(source, stmt, f"bl_icon of {cls.name} bypasses the fallback: use blender_icon(...)")
+                continue
+            if value.keywords or any(isinstance(arg, ast.Starred) for arg in value.args):
+                raise Unresolved(value, "blender_icon takes icon names as plain positional arguments")
+            check_fallbacks(report, source, stmt, source.fallback_lists(value.args), "blender_icon",
+                            enum_names(rna_type.bl_rna.properties["bl_icon"]), f"in the {base_name}.bl_icon enum")
 
 
 def scan(sources):
@@ -275,8 +317,10 @@ for kind, number in sorted(report.counts.items()):
     print(f"    {kind}: {number}")
 check(len(BLENDER_ICONS) > 0, f"this Blender has {len(BLENDER_ICONS)} UILayout icons")
 check(len(TOOL_ICONS) > 0, f"this Blender has {len(TOOL_ICONS)} tool icons in {TOOL_ICON_DIR}")
-for kind in ("UILayout icon", "icon_kwargs", "ps_icon", "WorkSpaceTool icon"):
+for kind in ("icon_kwargs", "ps_icon", "blender_icon", "WorkSpaceTool icon"):
     check(report.counts.get(kind, 0) > 0, f"the scan found {kind} references")
+for rel, line, message in sorted(report.fallbacks):
+    print(f"  [fallback] {rel}:{line} {message}")
 for problem in report.sorted_problems():
     fail(problem)
 check(not report.problems, f"{len(report.problems)} missing or unresolved icon references")

@@ -3,6 +3,7 @@ from bpy.types import Node
 from bpy.props import BoolProperty
 from bpy.utils import register_classes_factory
 from ..base_node import PaintSystemBaseNode
+from ...common import blender_icon, icon_kwargs
 
 
 GROUP_IO_COLOR = (0.176468, 0.138996, 0.138996)
@@ -19,7 +20,7 @@ class PaintSystemGroupNode(PaintSystemBaseNode):
 class PaintSystemGroupInputNode(PaintSystemGroupNode, Node):
     bl_idname = 'PaintSystemGroupInputNode'
     bl_label = 'Group Input'
-    bl_icon = 'GROUP_UVS'
+    bl_icon = blender_icon('GROUP_UVS')
 
     def draw_label(self):
         return "Group Input"
@@ -33,7 +34,7 @@ class PaintSystemGroupInputNode(PaintSystemGroupNode, Node):
 class PaintSystemGroupOutputNode(PaintSystemGroupNode, Node):
     bl_idname = 'PaintSystemGroupOutputNode'
     bl_label = 'Group Output'
-    bl_icon = 'GROUP_UVS'
+    bl_icon = blender_icon('GROUP_UVS')
 
     is_active_output: BoolProperty(name="Is Active Output", default=False)
 
@@ -44,7 +45,7 @@ class PaintSystemGroupOutputNode(PaintSystemGroupNode, Node):
     def draw_buttons(self, context, layout):
         if not self.is_active_output:
             warning_box = layout.box()
-            warning_box.label(text="Inactive Output", icon='ERROR')
+            warning_box.label(text="Inactive Output", **icon_kwargs('ERROR'))
 
     def draw_label(self):
         return "Group Output"
