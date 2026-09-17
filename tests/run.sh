@@ -25,6 +25,7 @@ window_only=(
     test_selection_session_ui.py
     test_selection_stencil_ui.py
     test_selection_overlay_ui.py
+    test_selection_view_windowed.py
 )
 # Run again windowed under --ui: 4.2 to 5.1 have no background GPU context.
 ui_tests=(
@@ -36,6 +37,8 @@ ui_tests=(
     test_selection_stencil_ui.py
     test_selection_overlay.py
     test_selection_overlay_ui.py
+    test_selection_view_raster.py
+    test_selection_view_windowed.py
 )
 
 BLENDER="${BLENDER:-/home/tawan/Desktop/Blender Launcher/stable/blender-5.2.1-lts.9e2066aef7ef/blender}"

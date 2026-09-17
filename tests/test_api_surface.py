@@ -256,6 +256,12 @@ SURFACE = [
     attr("gpu.types.GPUVertFormat"),
     attr("gpu.types.GPUVertBuf"),
     attr("gpu.types.GPUBatch"),
+    # Selections drawn in the 3D view (PS-093). GPUFrameBuffer's depth_slot
+    # has no signature to check on 5.2; the view raster tests build one.
+    attr("gpu.types.GPUUniformBuf"),
+    rna_prop("Object", "matrix_world"),
+    rna_prop("ViewLayer", "objects"),
+    rna_prop("Object", "mode"),
 ]
 
 
