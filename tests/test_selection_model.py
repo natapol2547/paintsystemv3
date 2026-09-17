@@ -12,6 +12,7 @@ import sys
 import tempfile
 
 import bpy
+from mathutils import Matrix
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import check, fail, finish, guarded, import_from, register_addon, section  # noqa: E402
@@ -161,6 +162,81 @@ def test_hash_tracks_what_the_mask_depends_on():
     check(sel.ops_hash() == first, "an identical selection rebuilt from scratch hashes the same")
 
 
+def test_view_ops_key_their_surface():
+    section("a VIEW op's digest covers its view, its UV map and its surface key")
+    sel = fresh_selection()
+    check("object" in sel.bl_rna.properties["ops"].fixed_type.properties
+          and "uv_map" in sel.bl_rna.properties["ops"].fixed_type.properties,
+          "ops have object and uv_map fields")
+    mesh = bpy.data.meshes.new("PS Selection Model Mesh")
+    first_object = bpy.data.objects.new("PS Selection Model A", mesh)
+    op = sel.add_op('LASSO', space='VIEW', points=[(10.0, 10.0), (200.0, 40.0), (120.0, 300.0)],
+                    region_size=(800, 600), object=first_object, uv_map="UVMap")
+    check(op.object == first_object and op.uv_map == "UVMap", "add_op stores the object and the UV map")
+
+    def key_a(_op):
+        return b"a" * 16
+
+    def key_b(_op):
+        return b"b" * 16
+
+    bare = sel.prefix_digests(64, 64, 1001)
+    check(sel.prefix_digests(64, 64, 1001, surface_key=lambda _op: None) == bare,
+          "no provider digests the same as a provider giving no key")
+    keyed = sel.prefix_digests(64, 64, 1001, surface_key=key_a)
+    check(keyed != bare and sel.prefix_digests(64, 64, 1001, surface_key=key_b) != keyed,
+          "the provider's key changes the digest")
+    changes = {
+        "the UV map": ("uv_map", "Other"),
+        "Through": ("through", True),
+        "the region size": ("region_size", (801, 600)),
+        "the view matrix": ("view_matrix", [2.0] * 16),
+        "the projection matrix": ("projection_matrix", [3.0] * 16),
+    }
+    originals = {"uv_map": op.uv_map, "through": op.through, "region_size": tuple(op.region_size),
+                 "view_matrix": [value for column in op.view_matrix.col for value in column],
+                 "projection_matrix": [value for column in op.projection_matrix.col for value in column]}
+    for name, (field, value) in changes.items():
+        setattr(op, field, value)
+        check(sel.prefix_digests(64, 64, 1001, surface_key=key_a) != keyed, f"{name} changes the digest")
+        setattr(op, field, originals[field])
+    check(sel.prefix_digests(64, 64, 1001, surface_key=key_a) == keyed, "restoring every field restores it")
+
+    second_object = first_object.copy()
+    check(second_object.session_uid != first_object.session_uid, "the copy has its own session_uid")
+    op.object = second_object
+    check(sel.prefix_digests(64, 64, 1001, surface_key=key_a) == keyed,
+          "the same ops on another object with an equal key digest the same")
+    op.object = first_object
+
+    def raising(_op):
+        raise AssertionError("a UV op asked for a surface key")
+
+    uv = fresh_selection()
+    uv.add_op('BOX', points=[(0.1, 0.1), (0.5, 0.5)])
+    uv.add_op('INVERT')
+    try:
+        check(uv.prefix_digests(64, 64, 1001, surface_key=raising) == uv.prefix_digests(64, 64, 1001),
+              "UV ops never call the provider")
+    except AssertionError as error:
+        fail(str(error))
+
+    # The stored view maps the object's space to the view, column-major, as
+    # FloatVectorProperty(size=16, subtype='MATRIX') keeps it.
+    matrix = Matrix.Translation((1.0, 2.0, 3.0)) @ Matrix.Rotation(0.3, 4, 'Z')
+    op = fresh_selection().add_op('BOX', space='VIEW')
+    op.view_matrix = [value for column in matrix.col for value in column]
+    stored = Matrix(op.view_matrix)
+    check(stored == matrix and tuple(stored.col[3]) == (1.0, 2.0, 3.0, 1.0),
+          f"a flattened matrix reads back unchanged, translation in column 3 ({tuple(stored.col[3])})")
+    check(selection_props.DIGEST_TAG == b"PS-091 selection mask 2", "the digest format is version 2")
+
+    bpy.data.objects.remove(second_object)
+    bpy.data.objects.remove(first_object)
+    bpy.data.meshes.remove(mesh)
+    fresh_selection()
+
+
 def test_digests_are_exact():
     section("digests see every bit of a value and ignore what a replace hides")
     sel = fresh_selection()
@@ -254,21 +330,21 @@ def test_pinned_digests():
     chains = {
         "box feather 16 at 256": ((256, 256, 1001), [
             dict(kind='BOX', points=[(0.25, 0.25), (0.75, 0.5)], feather=16.0)],
-            ['4bba1807b9033d4db572840dbdc45761997232b9']),
+            ['d8f3229d99ac91f7c94b363f0f73b7fa746dd9ca']),
         "three ops": ((0, 0, 0), [
             dict(kind='BOX', points=[(0.1, 0.1), (0.5, 0.5)]),
             dict(kind='ELLIPSE', mode='ADD', points=[(0.2, 0.2), (0.4, 0.4)], feather=4.0, antialias=False),
             dict(kind='INVERT', mode='ADD')],
-            ['18c3367ba57e339ae80babef0f53000bfe90af47', '9e98d625f5845cd04b8a963ae4907d627c647ff6',
-             '36cc48d9a09582b7f864824fb7586f65040befaf']),
+            ['55b2c17335b112fc91902430b332369af049ec03', '99e5b60def006059b67a01e5249c1a2a4fbd52a7',
+             '634ca53f8ac3974c41b571acd842f93f37503d88']),
         "view lasso": ((0, 0, 0), [
             dict(kind='LASSO', space='VIEW', points=[(10.0, 10.0), (200.0, 40.0), (120.0, 300.0)], feather=3.0,
-                 through=True, region_size=(1920, 1080), view_matrix=[2.0] * 16)],
-            ['97da54f9a281d0eebe169e65aaa2014b81f55cb6']),
+                 through=True, region_size=(1920, 1080), view_matrix=[2.0] * 16, uv_map="UVMap")],
+            ['4ca0e54fe881cef0573300aca781bfdd5facf817']),
         "tile 1022": ((64, 64, 1022), [
             dict(kind='ALL'),
             dict(kind='LASSO', mode='SUBTRACT', points=[(1.25, 2.25), (1.75, 2.25), (1.5, 2.75)], feather=2.5)],
-            ['82596415688579a3d4015e99a60a805a3f2354ff', 'e0f1e020c2c68c61e08630513029ab42b999b7e6']),
+            ['08b4eeae60d2e2da6470e77fd3c2431f963678ac', '21ea48ada17a08fd69a5152a034bdc1067f9e557']),
     }
     for name, (size, ops, want) in chains.items():
         sel = fresh_selection()
@@ -359,6 +435,7 @@ for test in (test_ops_are_ordered_and_replace_truncates,
              test_points_round_trip,
              test_defaults_come_from_the_selection,
              test_hash_tracks_what_the_mask_depends_on,
+             test_view_ops_key_their_surface,
              test_digests_are_exact,
              test_points_written_directly,
              test_pinned_digests,

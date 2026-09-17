@@ -21,10 +21,11 @@ pins a few so the change is at least deliberate.
 import hashlib
 import struct
 from array import array
+from collections.abc import Callable
 
 import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProperty,
-                       FloatVectorProperty, IntVectorProperty, PointerProperty)
+                       FloatVectorProperty, IntVectorProperty, PointerProperty, StringProperty)
 
 SELECTION_OP_KINDS = [
     ('BOX', "Box", "Rectangle"),
@@ -73,8 +74,11 @@ MODE_CODES = {item[0]: index for index, item in enumerate(SELECTION_MODES)}
 SPACE_CODES = {item[0]: index for index, item in enumerate(SELECTION_SPACES)}
 """Stable small integers for the enum items, packed into digests."""
 
-DIGEST_TAG = b"PS-091 selection mask 1"
+DIGEST_TAG = b"PS-091 selection mask 2"
 """Version of the digest format; changing it gives every selection new cache keys."""
+
+NO_SURFACE_KEY = b"\xff" * 16
+"""What a `VIEW` op digests when no provider gives a surface key."""
 
 DIGEST_SIZE = 20
 """Bytes in each BLAKE2b prefix digest."""
@@ -141,12 +145,19 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
     )
 
     # A VIEW op is redrawn from the view it was made in, so it survives
-    # undo, a reload and any later camera move.
+    # undo, a reload and any later camera move. `view_matrix` maps the
+    # object's own space to the view as it was at commit, so the selection
+    # stays on the texels it covered when the object later moves;
+    # `projection_matrix` is the region's window matrix. `object` and
+    # `uv_map` name the surface the op was drawn on; `uv_map` holds a
+    # concrete map name, never the empty string.
     region_size: IntVectorProperty(name="Region Size", size=2, default=(0, 0))
     view_matrix: FloatVectorProperty(
         name="View Matrix", size=16, subtype='MATRIX', default=_IDENTITY)
     projection_matrix: FloatVectorProperty(
         name="Projection Matrix", size=16, subtype='MATRIX', default=_IDENTITY)
+    object: PointerProperty(name="Object", type=bpy.types.Object)
+    uv_map: StringProperty(name="UV Map")
 
     # RASTER: a write-once greyscale image, never modified, so undo only
     # needs the pointer. It is packed right after its write, because an
@@ -174,7 +185,8 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
             flat.extend((float(point[0]), float(point[1])))
         self[POINTS_KEY] = flat
 
-    def update_digest(self, digest) -> None:
+    def update_digest(self, digest,
+                      surface_key: Callable[["PaintSystemSelectionOp"], bytes | None] | None = None) -> None:
         """Feed everything that changes what this op rasterises to into *digest*.
 
         Values go in at full precision, packed with `struct`; the point
@@ -184,6 +196,12 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
         anti-alias of kinds without an outline, and the view of a `UV` op.
         A `RASTER` op includes its image's `session_uid`, so an image
         deleted and replaced by another of the same name is a new mask.
+
+        An outlined `VIEW` op also depends on the surface it was drawn on.
+        It adds its UV map name and the key *surface_key* gives for it, or
+        `NO_SURFACE_KEY` without a provider or a key. The object's
+        `session_uid` stays out: the same ops on an identical surface are
+        the same mask. Only `VIEW` ops call the provider.
         """
         kind = self.kind
         outlined = kind not in OUTLINELESS_KINDS
@@ -210,6 +228,11 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
             digest.update(struct.pack('<B2i', self.through, *self.region_size))
             digest.update(struct.pack('<32d', *_matrix_values(self.view_matrix),
                                       *_matrix_values(self.projection_matrix)))
+            uv_map = self.uv_map.encode('utf-8')
+            digest.update(struct.pack('<I', len(uv_map)))
+            digest.update(uv_map)
+            key = surface_key(self) if surface_key is not None else None
+            digest.update(key if key is not None else NO_SURFACE_KEY)
         if kind == 'RASTER':
             image = self.raster_image
             name = image.name_full.encode('utf-8') if image is not None else b""
@@ -305,7 +328,9 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
                 start = index
         return start
 
-    def prefix_digests(self, width: int = 0, height: int = 0, tile: int = 0) -> list[bytes]:
+    def prefix_digests(self, width: int = 0, height: int = 0, tile: int = 0,
+                       surface_key: Callable[[PaintSystemSelectionOp], bytes | None] | None = None,
+                       ) -> list[bytes]:
         """One digest per op: of that op and everything that shows through to it.
 
         Digest ``k`` is the mask after op ``k`` at *width* x *height* for
@@ -313,7 +338,9 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
         finds the longest prefix it has already built. A replacing op
         starts again from the root, which holds only the digest tag, the
         size and the tile, so ops before it do not change any digest from
-        it on. 20-byte BLAKE2b.
+        it on. *surface_key* gives each `VIEW` op the key of the surface
+        it was drawn on (`PaintSystemSelectionOp.update_digest`). 20-byte
+        BLAKE2b.
         """
         root = hashlib.blake2b(DIGEST_TAG + struct.pack('<III', width, height, tile),
                                digest_size=DIGEST_SIZE).digest()
@@ -322,7 +349,7 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
         for op in self.ops:
             digest = hashlib.blake2b(digest_size=DIGEST_SIZE)
             digest.update(root if op.mode == 'REPLACE' and op.kind in REPLACING_KINDS else previous)
-            op.update_digest(digest)
+            op.update_digest(digest, surface_key)
             previous = digest.digest()
             out.append(previous)
         return out
@@ -333,6 +360,8 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
         Empty string when there are none. The mask is derived from exactly
         this, so two selections with the same digest have the same mask at
         any size, and a changed digest means the mask has to be rebuilt.
+        It passes no surface key provider, so a `VIEW` selection's mask
+        also depends on surfaces this digest does not see.
         """
         if not len(self.ops):
             return ""
