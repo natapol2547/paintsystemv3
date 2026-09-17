@@ -79,9 +79,14 @@ Each later ticket adds its own `tests/test_<feature>.py`.
   `blender_icon` lists for node and node tree `bl_icon` need one name in
   that class's RNA enum, and `WorkSpaceTool.bl_icon` needs a `.dat` file
   in the datafiles icons folder. It fails on a literal `icon=` other than
-  `'NONE'` or a literal node `bl_icon`, and on any icon expression it
-  cannot resolve to literals (a conditional, a name assigned once, a
-  dict literal lookup), with file and line. Names that are missing but
+  `'NONE'` or a literal node `bl_icon`, on `bl_icon` or `ps_icon` set
+  anywhere but directly in the class body, on an icon key unpacked with
+  `**` into a layout call, on `icon_value` given a name or `get_icon` of
+  a missing file, and on any icon expression it cannot resolve to
+  literals (a conditional, a name bound exactly once by a plain
+  assignment, a dict literal lookup that is not changed in place), with
+  file and line. A last section scans planted faults, so a gap in those
+  rules fails on every Blender. Names that are missing but
   have a fallback are printed, so a rename shows up before the fallback
   runs out. On Bforartists 5.2.0, which reports itself as 5.3.0 Alpha,
   `VIEW_LOCKED` falls back to `LOCKED`.
