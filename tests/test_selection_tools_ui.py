@@ -504,6 +504,8 @@ def run_sections():
     state = session.current()
     check(ops() == [('BOX', 'REPLACE', 'VIEW')], f"the op stays on the tree ({ops()})")
     check(state.reason == '', f"an empty mask is not a problem (reason {state.reason!r}: {state.message})")
+    check(state.empty and not state.active and session.label(state) == session.NOTHING_SELECTED,
+          f"the session calls it nothing selected (empty={state.empty}, active={state.active})")
     check(not stencil.is_applied(bpy.context.scene), "the stencil is restored")
     add_capture_handler()
     try:
