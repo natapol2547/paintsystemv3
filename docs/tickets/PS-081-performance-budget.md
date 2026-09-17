@@ -2,6 +2,112 @@
 
 Epic I. Size M. Milestone M3.
 
+## Status
+
+Built on 2026-09-18. The compile step was quadratic in the layer count
+and no longer is: an opacity edit cost 1.1 ms per layer at 20 layers and
+4.4 ms per layer at 100, and now costs 0.18 and 0.15. Three of the five
+budget lines are met, the property patch sits on its limit and the
+unchanged compile misses 5 ms at about 8.
+
+What landed, in merge order:
+
+- **A parity net first** (`tests/test_parity.py`). It walks a 40-layer
+  tree through a long edit sequence and checks after every step that the
+  incrementally patched artifact holds what a compile from scratch would
+  have produced. Every change below skips work, and the failure mode of
+  skipping too much is an artifact that is silently stale for good, so
+  the net came before the optimisations.
+- **A link index for the compile walks** (`nodetree/stack_ops.py`).
+  `NodeSocket.links` is a Python property that scans every link of the
+  tree, and the walk down a stack reads it per layer. `link_index` maps
+  the tree's links by socket once and `socket_links` reads that map. It
+  reproduces the property exactly, including muted and invalid links and
+  the multi-input order, is keyed by tree pointer so a nested compile
+  cannot clobber it, and is dropped before any link edit. An unchanged
+  compile of 100 layers made 858 calls into that property, 124 ms of its
+  132; it now makes none.
+- **Writes that change nothing are skipped** (`nodes/builder.py`). Every
+  compile re-declared all 665 socket values and node properties of a
+  100-layer artifact, and each no-op write cost about 320 us because it
+  tags the artifact and every material using it. `same_value` compares
+  against the live RNA value, floats rounded through float32 and
+  datablocks by identity, and the write is skipped when they match.
+- **Links are diffed by socket pointer**, in one pass over
+  `node_tree.links`, instead of by reading `NodeSocket.links` per
+  declared link: 332 of those reads per build, 80 to 108 ms of an edit.
+- **Layout writes only what moves.** `node.location` costs about 125 us
+  even when the value is identical, and laying out a stack rewrites every
+  layer's position. `_set_loc` and `_shift_loc` skip a write that would
+  not move the node, node bounding boxes are cached for the length of a
+  build, and the two recursive layout walks are iterative: a raise inside
+  arrange aborts the compile before the fingerprint is stamped, and a
+  chain of about 1000 nodes used to reach Python's recursion limit.
+- **The fingerprint payload is built without a redundant sort.**
+  `_serialize` sorted dicts that `json.dumps(sort_keys=True)` sorts
+  again, 3.7 ms per compile of 100 layers. The output is byte-identical,
+  which matters because `compiler/bake.py` stores cache hashes computed
+  by `hash_payload`.
+- **`PS_PROFILE=1` logs per-phase timings** (`compiler/profile.py`).
+  Unset, a phase is one call into a shared no-op.
+- **The budget is a test** (`tests/test_perf.py`).
+
+### Measured
+
+100 layers on Blender 5.2.1 LTS, the artifact instanced in a material,
+median of 9 reps, best of three passes, load average 0.6 to 5.8 on a
+12-thread machine. Before is the same harness on the same machine
+earlier that day, median of 15 reps at load 2 to 7.
+
+| Operation (100 layers) | Before | After |
+|---|---|---|
+| First build from scratch | 737 ms | 440 ms |
+| Compile of an unchanged tree | 132 ms | 8.2 ms |
+| `NodeTree.update` currency check | 129 ms | 8.3 ms |
+| Opacity edit | 442 ms | 15.0 ms |
+| `enabled` toggle | 430 ms | 15.1 ms |
+| Blend mode change | 441 ms | 14.6 ms |
+| Insert a layer | 537 ms | 35.4 ms |
+| Remove a layer | 474 ms | 28.4 ms |
+| `stack()` + `layer_rows` | 34 ms | 1.4 ms |
+
+Against the budget: the structural change (35 ms of the 60 allowed) and
+`stack()` plus the rows (1.4 ms of 2) are met with room, and the UIList
+still draws from one walk. The property patch is on the line at 15.0 ms
+median, 14.4 ms best, so it holds on a quiet machine and not on a busy
+one. The unchanged compile misses: 8.2 ms against 5 ms, of which 6.6 ms
+is `build_ir` and 1.8 ms the fingerprint. `tests/test_perf.py` asserts
+12 ms for it rather than the ticket's 5, and guards the shape instead:
+an unchanged compile of 100 layers must cost less than six times the
+same compile of 25, where the pre-PS-081 walk was about thirteen.
+
+The same tree on Blender 4.2.23 LTS runs 1.3 to 1.5 times faster than on
+5.2.1 (an unchanged compile 6.0 ms, an opacity edit 10.2 ms), and the
+5.3 alpha matches 5.2.1. The 5.x series is the worst case, so that is
+what the budget is measured on.
+
+### Open
+
+- **The unchanged compile, at 8 ms against the 5 ms budget.** Reaching
+  it means making `build_ir` itself cheaper; there is no obvious 3 ms
+  left to remove without changing what the walk does.
+- **The value-only fast path proposed below was considered and
+  dropped.** Patching one socket and the stored fingerprint without
+  rebuilding the IR is only correct while the cached payload describes
+  the live document, and after an undo it does not: the fingerprint is
+  stamped regardless, so a single missed invalidation leaves an artifact
+  that is wrong and believes it is current, with no edit that repairs it.
+  A slow slider is a worse trade than that. The full `build_ir` plus
+  fingerprint stays the only source of truth.
+- **The first build, 440 ms at 100 layers.** Not in the budget - it runs
+  on setup and on a v2 migration, not during painting - but it is now
+  the largest single compile, and almost all of it is in the builder:
+  330 ms creating 167 nodes and writing their values, 100 ms laying them
+  out for the first time.
+- **Two fingerprint bugs found while profiling**, both older than this
+  work: PS-083 (a datablock deleted and recreated under the same name)
+  and PS-084 (a datablock the fingerprint embeds being renamed).
+
 ## Goal
 
 Keep the compile step invisible during painting and layer editing.

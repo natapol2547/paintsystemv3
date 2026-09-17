@@ -205,6 +205,8 @@ groups and templates (040-042), colour history (062).
 | [PS-080](tickets/PS-080-tests-and-ci.md) | Per-feature tests and CI | M | – |
 | [PS-081](tickets/PS-081-performance-budget.md) | Performance budget and profiling | M | 010 |
 | [PS-082](tickets/PS-082-grease-pencil.md) | Grease Pencil support (deferred) | L | 034 |
+| [PS-083](tickets/PS-083-fingerprint-recreated-datablock.md) | Stale artifact when a datablock is recreated under a deleted one's name (deferred) | S | – |
+| [PS-084](tickets/PS-084-fingerprint-stale-after-rename.md) | Stale stored fingerprint after a datablock rename (deferred) | S | – |
 
 ## Epic J. Selection, transform and fill tools
 
@@ -268,6 +270,17 @@ data structures or algorithms are ported.
   set a brush to Erase Alpha. Nice to have and not scheduled. The user
   creates the brush and puts it in the library `.blend`; ask them to do
   that before the ticket is started.
+- Two fingerprint bugs found while profiling PS-081 on 2026-09-18, both
+  older than that work and both from the same assumption: the IR
+  identifies a datablock by `name_full`, and nothing revalidates the
+  artifact's ID pointers once a fingerprint matches. PS-083: deleting an
+  image and creating another under the freed name leaves the artifact's
+  Texture Image empty, because the fingerprint matches the one stored
+  before the deletion and no compile runs. PS-084: renaming an image or
+  the tree changes the fingerprint without triggering a compile, so the
+  stored one is stale until the next edit and a baked layer loses its
+  cache. Both want the same fix and are cheaper done together; not
+  scheduled, since neither misrenders a normal edit.
 
 ## Not ported
 

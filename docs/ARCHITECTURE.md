@@ -50,6 +50,13 @@ is the net for that. What a build did reach — nodes created, values
 written, links created and removed, whether it arranged — is counted in
 `NodeTreeBuilder.stats` and left on `compiler.core.last_build_stats`.
 
+Links are diffed the same way, by the pair of socket addresses each link
+connects rather than by `ps_identifier`: a hand-duplicated artifact node
+carries the tag, and matching on it would mistake the copy's link for the
+real one. One pass over `node_tree.links` decides every removal, so the
+diff never reads `NodeSocket.links` (see the link index under Layer
+stack).
+
 Node locations follow the same rule, in the builder's layout and in
 `arrange_stack`, even though they are outside the IR and the fingerprint:
 laying a stack out rewrites the position of every layer, and nearly all of
@@ -83,6 +90,18 @@ Structural edits (`insert_on_top`, `insert_above`, `insert_into`, `remove`)
 are link operations that keep two invariants: a layer's `Color` output
 feeds at most one slot, and a slot's alpha input is linked from the alpha
 partner of whatever feeds its colour input.
+
+The walks read a socket's links through `socket_links` rather than through
+`NodeSocket.links`: that property is implemented in Python and scans the
+whole tree, so a walk down a stack is quadratic in its link count. The
+`link_index` context manager maps a tree's links by socket in one pass and
+`socket_links` reads that map, falling back to the property for any tree
+without one. An index may only cover a read-only stretch — `build_ir`
+installs one for the length of a build, and a block that goes on to edit
+links calls `invalidate` before its first write — because a stale map is
+a wrong graph, not a slow one. Indexes are keyed by tree pointer, so a
+compile of a child tree during a parent's build cannot clobber the
+parent's.
 
 Hand edits in the node editor can break the second invariant. The compiler
 reads alpha through the colour link regardless (`CompileContext.source`),
@@ -304,7 +323,10 @@ it also checks the selection triggers that only a window loop runs.
 runs through a long edit sequence and checks after every step that the
 incrementally patched artifact holds what a compile from scratch would
 have produced, that its fingerprint is the current one, and that an
-unchanged recompile changes nothing (PS-081).
+unchanged recompile changes nothing (PS-081), and `test_perf.py` measures
+that ticket's budget on a 100-layer tree instanced in a material, with a
+`PS_PERF_SCALE` multiplier for slower runners and machine-free checks
+that the work it removed stays removed.
 The Epic J tests cover the texel map (`test_texel_map.py`), pixel undo
 (`test_pixel_undo.py`) and the selection: `test_selection_model.py`,
 `test_selection_outline.py` and `test_selection_raster.py` for the ops
