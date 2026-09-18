@@ -11,9 +11,6 @@ from ...nodetree.tree import sync_sockets
 from ...compiler.core import compile_tree, mark_dirty
 
 
-GROUP_LAYER_COLOR = (0.149763, 0.170138, 0.235291)
-
-
 def _tree_references(tree, target, _visited=None):
     """True if *target* is *tree* or is nested anywhere inside it."""
     if tree is None:
@@ -52,6 +49,7 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
     bl_label = 'Group'
     bl_icon = blender_icon('NODETREE')
     bl_width_default = 200
+    header_color = (0.285, 0.335, 0.49)
 
     node_tree: PointerProperty(
         type=NodeTree,
@@ -66,8 +64,6 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
 
     def init(self, context):
         super().init(context)
-        self.use_custom_color = True
-        self.color = GROUP_LAYER_COLOR
         self.sync_sockets()
 
     def sync_sockets(self):
@@ -83,6 +79,7 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
         row.operator("paint_system.edit_node_group", text="", **icon_kwargs('NODETREE'))
 
     def draw_label(self):
+        super().draw_label()
         if self.node_tree:
             return self.node_tree.name
         return "Group"

@@ -1,8 +1,10 @@
 import uuid
 
+import bpy
 from bpy.props import StringProperty
 
 from ..compiler.core import mark_dirty
+from .header_draw import draw_header
 
 
 def mark_tree_dirty(self, context=None):
@@ -28,6 +30,8 @@ class PaintSystemBaseNode:
 
     is_layer_node = False
     is_folder = False
+    # Presentation only: class attributes stay out of compiler fingerprints.
+    header_color = None
 
     @classmethod
     def poll(cls, ntree):
@@ -35,6 +39,10 @@ class PaintSystemBaseNode:
 
     def init(self, context):
         self.uuid = str(uuid.uuid4())
+        if self.header_color is not None:
+            self.use_custom_color = True
+            # nodes.new() invokes init with context=None.
+            self.color = bpy.context.preferences.themes[0].node_editor.node_backdrop[:3]
 
     def copy(self, node):
         # Called on the new node with the source node; the copy needs its own identity.
@@ -42,6 +50,10 @@ class PaintSystemBaseNode:
 
     def free(self):
         pass
+
+    def draw_label(self):
+        draw_header(self)
+        return self.bl_label
 
     # -- compiler protocol --------------------------------------------------
 

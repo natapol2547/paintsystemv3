@@ -9,13 +9,11 @@ from ...common import blender_icon
 from ...compiler.bake import create_managed_image
 
 
-IMAGE_LAYER_COLOR = (0.235291, 0.215529, 0.170224)
-
-
 class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
     bl_idname = 'PaintSystemImageLayerNode'
     bl_label = 'Image Layer'
     bl_icon = blender_icon('IMAGE_DATA')
+    header_color = (0.43, 0.35, 0.20)
 
     ps_type = 'IMAGE'
     ps_label = "Image"
@@ -40,11 +38,6 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
     def paint_image(self):
         return self.image
 
-    def init(self, context):
-        super().init(context)
-        self.use_custom_color = True
-        self.color = IMAGE_LAYER_COLOR
-
     @classmethod
     def create(cls, tree, target=None, resolution='2048', **options):
         # *resolution* is the identifier of the operator's resolution enum.
@@ -62,6 +55,7 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
             layout.prop(self, "uv_map")
 
     def draw_label(self):
+        super().draw_label()
         if self.image:
             return self.image.name
         return "Image Layer"

@@ -6,9 +6,6 @@ from .base_layer_node import PaintSystemLayerNode
 from ...common import blender_icon, icon_kwargs
 
 
-FOLDER_LAYER_COLOR = (0.235291, 0.196, 0.121)
-
-
 class PaintSystemFolderLayerNode(PaintSystemLayerNode, Node):
     """A layer whose content is the stack linked into ``Content Color``/``Content Alpha``.
 
@@ -19,6 +16,7 @@ class PaintSystemFolderLayerNode(PaintSystemLayerNode, Node):
     bl_idname = 'PaintSystemFolderLayerNode'
     bl_label = 'Folder'
     bl_icon = blender_icon('FILE_FOLDER')
+    header_color = (0.42, 0.285, 0.155)
 
     ps_type = 'FOLDER'
     ps_label = "Folder"
@@ -39,8 +37,6 @@ class PaintSystemFolderLayerNode(PaintSystemLayerNode, Node):
         alpha_in = self.inputs.new('NodeSocketFloat', "Content Alpha")
         alpha_in.default_value = 0.0
         alpha_in.hide_value = True
-        self.use_custom_color = True
-        self.color = FOLDER_LAYER_COLOR
 
     def draw_row_icon(self, layout):
         icon = 'folder_open' if self.is_expanded else 'folder'
