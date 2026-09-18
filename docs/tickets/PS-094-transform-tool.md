@@ -1,6 +1,14 @@
-# PS-094 Transform tool and pixel clipboard
+# PS-094 Transform tool and pixel clipboard (deferred)
 
 Epic J. Size L. Milestone M3b.
+
+## Status
+
+Deferred on 2026-09-18. The design below stands, but the tool is large
+(a floating state the compiler draws, custom handles, a clipboard), and
+the selection actions (PS-052) and the GPU filters come first. Nothing
+waits on it: the fill tool (PS-095) and the selection actions work
+without a transform.
 
 ## Goal
 

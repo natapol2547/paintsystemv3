@@ -249,7 +249,7 @@ data structures or algorithms are ported.
 | [PS-092](tickets/PS-092-texel-position-map.md) | Texel position map | M | 096 |
 | [PS-091](tickets/PS-091-selection-model-and-overlays.md) | Selection model and overlays. Slices 1 to 4 and milestone 2 surface keys done: model, mask, stroke clipping, overlays, view selections | L | 050 092 096 |
 | [PS-093](tickets/PS-093-selection-tools.md) | Selection tools: Rectangle, Ellipse and Lasso Selection in the 3D view. Built; the rest moved to PS-097 | M | 091 092 |
-| [PS-094](tickets/PS-094-transform-tool.md) | Transform tool and pixel clipboard | L | 008 081 090 091 092 |
+| [PS-094](tickets/PS-094-transform-tool.md) | Transform tool and pixel clipboard (deferred) | L | 008 081 090 091 092 |
 | [PS-095](tickets/PS-095-fill-tool.md) | Fill tool | M | 050 090 091 092 |
 | [PS-097](tickets/PS-097-more-selection-tools.md) | More selection tools: polygon lasso, magic wand, faces, image editor (deferred) | L | 090 091 092 093 |
 
@@ -266,6 +266,9 @@ data structures or algorithms are ported.
   tools with clipping there. Nice to have and not scheduled; split out of
   PS-093 on 2026-09-17, once Rectangle, Ellipse and Lasso Selection were
   built in the 3D view.
+- Transform tool and pixel clipboard (PS-094). Deferred on 2026-09-18 in
+  favour of the selection actions and the GPU filters; its design stands
+  and nothing else depends on it.
 - Eraser brush in the sidebar (PS-067), for artists who do not know to
   set a brush to Erase Alpha. Nice to have and not scheduled. The user
   creates the brush and puts it in the library `.blend`; ask them to do
