@@ -2,8 +2,7 @@
 """Custom node headers using ControlRig's draw_label drawing technique.
 
 Adapted from ControlRig by Edward Urena (GeneralNode.draw_color and
-blender_draw.Draw/Rect):
-https://edwardurena.gumroad.com/l/jpupm
+blender_draw.Draw/Rect).
 
 Blender draws the header before draw_label(), then the body and controls
 afterwards. A rounded backdrop drawn here leaves its color in the header.
