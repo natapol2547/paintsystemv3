@@ -435,6 +435,11 @@ def test_select_all_modes():
     check(pushes == expected,
           f"push_undo pushes only before 5.1 and never in texture paint mode, where it would be dead ({pushes})")
 
+    restores = {mode: selection_ops.undo_restores_data(SimpleNamespace(mode=mode))
+                for mode in ('OBJECT', 'PAINT_TEXTURE', 'EDIT_MESH')}
+    check(restores == {'OBJECT': True, 'PAINT_TEXTURE': since(5, 1), 'EDIT_MESH': False},
+          f"undo restores a data edit in Object mode, in texture paint mode from 5.1, never in Edit mode ({restores})")
+
 
 def test_consumer_failure_is_retried():
     section("a consumer that raises is reached again by the next sync")

@@ -3,7 +3,8 @@ from bpy.props import EnumProperty, StringProperty
 from bpy.utils import register_classes_factory
 
 from ..props.channel import CHANNEL_SOCKET_TYPES
-from ..common import get_next_unique_name
+from .selection_ops import undo_restores_data
+from ..common import get_next_unique_name, icon_kwargs
 from ..context import get_active_tree as _get_active_tree
 
 
@@ -51,6 +52,20 @@ class PAINTSYSTEM_OT_remove_channel(Operator):
     def poll(cls, context):
         tree = _get_active_tree(context)
         return tree is not None and len(tree.channels) > 0
+
+    def invoke(self, context, event):
+        channel = _get_active_tree(context).active_channel
+        if channel is None:
+            return {'CANCELLED'}
+        self.channel_name = channel.name
+        self.undo_restores = undo_restores_data(context)
+        return context.window_manager.invoke_props_dialog(self, confirm_text="Remove")
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text=f"Remove '{self.channel_name}'?", **icon_kwargs('ERROR'))
+        if not self.undo_restores:
+            layout.label(text="Undo cannot bring it back in this mode.")
 
     def execute(self, context):
         tree = _get_active_tree(context)

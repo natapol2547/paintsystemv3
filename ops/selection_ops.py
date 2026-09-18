@@ -30,6 +30,17 @@ def undoable_mode(context) -> bool:
     return context.mode in UNDO_MODES
 
 
+def undo_restores_data(context) -> bool:
+    """Whether Ctrl+Z can restore a data edit made now, such as a removed layer.
+
+    It cannot in an edit mode on any version, nor in texture paint mode
+    before 5.1, for the reasons `UNDO_MODES` and `UNDO_OPTIONS` give.
+    """
+    if context.mode.startswith('EDIT'):
+        return False
+    return bpy.app.version >= (5, 1, 0) or context.mode != 'PAINT_TEXTURE'
+
+
 def push_undo(context, message: str) -> None:
     """Push the undo step `UNDO_OPTIONS` leaves out: before 5.1, outside texture paint mode."""
     if 'UNDO' in UNDO_OPTIONS or context.mode == 'PAINT_TEXTURE':

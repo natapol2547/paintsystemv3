@@ -27,6 +27,8 @@ if bpy.app.background:
 
 register_addon()
 brush_panels = import_from("panels.brush_panels")
+REMOVE_OPERATORS = (import_from("ops.layer_ops").PAINTSYSTEM_OT_remove_layer,
+                    import_from("ops.channel_ops").PAINTSYSTEM_OT_remove_channel)
 
 
 class PAINTSYSTEM_PT_test_paint_sections(bpy.types.Panel):
@@ -52,6 +54,21 @@ class PAINTSYSTEM_PT_test_paint_sections(bpy.types.Panel):
 
 
 paint_sections_drawn = []
+
+# What each remove confirmation dialog showed, by operator class name.
+dialogs_shown = {}
+DIALOG_FIELDS = ("layer_name", "content_count", "channel_name", "undo_restores")
+
+
+def record_dialog(cls):
+    """Wrap ``cls.draw`` to note what its dialog resolved when it opened."""
+    draw = cls.draw
+
+    def wrapped(self, context):
+        dialogs_shown[cls.__name__] = {name: getattr(self, name) for name in DIALOG_FIELDS
+                                       if hasattr(self, name)}
+        return draw(self, context)
+    cls.draw = wrapped
 
 DRAW_METHODS = ("draw", "draw_header", "draw_header_preset", "draw_item", "filter_items", "poll")
 errors = []
@@ -283,10 +300,14 @@ class Steps:
         if "paint" in PARTS:
             bpy.utils.register_class(PAINTSYSTEM_PT_test_paint_sections)
             self.classes.append(PAINTSYSTEM_PT_test_paint_sections)
+        for cls in REMOVE_OPERATORS:
+            record_dialog(cls)
         if not os.environ.get("PS_UI_NOWRAP"):
             for cls in self.classes:
                 for name in DRAW_METHODS:
                     _wrap(cls, name)
+            for cls in REMOVE_OPERATORS:
+                _wrap(cls, "draw")
         check(len(self.classes) > 0, f"{len(self.classes)} UI classes wrapped: "
               + ", ".join(sorted(c.__name__ for c in self.classes)))
         section("scene")
@@ -303,7 +324,8 @@ class Steps:
         self.queue += [self.step_retab, self.step_node_click, self.step_node_click_synced,
                        self.step_add_material, self.step_switch_material, self.step_material_synced]
         self.queue += [functools.partial(self.step_popup, opener, cls) for opener, cls in popups]
-        self.queue += [self.step_move_popup, self.step_results]
+        self.queue += [self.step_move_popup, self.step_remove_dialogs, self.step_remove_dialogs_drawn,
+                       self.step_results]
         tag_redraw(self.window)
         return 0.5
 
@@ -324,6 +346,39 @@ class Steps:
         open_move_popup(self.window, self.view3d, self.tree)
         tag_redraw(self.window)
         return 0.5
+
+    def step_remove_dialogs(self):
+        section("remove confirmations")
+        region = window_region(self.view3d)
+        folder = next(item.node for item in self.tree.stack() if item.node.is_folder)
+        self.tree.nodes.active = folder
+        channel_count = len(self.tree.channels)
+        # Before 5.1, undo in texture paint mode cannot restore a removal.
+        restores = (bpy.app.version >= (5, 1, 0)
+                    or bpy.data.objects['Cube'].mode != 'TEXTURE_PAINT')
+        self.expected_dialogs = {
+            "PAINTSYSTEM_OT_remove_layer": {
+                "layer_name": folder.name, "content_count": 1, "undo_restores": restores},
+            "PAINTSYSTEM_OT_remove_channel": {
+                "channel_name": self.tree.active_channel.name, "undo_restores": restores},
+        }
+        with bpy.context.temp_override(window=self.window, area=self.view3d, region=region):
+            results = [bpy.ops.paint_system.remove_layer('INVOKE_DEFAULT'),
+                       bpy.ops.paint_system.remove_channel('INVOKE_DEFAULT')]
+        check(results == [{'RUNNING_MODAL'}] * 2, f"both remove buttons open a dialog {results}")
+        check(folder.name in self.tree.nodes and len(self.tree.channels) == channel_count,
+              "nothing is removed before the dialog is confirmed")
+        tag_redraw(self.window)
+        return 0.5
+
+    def step_remove_dialogs_drawn(self):
+        wait = self.wait_until(lambda: len(dialogs_shown) == len(REMOVE_OPERATORS))
+        if wait is not None:
+            return wait
+        for name, expected in self.expected_dialogs.items():
+            shown = dialogs_shown.get(name)
+            check(shown == expected, f"{name} names what it removes {shown}")
+        return 0.1
 
     def image_layer(self, tree):
         return next(item.node for item in tree.stack() if item.node.bl_idname == 'PaintSystemImageLayerNode')

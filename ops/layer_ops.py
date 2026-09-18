@@ -3,6 +3,8 @@ from bpy.props import EnumProperty
 from bpy.utils import register_classes_factory
 
 from .node_tree_ops import RESOLUTION_ITEMS
+from .selection_ops import undo_restores_data
+from ..common import icon_kwargs
 from ..context import get_active_tree, parse_context, update_active_image
 from ..compiler.core import suspend_compile
 from ..nodes.layers.registry import layer_type, layer_type_items
@@ -57,6 +59,24 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
     def poll(cls, context):
         tree = get_active_tree(context)
         return tree is not None and is_layer(tree.nodes.active)
+
+    def invoke(self, context, event):
+        # The dialog draws on every redraw; resolve what it shows once.
+        node = parse_context(context).layer
+        self.layer_name = node.name
+        self.content_count = len(descendants(node)) if node.is_folder else 0
+        self.undo_restores = undo_restores_data(context)
+        return context.window_manager.invoke_props_dialog(self, confirm_text="Remove")
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text=f"Remove '{self.layer_name}'?", **icon_kwargs('ERROR'))
+        if self.content_count == 1:
+            layout.label(text="The layer inside it goes with it.")
+        elif self.content_count > 1:
+            layout.label(text=f"The {self.content_count} layers inside it go with it.")
+        if not self.undo_restores:
+            layout.label(text="Undo cannot bring it back in this mode.")
 
     def execute(self, context):
         ps = parse_context(context)
