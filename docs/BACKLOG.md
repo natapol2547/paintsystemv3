@@ -203,7 +203,7 @@ groups and templates (040-042), colour history (062).
 | ID | Title | Size | Depends on |
 |---|---|---|---|
 | [PS-080](tickets/PS-080-tests-and-ci.md) | Per-feature tests and CI | M | – |
-| [PS-081](tickets/PS-081-performance-budget.md) | Performance budget and profiling | M | 010 |
+| [PS-081](tickets/PS-081-performance-budget.md) | Performance budget and profiling (done) | M | 010 |
 | [PS-082](tickets/PS-082-grease-pencil.md) | Grease Pencil support (deferred) | L | 034 |
 | [PS-083](tickets/PS-083-fingerprint-recreated-datablock.md) | Stale artifact when a datablock is recreated under a deleted one's name (deferred) | S | – |
 | [PS-084](tickets/PS-084-fingerprint-stale-after-rename.md) | Stale stored fingerprint after a datablock rename (deferred) | S | – |

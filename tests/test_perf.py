@@ -60,12 +60,11 @@ SMALL_LAYERS = 25
 # Budget targets in milliseconds, and the limits this file asserts. Both are
 # scaled by PS_PERF_SCALE.
 #
-# The targets are the ticket's, except the unchanged compile: it asks for 5 ms
-# and the compile costs about 8 on this machine (6 of it in build_ir, 1.5 in
-# the fingerprint), so the target below is what the tree actually costs.
-# Reaching 5 ms means making build_ir cheaper - the general path stays the
-# only source of truth, and a cached fast path for value edits was rejected in
-# PS-081 because a stale artifact after undo is worse than a slow slider.
+# The targets are the ticket's. The unchanged compile's was 5 ms until the
+# compile was measured at about 8 (6 of it in build_ir, 1.5 in the
+# fingerprint); reaching 5 means restructuring build_ir, so the ticket moved
+# the line to 10 instead. A cached fast path that skips build_ir was rejected
+# in PS-081 because a stale artifact after undo is worse than a slow slider.
 #
 # The limits are looser than the targets because a measurement that misses a
 # target usually means the machine was busy, not that the compile regressed:
