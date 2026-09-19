@@ -49,6 +49,10 @@ BAND_ROWS = 512
 
 STRAIGHT, PREMULTIPLIED = 0, 1
 
+
+class Refused(Exception):
+    """A filter cannot run on what is active. `str()` is the message for the UI."""
+
 _QUAD = {"position": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
                       (0.0, 0.0), (1.0, 1.0), (0.0, 1.0))}
 

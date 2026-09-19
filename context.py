@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import bpy
 
+from bl_ui.properties_paint_common import UnifiedPaintPanel
 from bpy.props import CollectionProperty, PointerProperty
 from bpy.utils import register_classes_factory
 
@@ -11,6 +12,27 @@ from .props.stencil import PaintSystemStencilMeshBackup
 
 def is_ps_node_tree_poll(self, node_tree: bpy.types.NodeTree):
     return node_tree.bl_idname == 'PaintSystemNodeTree'
+
+
+def paint_settings(context):
+    """The paint settings Blender's own brush UI reads in this context.
+
+    From 5.3 they come from the active tool rather than from the mode,
+    so anything that has to agree with what the brush would do reads
+    them from here: the Brush and Color panels (PS-033) and the colour a
+    Fill stores (PS-052).
+
+    None where the context has no space data. Blender resolves the mode
+    through the active tool of the space, so there is nothing to answer
+    from in a background session, a timer, or a script run with no area
+    override; a caller that needs an answer there picks its own mode.
+    """
+    if getattr(context, 'space_data', None) is None:
+        return None
+    from_active_tool = getattr(UnifiedPaintPanel, 'paint_settings_from_active_tool', None)
+    if from_active_tool is not None:
+        return from_active_tool(context)
+    return UnifiedPaintPanel.paint_settings(context)
 
 
 class PaintSystemSceneSettings(bpy.types.PropertyGroup):

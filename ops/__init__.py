@@ -6,6 +6,7 @@ submodules = (
     "layer_ops",
     "paint_ops",
     "selection_ops",
+    "pixel_ops",
     "node_group_ops",
     "bake_ops",
 )

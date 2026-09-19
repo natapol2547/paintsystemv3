@@ -66,6 +66,10 @@ def _draw_selection_section(layout, context, tree):
     row.operator("paint_system.select_all", text="All").action = 'SELECT'
     row.operator("paint_system.select_all", text="None").action = 'DESELECT'
     row.operator("paint_system.select_all", text="Invert").action = 'INVERT'
+    row = body.row(align=True)
+    row.operator("paint_system.clear_pixels", text="Clear", **icon_kwargs('IMAGE_ALPHA'))
+    row.operator("paint_system.fill_pixels", text="Fill", **icon_kwargs('SNAP_FACE'))
+    row.operator("paint_system.invert_pixels", text="Invert Colors", **icon_kwargs('MOD_MASK'))
     if problem:
         body.label(text=selection_session.label(state), **icon_kwargs('ERROR'))
     elif live and state.empty:

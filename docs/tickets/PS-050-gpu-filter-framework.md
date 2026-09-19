@@ -2,6 +2,49 @@
 
 Epic F. Size L. Milestone M3.
 
+## Status
+
+The pass shipped on 2026-09-20 as `filters/core.py` and
+`filters/registry.py`, checked by `tests/test_filters_gpu.py`. It is the
+design below with six differences, all of which the spikes forced:
+
+- The module is `filters/core.py`, not `filters/gpu.py`, and there is no
+  `ImageTarget`. A `PixelSource` holds one image's values as a numpy
+  array and a `GPUTexture` over the same memory.
+- `gpu.texture.from_image` is not used. It reports an sRGB byte image's
+  values as straight linear and CPU-converts other colour spaces, so
+  nothing it returns can be written back unchanged. The source texture is
+  built from `Image.pixels.foreach_get` instead, as `RGBA16F` for a byte
+  image and `RGBA32F` for a float one.
+- No ping-pong pair and no `GPUOffScreen`. One pass draws into one
+  target texture in 512-row bands, and `gpu_passes.core.read_color` reads
+  it back. Chaining passes waits for the first filter that needs more
+  than one (PS-051).
+- Alpha is not premultiplied on the way in. A filter is handed straight
+  colour in the image's own storage space, and the prelude converts only
+  for a float image, which Blender stores premultiplied. Premultiplying a
+  byte image and dividing back would cost the exactness the acceptance
+  asks for. Partial mask coverage still mixes premultiplied, so a
+  feathered edge lowers alpha rather than darkening colour.
+- The result goes to an output object rather than back to the source:
+  `LayerImage` writes through `undo.pixels.write_pixels`, `ResultImage`
+  into a separate image with no undo step, for a derived image under
+  PS-090's rule.
+- UDIM is not covered. `filters.actions` refuses a tiled image; the
+  per-tile loop belongs with PS-009.
+
+A `GPUFrameBuffer` does not keep its colour slot alive, and reading one
+whose texture Python has already freed gives zeroes rather than raising.
+`run_pass` therefore returns the framebuffer and its target together, and
+every caller holds both until the read is done.
+
+The exactness acceptance holds; the implied speed does not. A 4K action
+costs about 0.9 to 1.1 s on 5.2 and 2.8 to 4.6 s on 4.2. The GPU pass is
+roughly 50 ms of that: the rest is `foreach_get`, `read_color` and the
+undo snapshot, all of which go through `Image.pixels`. PS-095's "half a
+4K layer in 150 ms" and PS-051's "8K blur under 2 s" are unreachable
+through that transport and need rewriting against what it costs.
+
 ## v2 behaviour
 
 Filters were numpy on the CPU: `blender_image_to_numpy` /

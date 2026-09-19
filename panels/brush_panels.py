@@ -8,14 +8,7 @@ from bl_ui import properties_paint_common
 from bl_ui.properties_paint_common import UnifiedPaintPanel, brush_settings, draw_color_settings
 
 from ..common import icon_kwargs
-
-
-def paint_settings(context):
-    """The paint settings Blender's brush panels read in this context."""
-    from_active_tool = getattr(UnifiedPaintPanel, 'paint_settings_from_active_tool', None)
-    if from_active_tool is not None:
-        return from_active_tool(context)
-    return UnifiedPaintPanel.paint_settings(context)
+from ..context import paint_settings
 
 
 def texture_paint_settings(context):
