@@ -47,6 +47,7 @@ ui_tests=(
     test_selection_view_windowed.py
     test_selection_tools_ui.py
     test_keymaps_ui.py
+    test_filters_gpu.py
 )
 # Windowed with --enable-event-simulate: real input is ignored while they run.
 event_simulate=(

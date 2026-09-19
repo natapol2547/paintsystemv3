@@ -21,6 +21,7 @@ submodules = (
     "compiler",
     "gpu_passes",
     "selection",
+    "filters",
     "nodes",
     "nodetree",
     "ops",
