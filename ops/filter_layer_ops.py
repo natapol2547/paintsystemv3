@@ -28,7 +28,7 @@ from bpy.types import Operator
 from bpy.utils import register_classes_factory
 
 from ..context import get_active_tree
-from ..filters import layer_build
+from ..filters import layer_build, layer_job
 from ..filters.core import Refused
 from ..gpu_passes.core import gpu_known
 
@@ -85,18 +85,24 @@ class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
         """Build in one go, for a script or a keystroke with no window."""
         tree = get_active_tree(context)
         node = filter_layer(context, tree)
+        layer_job.cancel_all()
         try:
             image = layer_build.build_layer(context, tree, node)
         except Refused as refusal:
             self.report({'WARNING'}, str(refusal))
             return {'CANCELLED'}
+        node.derived_error = ""
         self.report({'INFO'}, f"Built {image.name}")
         return {'FINISHED'}
 
     def invoke(self, context, event):
         tree = get_active_tree(context)
         node = filter_layer(context, tree)
+        # Two builds of one layer would race for the same image, and the
+        # button is the one the user is watching.
+        layer_job.cancel_all()
         self._name = node.name
+        self._node = node
         self._steps = layer_build.steps(context, tree, node)
         try:
             # The first unit only resolves, so every refusal this build
@@ -126,6 +132,7 @@ class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
                 label, fraction = next(self._steps)
             except StopIteration as done:
                 self._stop(context)
+                self._node.derived_error = ""
                 self.report({'INFO'}, f"Built {done.value.name}")
                 return {'FINISHED'}
             except Refused as refusal:
@@ -166,6 +173,23 @@ class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
         context.workspace.status_text_set(None)
 
 
+class PAINTSYSTEM_OT_cancel_filter_refresh(Operator):
+    bl_idname = "paint_system.cancel_filter_refresh"
+    bl_label = "Cancel Refresh"
+    bl_description = ("Stop the automatic refresh running now. The layer keeps the pixels it "
+                      "already has")
+    # No UNDO: the job has written nothing to take back.
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        return layer_job.running()
+
+    def execute(self, context):
+        layer_job.cancel_all()
+        return {'FINISHED'}
+
+
 class PAINTSYSTEM_OT_clear_filter_result(FilterLayerAction, Operator):
     bl_idname = "paint_system.clear_filter_result"
     bl_label = "Clear Result"
@@ -187,6 +211,7 @@ class PAINTSYSTEM_OT_clear_filter_result(FilterLayerAction, Operator):
 
 classes = (
     PAINTSYSTEM_OT_rebuild_filter_layer,
+    PAINTSYSTEM_OT_cancel_filter_refresh,
     PAINTSYSTEM_OT_clear_filter_result,
 )
 

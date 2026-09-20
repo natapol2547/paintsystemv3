@@ -153,6 +153,14 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         """The type icon at the start of this layer's row in the layer list."""
         layout.label(text="", **icon_kwargs(*self.ps_icon))
 
+    def draw_row_state(self, layout):
+        """A badge at the end of this layer's row, for a type with something to say.
+
+        Nothing by default. A filter layer uses it to show that what it
+        renders no longer matches the layers below it, which is not
+        visible in the viewport by design.
+        """
+
     def draw_source_settings(self, context, layout):
         """Settings of this layer's own content, shared by the node and the Layer Settings panel."""
 

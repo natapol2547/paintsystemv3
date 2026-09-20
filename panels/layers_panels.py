@@ -88,6 +88,7 @@ class PAINTSYSTEM_UL_layers(UIList):
 
         row = main_row.row(align=True)
         row.alignment = 'RIGHT'
+        item.draw_row_state(row)
         if item.lock_layer:
             row.label(text="", **icon_kwargs('VIEW_LOCKED', 'LOCKED'))
         row.prop(item, "enabled", text="", emboss=False,

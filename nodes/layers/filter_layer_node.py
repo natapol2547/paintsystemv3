@@ -10,7 +10,26 @@ from ...compiler.library import filter_mix_group
 from ...filters.derived import FINGERPRINT_KEY, build_stamp, is_built, stamped_uv_map
 from ...filters.freshness import PIXEL_REASON, fingerprint_parts, structure_reason
 from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items, layer_filter_params
+from ...filters import layer_job
 from ...ops.node_tree_ops import RESOLUTION_ITEMS
+
+
+def _auto_refresh_changed(self, context):
+    """Turning it back on is how a layer the job gave up on is retried."""
+    if self.auto_refresh:
+        self.derived_error = ""
+        layer_job.notify()
+
+
+def _stale_pixels_changed(self, context):
+    """A stroke below the layer, which no compile has to run for.
+
+    `filters.freshness` writes this flag from the depsgraph and from the
+    addon's own pixel writes, neither of which marks the tree -- so the
+    write is the only notice the auto path gets.
+    """
+    if self.derived_stale_pixels and self.auto_refresh:
+        layer_job.notify()
 
 
 class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
@@ -46,8 +65,8 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # dragging a blur slider would invalidate every node cache and channel
     # bake above the layer before a single pixel had changed.
     ps_unhashed_props = (
-        'filter_type', 'invert_alpha', 'resolution', 'uv_map', 'derived_image',
-        'derived_stale_reason', 'derived_stale_pixels',
+        'filter_type', 'invert_alpha', 'resolution', 'uv_map', 'auto_refresh',
+        'derived_image', 'derived_stale_reason', 'derived_stale_pixels', 'derived_error',
     )
 
     filter_type: EnumProperty(
@@ -63,6 +82,9 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     uv_map: StringProperty(
         name="UV Map", update=mark_tree_dirty,
         description="UV map the filter is built in (empty: active render UV map)")
+    auto_refresh: BoolProperty(
+        name="Auto Refresh", default=True, update=_auto_refresh_changed,
+        description="Rebuild this layer shortly after the layers below it change")
 
     # Derived. The pixels describe themselves through the stamps on the
     # image, so this pointer is all the node has to keep.
@@ -78,8 +100,13 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # read, and a file saved out of date has to reopen out of date rather
     # than show a fresh badge over pixels that are not.
     derived_stale_pixels: BoolProperty(
-        name="Pixels Changed",
+        name="Pixels Changed", update=_stale_pixels_changed,
         description="Painting below this layer has changed what it should show")
+    # Why the last automatic refresh stopped, shown until the next one is
+    # asked for. A refusal from a timer has nowhere else to go: a popup
+    # from a background job would interrupt whatever the user was doing.
+    derived_error: StringProperty(
+        name="Refresh Problem", description="Why this layer last failed to refresh itself")
 
     def copy(self, node):
         super().copy(node)
@@ -120,6 +147,18 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         spec = LAYER_FILTERS.get(self.filter_type)
         return spec.label if spec is not None else self.bl_label
 
+    def draw_row_state(self, layout):
+        """Out of date is the one layer state the viewport cannot show.
+
+        Every other layer renders what it is; this one renders what it
+        was built from, so the list row is the only place a difference
+        can appear at all.
+        """
+        if layer_job.running_on(self):
+            layout.label(text="", **icon_kwargs('FILE_REFRESH'))
+        elif self.stale_reason:
+            layout.label(text="", **icon_kwargs('ERROR'))
+
     def draw_source_settings(self, context, layout):
         layout.prop(self, "filter_type", text="")
         for name in layer_filter_params(self.filter_type):
@@ -142,20 +181,30 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         """
         image = self.derived_image
         stale = self.stale_reason
+        running = layer_job.running_on(self)
         box = layout.box()
         row = box.row(align=True)
-        if not is_built(image):
+        if running:
+            row.label(text="Refreshing", **icon_kwargs('FILE_REFRESH'))
+        elif not is_built(image):
             row.label(text="Not built", **icon_kwargs('ERROR'))
         elif stale:
             row.label(text="Out of date", **icon_kwargs('ERROR'))
         else:
             row.label(text=f"{image.size[0]} x {image.size[1]}", **icon_kwargs('CHECKMARK'))
-        row.operator("paint_system.rebuild_filter_layer", text="Update",
-                     **icon_kwargs('FILE_REFRESH'))
-        clear = row.row(align=True)
-        clear.enabled = image is not None
-        clear.operator("paint_system.clear_filter_result", text="", **icon_kwargs('X'))
-        if stale:
+        if running:
+            row.operator("paint_system.cancel_filter_refresh", text="Cancel",
+                         **icon_kwargs('X'))
+        else:
+            row.operator("paint_system.rebuild_filter_layer", text="Update",
+                         **icon_kwargs('FILE_REFRESH'))
+            clear = row.row(align=True)
+            clear.enabled = image is not None
+            clear.operator("paint_system.clear_filter_result", text="", **icon_kwargs('X'))
+        box.prop(self, "auto_refresh")
+        if self.derived_error:
+            box.label(text=self.derived_error, **icon_kwargs('ERROR'))
+        elif stale:
             box.label(text=f"Rebuild: {stale}")
         elif image is not None:
             box.label(text=image.name)
@@ -206,6 +255,14 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         # it, so only write when the value actually changes.
         if self.derived_stale_reason != reason:
             self.derived_stale_reason = reason
+        # The compile is also where the auto path learns there is work:
+        # every way a filter layer goes out of date ends up here, the
+        # structural ones and the painted one alike.
+        if self.stale_reason:
+            if self.auto_refresh:
+                layer_job.notify()
+        else:
+            layer_job.settled(self)
 
     def emit_blend(self, ctx, color, alpha, *, clip=False):
         fmix = ctx.emit_node(self, 'fmix', 'ShaderNodeGroup', properties={

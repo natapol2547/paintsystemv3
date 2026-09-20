@@ -4,7 +4,7 @@ from ..common import save_image
 from ..compiler.bake import PS_IMAGE_KEY
 from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty, ps_trees,
                              unblock_compile)
-from ..filters import freshness
+from ..filters import freshness, layer_job
 from ..gpu_passes import surface, texel_map
 from ..nodetree.tree import subscribe_name_changes
 from ..selection import overlay as selection_overlay
@@ -59,6 +59,11 @@ def on_depsgraph_update_post(scene, depsgraph=None):
             geometry_changed = True
     if painted:
         freshness.note_image_changed(painted)
+        # Unconditionally, even when nothing was newly marked: this is
+        # what makes the refresh debounce hold for the length of a stroke
+        # rather than starting one partway through it. A pass with
+        # nothing to do costs a scan and unregisters itself.
+        layer_job.notify()
     # Renaming or removing a UV map shows up only as a geometry update, and
     # the live selection samples a layer's UV map by name (PS-091). While
     # a view selection cannot be used, any update may be the fix: scaling
@@ -74,6 +79,10 @@ def on_restore_pre(*args):
     # Blender calls NodeTree.update on half-restored data while it reads a
     # file or an undo step; compile once it is done instead.
     block_compile()
+    # A refresh in flight holds the tree and the node it was started with,
+    # and neither survives a restore (PS-090). It has written nothing, so
+    # there is no half-built image to clean up (PS-057).
+    layer_job.cancel_all()
 
 
 @bpy.app.handlers.persistent
