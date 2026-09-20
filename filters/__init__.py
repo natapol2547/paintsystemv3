@@ -13,7 +13,7 @@ to give its GPU objects back: Python's own teardown frees them after the
 GPU context has gone, which segfaults a background Blender. Import from
 the submodules directly.
 """
-from . import blend_glsl, core
+from . import blend_glsl, composite, core
 
 
 def register() -> None:
@@ -23,3 +23,4 @@ def register() -> None:
 def unregister() -> None:
     core.release()
     blend_glsl.release()
+    composite.release()

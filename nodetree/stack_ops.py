@@ -200,8 +200,12 @@ def consumer_slot(node):
     return None
 
 
-def _layers_down_from(socket, visited: set[str]):
-    """Layer nodes feeding *socket* and each other through ``Color``, top first."""
+def layers_down_from(socket, visited: set[str]):
+    """Layer nodes feeding *socket* and each other through ``Color``, top first.
+
+    *visited* is shared across a whole walk, folders included, so a cycle
+    hand-made in the node editor ends the chain instead of looping.
+    """
     while True:
         link = feeding_link(socket)
         if link is None or link.from_socket.name != 'Color':
@@ -223,7 +227,7 @@ def stack(tree, channel_name: str) -> list[StackItem]:
     visited: set[str] = set()
 
     def walk(socket, level, parent):
-        for index, node in enumerate(_layers_down_from(socket, visited)):
+        for index, node in enumerate(layers_down_from(socket, visited)):
             item = StackItem(node, level, parent, index)
             items.append(item)
             if is_folder(node):
@@ -240,7 +244,7 @@ def descendants(folder) -> list[bpy.types.Node]:
     visited: set[str] = set()
 
     def walk(node):
-        for child in _layers_down_from(node.inputs['Content Color'], visited):
+        for child in layers_down_from(node.inputs['Content Color'], visited):
             found.append(child)
             if is_folder(child):
                 walk(child)
@@ -371,7 +375,7 @@ def insert_below(tree, node, target) -> None:
 
 def insert_into(tree, folder, node, *, at_top: bool = True) -> None:
     """Place *node* inside *folder*, at the top or the bottom of its content."""
-    content = [] if at_top else list(_layers_down_from(folder.inputs['Content Color'], set()))
+    content = [] if at_top else list(layers_down_from(folder.inputs['Content Color'], set()))
     attach(tree, node, below_slot(content[-1]) if content else content_slot(folder))
 
 
