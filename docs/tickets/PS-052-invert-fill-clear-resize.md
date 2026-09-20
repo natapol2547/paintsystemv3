@@ -47,8 +47,33 @@ Other decisions worth keeping:
   only and change no document data in the same call (PS-090).
 - No keyboard shortcuts: the user chose buttons and the sidebar only.
 
-They draw in the Selection section of the main panel. The floating
-action bar in the 3D view is the next slice.
+They draw in the Selection section of the main panel, and in a floating
+action bar inside the 3D view (`panels/action_bar.py`), which is one
+`GizmoGroup` of `GIZMO_GT_button_2d` buttons over a backdrop gizmo.
+Gizmos are what makes the bar work: they are picked before the tool
+keymap, so a click beats the brush and the selection tools without the
+add-on binding a key, and `gizmogroup.gizmo_tweak` has no `UNDO` option,
+so the action it runs owns the one Ctrl+Z it costs. Three rules came out
+of the spike and are load-bearing:
+
+- the backdrop gizmo is created last. A group draws its gizmos last to
+  first and picks them first to last, so the last one created draws
+  under the buttons and is picked only where no button is;
+- the poll checks `SpaceView3D.show_gizmo`. A gizmo that is not drawn is
+  still picked, so without that check a hidden bar goes on swallowing
+  clicks over its own rectangle;
+- `GIZMO_GT_button_2d.icon_value` does not exist before 4.5, so the
+  buttons use `icon` with Blender icon names. They are placeholders.
+
+The bar shows in Texture Paint while the active tree has a selection,
+which is the user's choice: without a selection there is nothing on it
+the sidebar does not already offer. `draw_prepare` centres the row at
+the bottom of the part of the region no other region covers, so the tool
+bar, the sidebar, the headers and the asset shelf all move it. A button
+whose operator cannot run is hidden and the row closes up, because a
+gizmo cannot be greyed out and one that runs nothing looks broken. The
+`show_action_bar` preference turns it off, from the add-on preferences,
+the view's Gizmos popover, or Hide Action Bar in the bar's own menu.
 
 ## v2 behaviour
 

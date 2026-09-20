@@ -14,6 +14,10 @@ a rename shows up here rather than as a missing icon:
 - ``bl_icon`` on a node or node tree class is ``blender_icon(...)``; at
   least one name must be in the ``bl_icon`` enum of the ``bpy.types`` class
   it derives from.
+- ``<gizmo>.icon`` is ``blender_icon(...)``; at least one name must be a
+  Blender icon. A gizmo takes an icon name rather than an icon id before
+  4.5, so it cannot take an add-on icon and does not go through
+  ``icon_kwargs``.
 - ``bl_icon`` on a ``WorkSpaceTool`` names a ``.dat`` file in Blender's
   datafiles icons folder. Blender only prints a warning for a missing one
   when the toolbar draws, so it stays a literal and this test catches it.
@@ -86,6 +90,9 @@ ICON_HELPERS = ("icon_kwargs", "blender_icon")
 
 # Class attributes that name icons.
 ICON_ATTRIBUTES = ("bl_icon", "ps_icon")
+
+# Attribute set on an object, not in a class body, that names an icon.
+GIZMO_ICON_ATTRIBUTE = "icon"
 
 # Methods that add entries to a dict in place.
 DICT_MUTATORS = {"update", "setdefault", "__setitem__", "__ior__"}
@@ -343,6 +350,14 @@ def is_bl_icon_value(source, node):
             and isinstance(source.parents.get(parent), ast.ClassDef))
 
 
+def is_gizmo_icon_value(source, node):
+    """Whether *node* is the value of ``<gizmo>.icon = ...``."""
+    parent = source.parents.get(node)
+    return (isinstance(parent, ast.Assign) and parent.value is node
+            and any(isinstance(t, ast.Attribute) and t.attr == GIZMO_ICON_ATTRIBUTE
+                    for t in parent.targets))
+
+
 def scan_call(report, source, call):
     name = call_name(call)
     for keyword in call.keywords:
@@ -355,8 +370,15 @@ def scan_call(report, source, call):
     if (name == "setattr" and len(call.args) >= 2 and isinstance(call.args[1], ast.Constant)
             and call.args[1].value in ICON_ATTRIBUTES):
         report.problem(source, call, f"{call.args[1].value} set with setattr: assign it in the class body")
-    if name == "blender_icon" and not is_bl_icon_value(source, call):
-        raise Unresolved(call, "blender_icon is only for bl_icon class attributes; layout calls use icon_kwargs")
+    if name == "blender_icon":
+        if is_gizmo_icon_value(source, call):
+            if call.keywords:
+                raise Unresolved(call, "blender_icon takes icon names as plain positional arguments")
+            check_fallbacks(report, source, call, source.fallback_lists(call.args),
+                            "gizmo icon", BLENDER_ICONS, "a Blender icon")
+        elif not is_bl_icon_value(source, call):
+            raise Unresolved(call, "blender_icon is only for bl_icon class attributes and gizmo "
+                                   "icons; layout calls use icon_kwargs")
     if name != "icon_kwargs":
         return
     starred = [arg for arg in call.args if isinstance(arg, ast.Starred)]
@@ -382,6 +404,12 @@ def scan_reference(report, source, node):
             report.problem(source, node, f"{name} used other than by calling it")
     elif name in ICON_ATTRIBUTES and isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
         report.problem(source, node, f"{name} set on an object: assign it in the class body")
+    elif (name == GIZMO_ICON_ATTRIBUTE and isinstance(node, ast.Attribute)
+            and isinstance(node.ctx, ast.Store)):
+        parent = source.parents.get(node)
+        value = parent.value if isinstance(parent, ast.Assign) else None
+        if not (isinstance(value, ast.Call) and call_name(value) == "blender_icon"):
+            report.problem(source, node, "a gizmo icon bypasses the fallback: use blender_icon(...)")
 
 
 def rna_base(source, cls, addon_classes):
@@ -495,6 +523,18 @@ PLANTED_FAULTS = [
         "    if bpy.app.version >= (5, 0, 0):",
         f"        bl_icon = '{MISSING}'",
     ), 3),
+    ("gizmo icon given a literal name", plant(
+        "def setup(gizmo):",
+        "    gizmo.icon = 'LOCKED'",
+    ), 2),
+    ("gizmo icon given a missing name", plant(
+        "def setup(gizmo):",
+        f"    gizmo.icon = blender_icon('{MISSING}')",
+    ), 2),
+    ("blender_icon outside a bl_icon or a gizmo icon", plant(
+        "def draw(layout):",
+        "    layout.label(text='', **icon_kwargs(blender_icon('LOCKED')))",
+    ), 2),
     ("ps_icon set on the class object", plant(
         "Layer.ps_icon = ('LOCKED',)",
     ), 1),
@@ -594,7 +634,7 @@ for kind, number in sorted(report.counts.items()):
     print(f"    {kind}: {number}")
 check(len(BLENDER_ICONS) > 0, f"this Blender has {len(BLENDER_ICONS)} UILayout icons")
 check(len(TOOL_ICONS) > 0, f"this Blender has {len(TOOL_ICONS)} tool icons in {TOOL_ICON_DIR}")
-for kind in ("icon_kwargs", "ps_icon", "blender_icon", "WorkSpaceTool icon"):
+for kind in ("icon_kwargs", "ps_icon", "blender_icon", "gizmo icon", "WorkSpaceTool icon"):
     check(report.counts.get(kind, 0) > 0, f"the scan found {kind} references")
 for rel, line, message in sorted(report.fallbacks):
     print(f"  [fallback] {rel}:{line} {message}")

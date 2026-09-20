@@ -137,6 +137,11 @@ class PaintSystemPreferences(AddonPreferences):
         max=1.0,
         default=(0.0, 0.0, 0.0)
     )
+    show_action_bar: BoolProperty(
+        name="Selection Action Bar",
+        description="Show a row of action buttons in the 3D view while a selection is live",
+        default=True
+    )
     selection_ant_color_b: FloatVectorProperty(
         name="Outline Gap Color",
         description="Color between the dashes in the selection outline",
@@ -165,6 +170,7 @@ class PaintSystemPreferences(AddonPreferences):
         selection_box.label(text="Selection", **icon_kwargs('SELECT_SET'))
         selection_box.use_property_split = True
         selection_box.prop(self, "show_selection_3d")
+        selection_box.prop(self, "show_action_bar")
         selection_box.prop(self, "selection_wash_color")
         selection_box.prop(self, "selection_wash_opacity")
         selection_box.prop(self, "selection_ant_color_a")
