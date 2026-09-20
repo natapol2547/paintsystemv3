@@ -74,8 +74,8 @@ def layer_filter_params(filter_type: str) -> tuple[str, ...]:
     return spec.params if spec is not None else ()
 
 
-def layer_filter_pass(node) -> tuple[FilterSpec, dict]:
-    """The filter *node* runs and the push constants it runs it with.
+def layer_filter_kind(node) -> LayerFilterSpec:
+    """The kind of filter *node* is set to.
 
     Refuses rather than falling back for a kind that is not registered: a
     file saved by a build that had one this build does not is worth
@@ -85,4 +85,4 @@ def layer_filter_pass(node) -> tuple[FilterSpec, dict]:
     if spec is None:
         raise Refused(f"'{node.name}' asks for a filter this build does not have "
                       f"({node.filter_type})")
-    return spec.filter, spec.params_of(node)
+    return spec

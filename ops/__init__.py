@@ -9,6 +9,7 @@ submodules = (
     "pixel_ops",
     "node_group_ops",
     "bake_ops",
+    "filter_layer_ops",
 )
 
 register, unregister = register_submodule_factory(__name__, submodules)

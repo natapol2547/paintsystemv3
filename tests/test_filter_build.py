@@ -171,11 +171,61 @@ if available():
         agrees(texel(image), (*(1.0 - to_srgb(to_linear([0.8, 0.2, 0.1]))), 1.0),
                "and the image layer below is what came out inverted")
 
+        section("which way up")
+        # Every other check here is on one colour, which a readback that
+        # assembled its bands upside down would pass. This one cannot.
+        halves = create_managed_image("Build Halves", 8, 8)
+        halves.pixels.foreach_set([0.0, 0.0, 0.0, 1.0] * 32 + [1.0, 1.0, 1.0, 1.0] * 32)
+        halves.update()
+        picture.image = halves
+        core.flush_now()
+        built = layer_build.build_layer(bpy.context, tree, node)
+        width, height = built.size
+        # A quarter and three quarters up, not the first and last rows: a
+        # source this much smaller than the target is magnified, and the
+        # outermost rows blend with the opposite edge, the way an Image
+        # Texture node set to Repeat does.
+        low = texel(built, (height // 4) * width)
+        high = texel(built, (3 * height // 4) * width)
+        check(low[0] > 0.9 and high[0] < 0.1,
+              f"row 0 is the bottom of the image, bands and all: {fmt(low)} up to {fmt(high)}")
+
         section("the datablock is reused")
         node.resolution = '2048'
         again = layer_build.build_layer(bpy.context, tree, node)
         check(again == image, "a resolution change scales the image rather than replacing it")
         check(tuple(again.size) == (2048, 2048), f"to {tuple(again.size)}")
+        node.resolution = '1024'
+
+        section("a build that is abandoned")
+        was = (image[derived.BUILD_KEY], texel(image))
+        bottom.fill_color = (0.9, 0.1, 0.1, 1.0)
+        core.flush_now()
+        run = layer_build.steps(bpy.context, tree, node)
+        labels = [next(run)[0], next(run)[0]]
+        run.close()
+        check(all(node.filter_type.title() in label for label in labels),
+              f"each unit says what it is doing: {labels[0]!r}")
+        check((image[derived.BUILD_KEY], texel(image)) == was,
+              "and stopping before the commit leaves the pixels and the stamp alone")
+        bottom.fill_color = (0.2, 0.6, 0.4, 1.0)
+        core.flush_now()
+
+        section("the buttons")
+        bpy.context.scene.paint_system.active_node_tree = tree
+        tree.nodes.active = node
+        check(bpy.ops.paint_system.rebuild_filter_layer.poll(),
+              "Update polls on an active filter layer")
+        check(bpy.ops.paint_system.rebuild_filter_layer('EXEC_DEFAULT') == {'FINISHED'}
+              and derived.is_built(node.derived_image), "and builds")
+
+        name = node.derived_image.name
+        check(bpy.ops.paint_system.clear_filter_result('EXEC_DEFAULT') == {'FINISHED'},
+              "Clear Result runs")
+        check(node.derived_image is None, "the layer is back to a pass-through")
+        check(name not in bpy.data.images, "and the datablock went with it, rather than orphaned")
+        check(bpy.ops.paint_system.clear_filter_result('EXEC_DEFAULT') == {'CANCELLED'},
+              "a second Clear has nothing to do")
 
         section("what it refuses")
         alone = bpy.data.node_groups.new("Build Empty", 'PaintSystemNodeTree')

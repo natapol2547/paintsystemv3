@@ -71,17 +71,24 @@ def gpu_known() -> bool | None:
 
 
 def read_color(framebuffer: gpu.types.GPUFrameBuffer, width: int, height: int,
-               slot: int = 0) -> np.ndarray:
-    """A float colour slot of *framebuffer* as a `(height, width, 4)` array.
+               slot: int = 0, *, rows: tuple[int, int] | None = None) -> np.ndarray:
+    """A float colour slot of *framebuffer* as a `(rows, width, 4)` array.
 
     Row 0 is the bottom of the image, matching `Image.pixels`. The result
     is a copy: a `np.frombuffer` view stays backed by the `Buffer`, which
     is freed when this returns.
+
+    *rows* is a half-open ``(first, last)`` range, defaulting to the whole
+    framebuffer. One read of 4096 rows stalls for about a second, which
+    is too long to hold a modal operator between events, so a caller that
+    has to stay responsive asks for a band at a time.
     """
-    buffer = gpu.types.Buffer('FLOAT', width * height * 4)
+    first, last = (0, height) if rows is None else rows
+    count = last - first
+    buffer = gpu.types.Buffer('FLOAT', width * count * 4)
     with framebuffer.bind():
-        framebuffer.read_color(0, 0, width, height, 4, slot, 'FLOAT', data=buffer)
-    return np.frombuffer(buffer, dtype=np.float32).reshape(height, width, 4).copy()
+        framebuffer.read_color(0, first, width, count, 4, slot, 'FLOAT', data=buffer)
+    return np.frombuffer(buffer, dtype=np.float32).reshape(count, width, 4).copy()
 
 
 def tile_offset(tile: int) -> tuple[float, float]:

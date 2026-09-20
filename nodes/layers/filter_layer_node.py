@@ -5,7 +5,7 @@ from bpy.utils import register_classes_factory
 
 from .base_layer_node import PaintSystemLayerNode, emit_image_texture
 from ..base_node import mark_tree_dirty
-from ...common import blender_icon
+from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
 from ...filters.derived import build_stamp, is_built, stamped_uv_map
 from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items, layer_filter_params
@@ -100,6 +100,31 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             layout.prop_search(self, "uv_map", obj.data, "uv_layers", text="UV")
         else:
             layout.prop(self, "uv_map")
+        self.draw_result_settings(context, layout)
+
+    def draw_result_settings(self, context, layout):
+        """The derived image, as a label and two buttons.
+
+        No ``template_ID``. The slot holds what this layer built and
+        nothing else; a picker on it would let artwork be dropped in with
+        nothing marking it read-only, and the next Update would overwrite
+        it.
+        """
+        image = self.derived_image
+        box = layout.box()
+        row = box.row(align=True)
+        if is_built(image):
+            row.label(text=f"{image.size[0]} x {image.size[1]}",
+                      **icon_kwargs('CHECKMARK'))
+        else:
+            row.label(text="Not built", **icon_kwargs('ERROR'))
+        row.operator("paint_system.rebuild_filter_layer", text="Update",
+                     **icon_kwargs('FILE_REFRESH'))
+        clear = row.row(align=True)
+        clear.enabled = image is not None
+        clear.operator("paint_system.clear_filter_result", text="", **icon_kwargs('X'))
+        if image is not None:
+            box.label(text=image.name)
 
     # -- compiler -----------------------------------------------------------------
 
