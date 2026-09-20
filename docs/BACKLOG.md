@@ -59,7 +59,7 @@ Guiding constraints for every ticket:
 | M0 Playable demo | A thin slice of M1 that can be opened and painted with. See "Playable demo" below | 001 010 011 012 013 019 029 030 033 034 035 056 060 061 080 (parts, see below) |
 | M1 Paint again | Image, solid and folder layers with clipping and the full sidebar UI, templates, painting workflow | 001 002 003 008 009 010 011 012 013 014 019 020 021 029 030 031 032 033 034 035 036 040 041 042 056 060 061 062 080 |
 | M2 All layer types | Remaining layer types, masks, linked layers, clipboard, actions, vector channels | 004 005 006 015 016 017 018 022 023 024 025 026 027 028 037 038 039 063 064 065 066 |
-| M3 Tools | GPU image filters, quick edit, export, channel bake, performance | 007 043 050 051 052 053 054 055 081 |
+| M3 Tools | GPU image filters, quick edit, export, channel bake, performance | 007 043 050 051 052 053 054 055 057 081 |
 | M3b Selection tools | Spikes, pixel undo, selection, transform and fill tools, 3D view first | 090 091 092 093 094 095 096 |
 | M4 Migration | Load v2 files into v3 | 070 071 072 082 |
 
@@ -176,6 +176,7 @@ groups and templates (040-042), colour history (062).
 | [PS-054](tickets/PS-054-quick-edit.md) | Toggle image editor | S | 020 |
 | [PS-055](tickets/PS-055-export.md) | Export image and export all | S | 007 |
 | [PS-056](tickets/PS-056-image-save-policy.md) | Image save and pack policy | S | – |
+| [PS-057](tickets/PS-057-filter-layer.md) | Filter layer: a filter that stays editable | L | 050 051 083 084 |
 
 ## Epic G. Painting workflow and handlers
 
