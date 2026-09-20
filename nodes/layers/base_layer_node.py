@@ -63,6 +63,12 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     # ``paint_system.add_layer`` properties ``create`` reads; adding a type
     # that has any asks for them in a dialog first.
     ps_add_options: tuple[str, ...] = ()
+    # False for a type whose ``emit_blend`` does not composite, so the
+    # setting would be a control that does nothing.
+    ps_shows_blend_mode = True
+    # Label on ``opacity``: a type that replaces what is below it fades
+    # between the two rather than making itself see-through.
+    ps_opacity_label = "Opacity"
 
     opacity: FloatProperty(name="Opacity", default=1.0, min=0.0, max=1.0,
                            subtype='FACTOR', update=mark_tree_dirty)
@@ -157,10 +163,11 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         settings.enabled = not self.lock_layer
         settings.prop(self, "is_clip", text="", **icon_kwargs('SELECT_INTERSECT'))
         settings.prop(self, "enabled", text="")
-        settings.prop(self, "opacity")
-        settings = layout.column()
-        settings.enabled = not self.lock_layer
-        settings.prop(self, "blend_mode", text="")
+        settings.prop(self, "opacity", text=self.ps_opacity_label)
+        if self.ps_shows_blend_mode:
+            settings = layout.column()
+            settings.enabled = not self.lock_layer
+            settings.prop(self, "blend_mode", text="")
 
     def draw_cache_settings(self, context, layout):
         box = layout.box()

@@ -7,6 +7,7 @@ from .selection_ops import undo_restores_data
 from ..common import icon_kwargs
 from ..context import get_active_tree, parse_context, update_active_image
 from ..compiler.core import suspend_compile
+from ..filters.layer_specs import layer_filter_items
 from ..nodes.layers.registry import layer_type, layer_type_items
 from ..nodetree.stack_ops import descendants, is_layer, movement_options
 
@@ -18,6 +19,7 @@ class PAINTSYSTEM_OT_add_layer(Operator):
 
     layer_type: EnumProperty(name="Type", items=layer_type_items(), default='IMAGE')
     resolution: EnumProperty(name="Resolution", items=RESOLUTION_ITEMS, default='2048')
+    filter_type: EnumProperty(name="Filter", items=layer_filter_items(), default='BLUR')
 
     @classmethod
     def description(cls, context, properties):

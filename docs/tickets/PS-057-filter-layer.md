@@ -221,10 +221,14 @@ def hash_parts(self, ctx):
 
 ### The stamps live on the image, not the node
 
-Four ID properties, written together at commit, constants in
+Five ID properties, written together at commit, constants in
 `filters/derived.py`:
 
 - `ps_filter_owner` — `"<tree uuid>:<node uuid>"`.
+- `ps_filter_uv_map` — the UV map the pixels were laid out in. The
+  fingerprint hashes the resolved map but cannot give it back, and
+  `emit_source` needs the name to build the Image Texture's UV Map node,
+  so it is stamped separately.
 - `ps_filter_fingerprint` — the structural token:
   `hash_payload([FILTER_VERSION, filter_type, params, [w, h],
   resolved_uv_map, ctx.subtree_hash(below) or "empty"])`. Cheap to

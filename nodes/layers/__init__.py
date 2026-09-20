@@ -5,6 +5,7 @@ submodules = (
     "solid_color_layer_node",
     "folder_layer_node",
     "group_layer_node",
+    "filter_layer_node",
 )
 
 register, unregister = register_submodule_factory(__name__, submodules)

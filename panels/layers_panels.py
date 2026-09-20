@@ -126,14 +126,15 @@ def draw_layer_properties(layout, context, node):
     if node.paint_image is not None:
         clip.prop(node, "lock_alpha", text="", **icon_kwargs('TEXTURE'))
     row.prop(node, "lock_layer", text="", **icon_kwargs('VIEW_LOCKED', 'LOCKED'))
-    blend = row.row(align=True)
-    blend.enabled = not node.lock_layer
-    blend.prop(node, "blend_mode", text="")
+    if node.ps_shows_blend_mode:
+        blend = row.row(align=True)
+        blend.enabled = not node.lock_layer
+        blend.prop(node, "blend_mode", text="")
     opacity = split.row(align=True)
     opacity.enabled = not node.lock_layer
     if not wide:
         opacity.scale_y = 0.8
-    opacity.prop(node, "opacity", text="" if wide else "Opacity", slider=True)
+    opacity.prop(node, "opacity", text="" if wide else node.ps_opacity_label, slider=True)
 
 
 def draw_layer_sidebar(col):

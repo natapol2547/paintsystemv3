@@ -30,6 +30,8 @@ class PaintSystemBaseNode:
 
     is_layer_node = False
     is_folder = False
+    # Properties ``compiler.core._hashed_props`` leaves out of node_state.
+    ps_unhashed_props: tuple[str, ...] = ()
     # Presentation only: class attributes stay out of compiler fingerprints.
     header_color = None
 

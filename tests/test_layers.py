@@ -247,7 +247,7 @@ try:
 
     section("layer type registry")
     types = registry.layer_types()
-    check([cls.ps_type for cls in types] == ['FOLDER', 'SOLID_COLOR', 'IMAGE'], "menu order")
+    check([cls.ps_type for cls in types] == ['FOLDER', 'SOLID_COLOR', 'IMAGE', 'FILTER'], "menu order")
     enum = bpy.ops.paint_system.add_layer.get_rna_type().properties['layer_type'].enum_items
     check([item.identifier for item in enum] == [cls.ps_type for cls in types], "add_layer offers the registry")
     for cls in types:
@@ -262,12 +262,15 @@ try:
 
     tree = new_tree("Types")
     scene.paint_system.active_node_tree = tree
+    added = {}
     for cls in types:
         result = bpy.ops.paint_system.add_layer(layer_type=cls.ps_type, resolution='1024')
         check(result == {'FINISHED'} and tree.nodes.active.bl_idname == cls.bl_idname, f"add {cls.ps_type}")
-    image = tree.nodes.active.image
+        added[cls.ps_type] = tree.nodes.active
+    image = added['IMAGE'].image
     check(image is not None and tuple(image.size) == (1024, 1024), "the image layer gets an image at the resolution")
-    check([(name.split()[0], level) for name, level in layout(tree)] == [("Folder", 0), ("Image", 1), ("Solid", 1)],
+    check([(name.split()[0], level) for name, level in layout(tree)]
+          == [("Folder", 0), ("Filter", 1), ("Image", 1), ("Solid", 1)],
           f"into the active folder, then above the active layer {layout(tree)}")
     check_current(tree, "after adding every type")
 except Exception:

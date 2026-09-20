@@ -3,6 +3,7 @@
 The Add Layer menu, the ``paint_system.add_layer`` type enum and the node
 editor's Layers category all read this list, so they cannot drift apart.
 """
+from .filter_layer_node import PaintSystemFilterLayerNode
 from .folder_layer_node import PaintSystemFolderLayerNode
 from .image_layer_node import PaintSystemImageLayerNode
 from .solid_color_layer_node import PaintSystemSolidColorLayerNode
@@ -13,6 +14,7 @@ def layer_types() -> list[type]:
         PaintSystemFolderLayerNode,
         PaintSystemSolidColorLayerNode,
         PaintSystemImageLayerNode,
+        PaintSystemFilterLayerNode,
     ]
 
 

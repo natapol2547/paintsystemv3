@@ -247,14 +247,21 @@ def _hashed_props(node) -> tuple[str, ...]:
     them is most of what hashing a subtree costs. The cache is keyed by the
     class object and cleared in ``reset_state``, so an add-on reload cannot
     answer with the names of a class that no longer exists.
+
+    A node class opts individual properties out with ``ps_unhashed_props``,
+    for state that does not reach the compiled artifact on its own: a filter
+    layer's parameters change nothing until its image is rebuilt, and the
+    rebuild says so through ``hash_parts`` instead.
     """
     cls = type(node)
     names = _hashed_prop_names.get(cls)
     if names is None:
+        unhashed = getattr(cls, 'ps_unhashed_props', ())
         names = tuple(
             prop.identifier for prop in node.bl_rna.properties
             if prop.identifier not in _BASE_NODE_PROPS
             and prop.identifier not in _HASH_EXCLUDED_PROPS
+            and prop.identifier not in unhashed
             and not prop.identifier.startswith(('cache_', 'rna_'))
         )
         _hashed_prop_names[cls] = names
