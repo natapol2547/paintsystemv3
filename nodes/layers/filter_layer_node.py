@@ -4,7 +4,7 @@ from bpy.props import (BoolProperty, EnumProperty, FloatProperty, PointerPropert
                        StringProperty)
 from bpy.utils import register_classes_factory
 
-from .base_layer_node import PaintSystemLayerNode, emit_image_texture
+from .base_layer_node import PaintSystemLayerNode, emit_image_texture, update_painting
 from ..base_node import mark_tree_dirty
 from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
@@ -20,6 +20,35 @@ def _auto_refresh_changed(self, context):
     """Turning it back on is how a layer the job gave up on is retried."""
     if self.auto_refresh:
         self.derived_error = ""
+        if self.enabled:
+            layer_job.notify()
+
+
+def _enabled_changed(self, context):
+    """Switching it back on is what asks for the refresh held back while it was off.
+
+    Not left to the compile `mark_tree_dirty` schedules, even though
+    that compile does reach `_note_stale` in the ordinary case. A layer
+    standing behind its own valid bake cache is not emitted at all --
+    `enabled` is hashed, so switching it off and on again restores the
+    very hash the cache was baked at -- and the layer would sit out of
+    date with Auto Refresh on and nothing happening.
+    """
+    mark_tree_dirty(self, context)
+    if self.enabled and self.auto_refresh and self.stale_reason:
+        layer_job.notify()
+
+
+def _lock_changed(self, context):
+    """Unlocking is the other way a refresh that was held back is asked for.
+
+    `lock_layer` marks nothing: it runs `update_painting`, because the
+    lock changes where a stroke goes and not what the tree compiles to.
+    So no compile follows an unlock, and without this the layer would
+    wait for the next unrelated edit before catching up.
+    """
+    update_painting(self, context)
+    if not self.lock_layer and self.enabled and self.auto_refresh and self.stale_reason:
         layer_job.notify()
 
 
@@ -30,7 +59,7 @@ def _stale_pixels_changed(self, context):
     addon's own pixel writes, neither of which marks the tree -- so the
     write is the only notice the auto path gets.
     """
-    if self.derived_stale_pixels and self.auto_refresh:
+    if self.derived_stale_pixels and self.auto_refresh and self.enabled:
         layer_job.notify()
 
 
@@ -105,6 +134,16 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     auto_refresh: BoolProperty(
         name="Auto Refresh", default=True, update=_auto_refresh_changed,
         description="Rebuild this layer shortly after the layers below it change")
+
+    # Redeclared only for the callbacks; the compiler treats both as it
+    # treats every other layer's, and the layer list draws the same two
+    # toggles. Either one can be the thing holding a refresh back, and
+    # neither reliably produces a compile that would notice -- see
+    # `_enabled_changed` and `_lock_changed`.
+    enabled: BoolProperty(name="Enabled", default=True, update=_enabled_changed)
+    lock_layer: BoolProperty(
+        name="Lock Layer", default=False, update=_lock_changed,
+        description="Prevent changes to this layer's settings")
 
     # Derived. The pixels describe themselves through the stamps on the
     # image, so this pointer is all the node has to keep.
@@ -224,6 +263,15 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         box.prop(self, "auto_refresh")
         if self.derived_error:
             box.label(text=self.derived_error, **icon_kwargs('ERROR'))
+        elif stale and self.auto_refresh and not (self.enabled and not self.lock_layer):
+            # Otherwise the layer sits out of date with Auto Refresh on
+            # and nothing happening, which reads as broken rather than as
+            # the deliberate saving it is. Both conditions, because
+            # `layer_job._candidates` wants both and naming only one
+            # would send the user to switch a layer on that then still
+            # does not refresh.
+            held = "switched on" if not self.enabled else "unlocked"
+            box.label(text=f"Waiting until the layer is {held}", **icon_kwargs('INFO'))
         elif stale:
             box.label(text=f"Rebuild: {stale}")
         elif image is not None:
@@ -277,9 +325,12 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             self.derived_stale_reason = reason
         # The compile is also where the auto path learns there is work:
         # every way a filter layer goes out of date ends up here, the
-        # structural ones and the painted one alike.
+        # structural ones and the painted one alike. Including the one
+        # way it learns of work it already had -- switching the layer
+        # back on marks the tree, so this runs and asks for the refresh
+        # that was held back while nothing could show it.
         if self.stale_reason:
-            if self.auto_refresh:
+            if self.auto_refresh and self.enabled:
                 layer_job.notify()
         else:
             layer_job.settled(self)

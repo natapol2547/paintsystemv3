@@ -9,9 +9,17 @@ fill colour, another layer's blend mode or opacity, a clip flag, and an
 image datablock swapped or renamed.
 
 Note what it hashes: the upstream of the filter's ``Color`` input, not
-the filter node itself. Opacity, Amount, `enabled`, Mask and Clip are
-outside it by construction, which is the point -- fading a built filter
-must not make it ask to be rebuilt.
+the filter node itself. Opacity, Amount, `enabled` and Mask are outside
+it by construction, which is the point -- fading a built filter must not
+make it ask to be rebuilt.
+
+Clip is the exception, and looks like one of those until you follow what
+the socket carries. A clipped layer's ``Color`` input is its clip base's
+own content rather than the stack below, because the base holds its
+blend for the top of the run to make. So toggling Clip on a filter layer
+swaps what it filters without moving one property upstream, and
+`subtree_hash` cannot see it: the node feeding the socket is the same
+node either way.
 
 The parts are stamped as they are rather than as one hash, so that a
 disagreement can say which one moved. "Out of date" with no reason is a
@@ -39,6 +47,7 @@ import json
 import logging
 
 from ..compiler.core import ps_trees
+from ..nodetree.stack_ops import clip_base
 from . import composite, derived
 from .core import Refused
 from .layer_specs import LAYER_FILTERS
@@ -51,6 +60,7 @@ PIXEL_REASON = "the pixels below changed"
 # when several moved at once.
 REASONS = (
     ("below", "the layers below changed"),
+    ("clip", "clipping changed what it filters"),
     ("params", "the filter settings changed"),
     ("filter", "the filter changed"),
     ("size", "the resolution changed"),
@@ -70,7 +80,7 @@ def fingerprint_parts(ctx, node, below) -> dict:
     """
     kind = LAYER_FILTERS.get(node.filter_type)
     size = int(node.resolution)
-    return {
+    parts = {
         "version": derived.FILTER_VERSION,
         "filter": node.filter_type,
         # The passes as the build would run them, rather than the node
@@ -86,6 +96,21 @@ def fingerprint_parts(ctx, node, below) -> dict:
         "uv_map": node.uv_map,
         "below": ctx.subtree_hash(below) if below is not None else "empty",
     }
+    # `clip_base` rather than `is_clip`, because a clipped layer with no
+    # unclipped layer under it composites as if it were not clipped and
+    # filters the same stack.
+    #
+    # Present only when it is clipped, so that a stamp written before
+    # this part existed still matches for the unclipped layer it was
+    # already right about. A clipped layer whose stamp predates the part
+    # reads as out of date instead. Its pixels were most likely right --
+    # both build paths have always honoured the clip -- but the stamp
+    # cannot say whether the layer was clipped before or after the build,
+    # and clipped afterwards is exactly the case this part exists to
+    # catch. One rebuild is the cost of not being able to tell.
+    if clip_base(node) is not None:
+        parts["clip"] = True
+    return parts
 
 
 def stamp(parts: dict) -> str:

@@ -189,6 +189,14 @@ def _candidates():
     Bottom first because a filter layer below an out-of-date one has to
     be rebuilt before it, or the upper layer filters pixels that are
     about to change and goes out of date again the moment they do.
+
+    A switched-off layer is left alone. It renders as a pass-through, so
+    a rebuild would spend the video memory and the frame time of a full
+    composite on pixels nothing can show, and turning it off is the
+    ordinary way to compare with and without. It stays marked out of
+    date, and switching it back on is what asks for the refresh -- see
+    `PaintSystemFilterLayerNode._enabled_changed`, which cannot leave
+    that to the compile it schedules.
     """
     for tree in ps_trees():
         # The stack walks below are the expensive part, and most trees
@@ -200,7 +208,8 @@ def _candidates():
                 node = item.node
                 if getattr(node, 'ps_type', "") != 'FILTER':
                     continue
-                if node.auto_refresh and not node.lock_layer and node.stale_reason:
+                if (node.enabled and node.auto_refresh
+                        and not node.lock_layer and node.stale_reason):
                     yield tree, node
 
 

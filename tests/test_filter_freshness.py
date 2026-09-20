@@ -6,10 +6,12 @@ the panel to read. What matters is not only that a difference is noticed
 but that the right one is named: "Out of date" with no reason is a button
 the user has to press on faith.
 
-Part of the claim is what must *not* set it off. Amount, `enabled`, Clip
-and Mask are all outside the hash by construction, because fading a built
+Part of the claim is what must *not* set it off. Amount, `enabled` and
+Mask are all outside the hash by construction, because fading a built
 filter has to be free -- that is the whole reason the filter is a layer
-rather than an action.
+rather than an action. Clip looks like one of those and is not: a
+clipped layer's ``Color`` input carries its base's own content rather
+than the stack, so the flag decides what the layer filters.
 
 The last sections cover the pixel half, which exists because the
 structural one is blind to a stroke: `compiler.ir` reduces an image to
@@ -21,6 +23,7 @@ stamped it with, which is what the comparison reads.
 import os
 import sys
 import traceback
+from types import SimpleNamespace
 
 import bpy
 
@@ -121,13 +124,46 @@ try:
     node.uv_map = ""
     restamp(tree, node)
 
+    section("clipping, which decides what it filters")
+    # A clipped layer's Color input is its base's own content instead of
+    # the stack below, because the base holds its blend for the top of
+    # the run to make. The node feeding the socket is the same node
+    # either way, so `subtree_hash` cannot tell the two apart.
+    node.is_clip = True
+    check(reason(tree, node) == "clipping changed what it filters",
+          f"clipping it: {reason(tree, node)!r}")
+    restamp(tree, node)
+    check(reason(tree, node) == "", "and a rebuild settles it there")
+    node.is_clip = False
+    check(reason(tree, node) == "clipping changed what it filters",
+          f"unclipping it again: {reason(tree, node)!r}")
+    restamp(tree, node)
+
+    # The stamp records the base, not the flag: a clipped layer with no
+    # unclipped layer under it composites as if it were not clipped, and
+    # filters the same stack it did before.
+    bottom.is_clip = True
+    restamp(tree, node)
+    node.is_clip = True
+    check(reason(tree, node) == "",
+          f"clipping to nothing filters the same stack: {reason(tree, node)!r}")
+    node.is_clip = False
+    bottom.is_clip = False
+    restamp(tree, node)
+
+    # The part is left out rather than stamped False, so a stamp written
+    # before it existed still matches for the unclipped layer it was
+    # already right about, and only a clipped one asks to be rebuilt.
+    parts = freshness.fingerprint_parts(core.build_ir(tree).ctx, node, below_of(node))
+    check("clip" not in parts, "an unclipped layer stamps what it always did")
+
     section("what does not")
     # These are outside the hash by construction: they change how the
     # built pixels are composited, never what they should contain.
-    for name, value in (("opacity", 0.35), ("enabled", False), ("is_clip", True)):
+    for name, value in (("opacity", 0.35), ("enabled", False)):
         setattr(node, name, value)
         check(reason(tree, node) == "", f"{name} leaves it alone")
-    node.opacity, node.enabled, node.is_clip = 1.0, True, False
+    node.opacity, node.enabled = 1.0, True
     node.inputs['Mask'].default_value = 0.5
     check(reason(tree, node) == "", "and so does the Mask input")
     node.inputs['Mask'].default_value = 1.0
@@ -182,6 +218,47 @@ try:
     node.resolution = '2048'
     restamp(tree, node)
     check(node.stale_reason == "the pixels below changed", "and the pixel half is still there")
+
+    section("what the panel says while a refresh is held back")
+    # A layer that is switched off or locked is not a candidate for the
+    # automatic path, so with Auto Refresh on and nothing happening the
+    # badge alone reads as broken. Checked here rather than in
+    # `test_ui_draw.py`, which needs a window: a recorded layout is
+    # enough to read the branch, and the branch is the part worth
+    # pinning.
+    # Out of date through the pixel half, so that the compile any of
+    # these toggles schedules cannot quietly clear it again.
+    node.derived_image = result
+    restamp(tree, node)
+    node.auto_refresh = True
+    node.derived_stale_pixels = True
+    check(node.stale_reason == freshness.PIXEL_REASON,
+          f"the layer is out of date to begin with: {node.stale_reason!r}")
+
+    def held_back_message():
+        """The labels `draw_result_settings` puts in its box, as one list."""
+        labels = []
+        pane = SimpleNamespace(enabled=True)
+        pane.box = pane.row = lambda *args, **kwargs: pane
+        pane.label = lambda **kwargs: labels.append(kwargs.get('text', ""))
+        pane.operator = lambda *args, **kwargs: SimpleNamespace()
+        pane.prop = lambda *args, **kwargs: None
+        node.draw_result_settings(bpy.context, pane)
+        return [text for text in labels if text.startswith("Waiting until")]
+
+    node.enabled, node.lock_layer = True, False
+    check(held_back_message() == [], "a layer that can refresh is told nothing")
+    node.enabled = False
+    check(held_back_message() == ["Waiting until the layer is switched on"],
+          f"switched off: {held_back_message()}")
+    node.lock_layer = True
+    check(held_back_message() == ["Waiting until the layer is switched on"],
+          "off and locked names the switch first, because it is the outer one")
+    node.enabled = True
+    check(held_back_message() == ["Waiting until the layer is unlocked"],
+          f"locked alone names the lock, rather than sending the user to a "
+          f"switch that is already on: {held_back_message()}")
+    node.lock_layer = False
 
     section("an unbuilt layer")
     node.derived_stale_pixels = False

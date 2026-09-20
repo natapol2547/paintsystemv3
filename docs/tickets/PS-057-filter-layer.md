@@ -369,8 +369,35 @@ already covers a layer added, removed, reordered or muted, a
 `fill_color`, another layer's blend mode or opacity, a clip flag, an
 image datablock swapped or renamed, and a nested group tree's recompile.
 Free, on every compile. Note it hashes the upstream of the Color input,
-not the filter node itself: opacity, Amount, `enabled`, Mask and Clip are
+not the filter node itself: opacity, Amount, `enabled` and Mask are
 outside it by construction.
+
+Clip is the exception, and was mistaken for one of those at first. A
+clipped layer's Color input carries its clip base's own content rather
+than the stack below, because the base holds its blend for the top of
+the run to make — the same fact the input section above relies on. So
+the filter's own Clip flag decides what it filters, and `subtree_hash`
+cannot see it: the node feeding the socket is the same node either way.
+The fingerprint carries a `clip` part for it, recorded as
+`clip_base(node) is not None` rather than as `is_clip`, because a
+clipped layer with no unclipped layer under it composites as if it were
+not clipped and filters the same stack. The part is left out of the
+stamp entirely when the layer is unclipped, so a stamp written before it
+existed still matches for the layer it was already right about, and only
+a clipped layer asks to be rebuilt.
+
+That last rebuild is a real cost and worth being honest about: the
+*build* has always honoured the clip, because `plan_below` plans the
+base with placement `PASS` and the bake takes the same branch. The
+pixels of a clipped layer stamped by the older code were most likely
+right. What the stamp cannot say is whether the layer was clipped before
+or after those pixels were made, and clipped afterwards is the case the
+part exists to catch — a layer that read as fresh while showing a filter
+of the wrong picture. One rebuild per clipped filter layer is the price
+of not being able to tell the two apart. The alternative, bumping
+`FILTER_VERSION`, rebuilds every filter layer instead; ignoring a
+missing key reports a legacy clipped layer as fresh the moment it is
+unclipped.
 
 **Pixels.** `IR._serialize_other` reduces a datablock to `["id", type,
 name_full]` (`compiler/ir.py:190-191`), so painting into an image below
@@ -453,7 +480,26 @@ button labelled Update should do.
 **Automatically**, by `filters/layer_job.py`, the same generator pulled
 from a `bpy.app.timers` tick with a time budget, debounced 0.4 s, gated
 by `auto_refresh`, with the `GPU_ERROR` retry and back-off copied from
-`selection/session.py:255-281`. Two hard rules:
+`selection/session.py:255-281`. Three hard rules:
+
+- A switched-off layer is never a candidate. It renders as a
+  pass-through, so a refresh would spend a whole composite and its video
+  memory on pixels nothing can show, and switching a filter off to
+  compare with and without is the ordinary thing to do with one. The
+  layer stays marked out of date, and switching it back on is what asks
+  for the refresh that was held back. The panel says so meanwhile,
+  rather than sitting on a stale badge with Auto Refresh on and nothing
+  happening.
+
+  Asked for by the `enabled` update callback rather than by the compile
+  that `mark_tree_dirty` schedules, even though that compile does reach
+  `_note_stale` in the ordinary case. A layer standing behind its own
+  valid bake cache is never emitted — `enabled` is hashed, so switching
+  it off and on again restores the very hash the cache was baked at —
+  and it would sit out of date with nothing coming. `lock_layer` needs
+  the same treatment for a different reason: it runs `update_painting`,
+  which marks nothing at all, because the lock changes where a stroke
+  goes and not what the tree compiles to.
 
 - The auto path runs **only** when `resolve_input` reports the composite
   path. A layer on the Cycles fallback shows "Update needed (baked
@@ -710,6 +756,15 @@ corruption. Not taken here.
 - The pack cannot be sliced, so the last unit of every rebuild blocks for
   as long as a PNG encode of the result takes -- see Measurements. The
   auto-refresh path pays it with no progress bar to explain it.
+- "Nothing can show it" is read as the layer's own `enabled` only. A
+  filter layer inside a switched-off folder is just as invisible and is
+  still refreshed. Folding that in means asking for the ancestors of
+  every filter layer on every compile, in `_note_stale`, which is on the
+  path `tests/test_perf.py` budgets -- so it wants the answer
+  `panels/layers_panels.py` already computes for greying a row rather
+  than a second walk. Amount 0 is deliberately not counted: fading a
+  built filter to nothing is free and reversible by design, and a layer
+  someone is sliding is the last one that should go stale.
 
 ## Acceptance
 
@@ -727,8 +782,12 @@ corruption. Not taken here.
 - A clipped layer above a filter layer composites onto the filter's
   pixels, and the stack below the filter is still emitted — the artifact
   has the lower layer's blend group and `Prev Color` linked.
-- Changing opacity, Mask, Clip or `enabled` recompiles and does not mark
-  the layer out of date; changing a `fill_color` below does.
+- Changing opacity, Mask or `enabled` recompiles and does not mark the
+  layer out of date; changing a `fill_color` below does, and so does
+  Clip, which swaps the stack below for the clip base's own content.
+- A switched-off filter layer is not refreshed automatically. It stays
+  marked out of date, and switching it back on is what asks for the
+  refresh.
 - Painting into an image below marks the filter out of date within one
   debounce; an undo that restores those pixels clears it through the
   digest pass without a rebuild.

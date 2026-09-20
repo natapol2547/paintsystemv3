@@ -60,6 +60,17 @@ def pump(limit=2000):
     return False
 
 
+def quiet():
+    """Take the refresh timer down, so that a later registration means something.
+
+    Only Blender unregisters a timer, by seeing its callback return
+    None, and `pump` never gives it the chance. Without this every check
+    on `is_registered` would read True from whatever asked last.
+    """
+    if bpy.app.timers.is_registered(layer_job._tick):
+        bpy.app.timers.unregister(layer_job._tick)
+
+
 def stamp(node):
     image = node.derived_image
     return image[derived.BUILD_KEY] if derived.is_built(image) else ""
@@ -111,15 +122,55 @@ if available():
         check(pump() and stamp(node) != was, "turning it back on refreshes")
         core.flush_now()
 
+        section("a layer that is switched off")
+        # It renders as a pass-through, so a rebuild would spend a whole
+        # composite on pixels nothing can show. Switching a filter off to
+        # compare with and without is the ordinary thing to do with one.
+        was = stamp(node)
+        node.enabled = False
+        core.flush_now()
+        # The timer has to be taken down by hand before either half of
+        # this can mean anything. `pump` calls `_tick` as a plain
+        # function, so Blender never sees the None return that would
+        # unregister it, and a registration left over from the section
+        # above would make "nothing asked" and "something asked" read
+        # the same.
+        quiet()
+        undo_pixels.write_pixels(picture.image, [0.5, 0.1, 0.6, 1.0] * 64)
+        core.flush_now()
+        check(not bpy.app.timers.is_registered(layer_job._tick),
+              "a stroke below it asks for nothing while it is switched off")
+        pump()
+        check(stamp(node) == was, "and it is not rebuilt while nothing can show it")
+        check(node.stale_reason == "the pixels below changed",
+              f"but it still knows it is out of date: {node.stale_reason!r}")
+        check(node.auto_refresh, "and did not have to give up Auto Refresh to stay put")
+
+        quiet()
+        node.enabled = True
+        core.flush_now()
+        check(bpy.app.timers.is_registered(layer_job._tick),
+              "switching it back on is what asks for the refresh")
+        check(pump() and stamp(node) != was, "and it catches up")
+        core.flush_now()
+
         section("a locked layer")
         was = stamp(node)
         node.lock_layer = True
+        quiet()
         undo_pixels.write_pixels(picture.image, [0.2, 0.2, 0.9, 1.0] * 64)
         core.flush_now()
         pump()
         check(stamp(node) == was, "is not rebuilt behind the lock")
+
+        quiet()
         node.lock_layer = False
-        check(pump() and stamp(node) != was, "and unlocking lets it catch up")
+        # The lock marks nothing -- it changes where a stroke goes, not
+        # what the tree compiles to -- so unlocking has to ask for the
+        # refresh itself rather than wait for a compile that never comes.
+        check(bpy.app.timers.is_registered(layer_job._tick),
+              "unlocking asks for the refresh on its own")
+        check(pump() and stamp(node) != was, "and it catches up")
         core.flush_now()
 
         section("cancelled part way")
