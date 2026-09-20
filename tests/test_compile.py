@@ -22,7 +22,10 @@ mark_dirty = _core.mark_dirty
 normalize_tree = _core.normalize_tree
 cleanup_orphan_artifacts = _core.cleanup_orphan_artifacts
 library = import_from("compiler.library")
-bake_node_cache = import_from("compiler.bake").bake_node_cache
+_bake = import_from("compiler.bake")
+bake_node_cache = _bake.bake_node_cache
+bake_subtree = _bake.bake_subtree
+create_managed_image = _bake.create_managed_image
 link_tree_to_material = import_from("ops.node_tree_ops").link_tree_to_material
 
 
@@ -238,6 +241,31 @@ try:
     baked.pixels.foreach_get(px)
     center = px[(16 * 32 + 16) * 4:(16 * 32 + 16) * 4 + 4]
     check(center[2] > 0.5 and center[3] > 0.5, f"baked pixel is blue+opaque {['%.2f' % c for c in center]}")
+
+    section("bake gives back what it borrows")
+    bare_mesh = bpy.data.meshes.new("PS Bare")
+    bare_mesh.from_pydata([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], [], [(0, 1, 2, 3)])
+    bare_uv = bare_mesh.uv_layers.new(name="UVMap")
+    for loop, co in zip(bare_uv.data, ((0, 0), (1, 0), (1, 1), (0, 1))):
+        loop.uv = co
+    bare = bpy.data.objects.new("PS Bare", bare_mesh)
+    bpy.context.scene.collection.objects.link(bare)
+    view_layer = bpy.context.view_layer
+    for o in view_layer.objects:
+        o.select_set(o == cube)
+    view_layer.objects.active = cube
+    scratch = create_managed_image("PS Bake Scratch", 16, 16)
+    scratch_hash = bake_subtree(bpy.context, tree, img_layer, bare, scratch, margin=0)
+    check(scratch_hash == img_layer.cache_hash, "bake_subtree returns the subtree fingerprint")
+    check(view_layer.objects.active == cube and cube.select_get() and not bare.select_get(),
+          "the bake gives the selection and the active object back")
+    check(len(bare.material_slots) == 0,
+          "and an object it borrowed with no material slots keeps none")
+    check(scratch.packed_file is None,
+          "bake_subtree leaves packing to its caller")
+    bpy.data.objects.remove(bare)
+    bpy.data.meshes.remove(bare_mesh)
+    bpy.data.images.remove(scratch)
 
     solid.fill_color = (0.2, 0.2, 0.2, 1.0)
     compile_tree(tree)

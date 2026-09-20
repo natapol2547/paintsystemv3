@@ -3,8 +3,12 @@
 The compiler builds a temporary shader group whose outputs are the target
 node's live Color/Alpha (ignoring its own cache). A throwaway material routes
 that through an Emission shader and Cycles bakes it twice: once for color,
-once for alpha, merged with numpy. On success the node's ``cache_hash`` is
-set to the subtree fingerprint so the next compile substitutes the image.
+once for alpha, merged with numpy.
+
+``bake_subtree`` is that bake and writes any image it is handed.
+``bake_node_cache`` wraps it with the cache bookkeeping: on success the
+node's ``cache_hash`` is set to the subtree fingerprint so the next compile
+substitutes the image.
 """
 from __future__ import annotations
 
@@ -79,9 +83,30 @@ def _bake_settings(scene):
         bake.use_selected_to_active = saved['use_selected_to_active']
 
 
+def _remove_last_slot(context, obj) -> None:
+    """Drop the slot ``_temporary_material`` added, leaving the object as it was.
+
+    ``obj.data.materials.pop`` empties the mesh's material list but leaves the
+    object's slot count where it was, so the object keeps an empty slot it
+    never had. Only the operator removes both.
+    """
+    try:
+        obj.active_material_index = len(obj.material_slots) - 1
+        with context.temp_override(object=obj, active_object=obj,
+                                   selected_objects=[obj]):
+            bpy.ops.object.material_slot_remove()
+    except RuntimeError:
+        # This runs in a ``finally``; an empty slot left behind is a much
+        # smaller problem than hiding whatever went wrong during the bake.
+        if len(obj.data.materials):
+            obj.data.materials.pop(index=len(obj.data.materials) - 1)
+
+
 @contextlib.contextmanager
-def _temporary_material(obj, material):
-    if len(obj.material_slots) == 0:
+def _temporary_material(context, obj, material):
+    """Put *material* in every slot of *obj*, and give the slots back after."""
+    appended = len(obj.material_slots) == 0
+    if appended:
         obj.data.materials.append(None)
     saved = [slot.material for slot in obj.material_slots]
     try:
@@ -91,6 +116,28 @@ def _temporary_material(obj, material):
     finally:
         for slot, mat in zip(obj.material_slots, saved):
             slot.material = mat
+        if appended:
+            _remove_last_slot(context, obj)
+
+
+@contextlib.contextmanager
+def _borrowed_selection(view_layer, obj):
+    """Make *obj* the only selected and active object, and restore the selection after.
+
+    ``bpy.ops.object.bake`` bakes the selected objects, so the selection has
+    to change; what the user had selected is theirs to keep.
+    """
+    previous_active = view_layer.objects.active
+    previous_selected = [o for o in view_layer.objects if o.select_get()]
+    try:
+        for o in view_layer.objects:
+            o.select_set(o == obj)
+        view_layer.objects.active = obj
+        yield
+    finally:
+        for o in view_layer.objects:
+            o.select_set(o in previous_selected)
+        view_layer.objects.active = previous_active
 
 
 def _merge_alpha(color_image, alpha_image) -> None:
@@ -104,20 +151,26 @@ def _merge_alpha(color_image, alpha_image) -> None:
     color_image.update()
 
 
-def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int = 2048,
-                    margin: int = 8, uv_map: str = "") -> bpy.types.Image:
+def check_bake_object(obj) -> None:
+    """Raise if *obj* cannot be baked onto."""
     if obj is None or obj.type != 'MESH':
         raise RuntimeError("Bake needs an active mesh object")
     if len(obj.data.uv_layers) == 0:
         raise RuntimeError(f"'{obj.name}' has no UV map")
 
-    bake_tree, subtree_hash = build_bake_tree(tree, node)
 
-    image = node.cache_image
-    if image is None:
-        image = create_managed_image(f"{tree.name} {node.name} Cache", width, height)
-    elif tuple(image.size) != (width, height):
-        image.scale(width, height)
+def bake_subtree(context, tree, node, obj, image, *, margin: int = 8,
+                 uv_map: str = "") -> str:
+    """Bake *node*'s live subtree onto *obj* into *image*, and return its fingerprint.
+
+    *image* is written in place and left unpacked: whether the result belongs
+    in the .blend is the caller's call. Everything this borrows -- the render
+    settings, the object's material slots, the selection -- is given back
+    before it returns.
+    """
+    check_bake_object(obj)
+
+    bake_tree, subtree_hash = build_bake_tree(tree, node)
     alpha_image = create_managed_image(BAKE_ALPHA_IMAGE_NAME, image.size[0], image.size[1],
                                        alpha=False, colorspace='Non-Color')
 
@@ -137,14 +190,10 @@ def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int 
         nt.links.new(uv_node.outputs['UV'], target.inputs['Vector'])
     nt.nodes.active = target
 
-    scene = context.scene
-    view_layer = context.view_layer
     try:
-        with _temporary_material(obj, mat), _bake_settings(scene) as bake:
+        with _temporary_material(context, obj, mat), _bake_settings(context.scene) as bake, \
+                _borrowed_selection(context.view_layer, obj):
             bake.margin = margin
-            for o in view_layer.objects:
-                o.select_set(o == obj)
-            view_layer.objects.active = obj
             with context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
                 # Pass 1: color
                 nt.links.new(group.outputs['Color'], emission.inputs['Color'])
@@ -157,10 +206,27 @@ def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int 
                 target.image = alpha_image
                 bpy.ops.object.bake(type='EMIT')
         _merge_alpha(image, alpha_image)
-        image.pack()
     finally:
         bpy.data.materials.remove(mat)
         bpy.data.images.remove(alpha_image)
+    return subtree_hash
+
+
+def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int = 2048,
+                    margin: int = 8, uv_map: str = "") -> bpy.types.Image:
+    # Checked before the image exists, so a bake at a target that cannot take
+    # one does not leave an orphan datablock behind.
+    check_bake_object(obj)
+
+    image = node.cache_image
+    if image is None:
+        image = create_managed_image(f"{tree.name} {node.name} Cache", width, height)
+    elif tuple(image.size) != (width, height):
+        image.scale(width, height)
+
+    subtree_hash = bake_subtree(context, tree, node, obj, image,
+                                margin=margin, uv_map=uv_map)
+    image.pack()
 
     node.cache_image = image
     node.cache_hash = subtree_hash
