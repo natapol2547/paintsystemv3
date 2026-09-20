@@ -120,7 +120,19 @@ def write_pixels(image: bpy.types.Image, pixels) -> bool:
         registered = push_undo_step(image)
     image.pixels.foreach_set(values)
     image.update()
+    _note_filters(image)
     return push_undo_step(image) and registered
+
+
+def _note_filters(image: bpy.types.Image) -> None:
+    """Tell any filter layer reading *image* that its pixels moved.
+
+    Deferred import: `filters.freshness` reaches `filters.core`, which
+    imports this module. Exact rather than waiting for the depsgraph,
+    which reports a stroke but says nothing about a scripted write.
+    """
+    from ..filters.freshness import note_image_changed
+    note_image_changed([image.session_uid])
 
 
 def pack_write_once(image: bpy.types.Image) -> bool:

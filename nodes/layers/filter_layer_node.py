@@ -8,7 +8,7 @@ from ..base_node import mark_tree_dirty
 from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
 from ...filters.derived import FINGERPRINT_KEY, build_stamp, is_built, stamped_uv_map
-from ...filters.freshness import fingerprint_parts, structure_reason
+from ...filters.freshness import PIXEL_REASON, fingerprint_parts, structure_reason
 from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items, layer_filter_params
 from ...ops.node_tree_ops import RESOLUTION_ITEMS
 
@@ -47,7 +47,7 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # bake above the layer before a single pixel had changed.
     ps_unhashed_props = (
         'filter_type', 'invert_alpha', 'resolution', 'uv_map', 'derived_image',
-        'derived_stale_reason',
+        'derived_stale_reason', 'derived_stale_pixels',
     )
 
     filter_type: EnumProperty(
@@ -73,6 +73,13 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # tree from inside a compile would schedule another one.
     derived_stale_reason: StringProperty(
         name="Out Of Date", description="Why this layer's image no longer matches what is below it")
+    # Written from outside the compile, by `filters.freshness`. Saved,
+    # unlike the reason above: nothing recomputes it for free after a file
+    # read, and a file saved out of date has to reopen out of date rather
+    # than show a fresh badge over pixels that are not.
+    derived_stale_pixels: BoolProperty(
+        name="Pixels Changed",
+        description="Painting below this layer has changed what it should show")
 
     def copy(self, node):
         super().copy(node)
@@ -89,6 +96,22 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         node.filter_type = filter_type
         node.resolution = resolution
         return node
+
+    @property
+    def stale_reason(self) -> str:
+        """Why the built image no longer matches, or "" when it does.
+
+        The two halves of freshness in the order that names the more
+        specific cause: a structural change explains itself, while
+        "the pixels below changed" is what is left once nothing
+        structural has moved. An unbuilt layer has no claim to be out of
+        date about.
+        """
+        if not is_built(self.derived_image):
+            return ""
+        if self.derived_stale_reason:
+            return self.derived_stale_reason
+        return PIXEL_REASON if self.derived_stale_pixels else ""
 
     # -- ui ---------------------------------------------------------------------
 
@@ -118,11 +141,12 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         it.
         """
         image = self.derived_image
+        stale = self.stale_reason
         box = layout.box()
         row = box.row(align=True)
         if not is_built(image):
             row.label(text="Not built", **icon_kwargs('ERROR'))
-        elif self.derived_stale_reason:
+        elif stale:
             row.label(text="Out of date", **icon_kwargs('ERROR'))
         else:
             row.label(text=f"{image.size[0]} x {image.size[1]}", **icon_kwargs('CHECKMARK'))
@@ -131,8 +155,8 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         clear = row.row(align=True)
         clear.enabled = image is not None
         clear.operator("paint_system.clear_filter_result", text="", **icon_kwargs('X'))
-        if is_built(image) and self.derived_stale_reason:
-            box.label(text=f"Rebuild: {self.derived_stale_reason}")
+        if stale:
+            box.label(text=f"Rebuild: {stale}")
         elif image is not None:
             box.label(text=image.name)
 

@@ -34,6 +34,7 @@ gpu_core = import_from("gpu_passes.core")
 core = import_from("compiler.core")
 derived = import_from("filters.derived")
 filters_core = import_from("filters.core")
+freshness = import_from("filters.freshness")
 layer_build = import_from("filters.layer_build")
 create_managed_image = import_from("compiler.bake").create_managed_image
 
@@ -186,6 +187,13 @@ if available():
         layer_build.build_layer(bpy.context, tree, node)
         core.flush_now()
         check(node.derived_stale_reason == "", "building again clears it")
+
+        freshness.note_image_changed([picture.image.session_uid])
+        check(node.stale_reason == "the pixels below changed",
+              f"a write to an image below marks it too: {node.stale_reason!r}")
+        layer_build.build_layer(bpy.context, tree, node)
+        core.flush_now()
+        check(node.stale_reason == "", "and a build reads those pixels, so it clears that as well")
 
         section("which way up")
         # Every other check here is on one colour, which a readback that

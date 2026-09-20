@@ -162,6 +162,13 @@ def commit(tree, node, plan, values, size):
     image[derived.BUILD_KEY] = hash_payload([fingerprint, _digest(values)])
 
     node.derived_image = image
+    # The pixels below are what was just read, so whatever moved them is
+    # accounted for. Cleared after the write rather than before, so a
+    # build abandoned partway leaves the layer still asking for one.
+    node.derived_stale_pixels = False
+    # A filter layer feeding another one is a source image that just
+    # changed, and the depsgraph does not report this write.
+    freshness.note_image_changed([image.session_uid])
     # Reusing the datablock leaves the pointer unchanged, so the node's
     # own update callback does not fire and the new stamps would not
     # reach a recompile on their own.

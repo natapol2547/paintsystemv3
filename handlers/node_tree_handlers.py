@@ -4,6 +4,7 @@ from ..common import save_image
 from ..compiler.bake import PS_IMAGE_KEY
 from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty, ps_trees,
                              unblock_compile)
+from ..filters import freshness
 from ..gpu_passes import surface, texel_map
 from ..nodetree.tree import subscribe_name_changes
 from ..selection import overlay as selection_overlay
@@ -41,13 +42,23 @@ def on_depsgraph_update_post(scene, depsgraph=None):
     # caches here rebuilt them after every stroke (PS-092, PS-093). A move
     # changes no surface key; the texel map cache keys the world matrix.
     geometry_changed = False
+    painted = []
     for update in depsgraph.updates:
+        original = getattr(update.id, 'original', None)
+        # Blender tags a painted image at the end of a stroke, which is
+        # the only notice a filter layer below the stroke gets that its
+        # pixels have stopped describing the stack (PS-057). Checked
+        # before the geometry guard: an image update sets no such flag.
+        if isinstance(original, bpy.types.Image):
+            painted.append(original.session_uid)
+            continue
         if not update.is_updated_geometry:
             continue
-        original = getattr(update.id, 'original', None)
         if isinstance(original, bpy.types.Object):
             surface.mark_suspect(original.session_uid)
             geometry_changed = True
+    if painted:
+        freshness.note_image_changed(painted)
     # Renaming or removing a UV map shows up only as a geometry update, and
     # the live selection samples a layer's UV map by name (PS-091). While
     # a view selection cannot be used, any update may be the fix: scaling

@@ -6,10 +6,14 @@ the panel to read. What matters is not only that a difference is noticed
 but that the right one is named: "Out of date" with no reason is a button
 the user has to press on faith.
 
-The other half of the claim is what must *not* set it off. Amount,
-`enabled`, Clip and Mask are all outside the hash by construction,
-because fading a built filter has to be free -- that is the whole reason
-the filter is a layer rather than an action.
+Part of the claim is what must *not* set it off. Amount, `enabled`, Clip
+and Mask are all outside the hash by construction, because fading a built
+filter has to be free -- that is the whole reason the filter is a layer
+rather than an action.
+
+The last sections cover the pixel half, which exists because the
+structural one is blind to a stroke: `compiler.ir` reduces an image to
+its name, so painting into a layer below moves no hash at all.
 
 No GPU here: the image is stamped by hand with what a build would have
 stamped it with, which is what the comparison reads.
@@ -28,10 +32,12 @@ register_addon()
 core = import_from("compiler.core")
 derived = import_from("filters.derived")
 freshness = import_from("filters.freshness")
+pixels = import_from("undo.pixels")
 stack_ops = import_from("nodetree.stack_ops")
 create_managed_image = import_from("compiler.bake").create_managed_image
 
 SOLID = 'PaintSystemSolidColorLayerNode'
+IMAGE = 'PaintSystemImageLayerNode'
 FILTER = 'PaintSystemFilterLayerNode'
 
 
@@ -146,6 +152,43 @@ try:
     section("losing the image")
     node.derived_image = None
     check(reason(tree, node) == "", "clears the reason rather than leaving the last one up")
+
+    section("painting below it")
+    # The other half. `subtree_hash` reduces an image to its name, so a
+    # stroke under a filter layer moves nothing the structural check can
+    # see; `note_image_changed` is what closes it.
+    node.derived_image = result
+    restamp(tree, node)
+    with core.suspend_compile(tree):
+        picture = tree.insert_layer_node(IMAGE, target=bottom)
+        picture.image = create_managed_image("Fresh Source", 8, 8)
+    restamp(tree, node)
+    check(reason(tree, node) == "", "an image layer added below, then rebuilt, is up to date")
+
+    elsewhere = create_managed_image("Fresh Elsewhere", 8, 8)
+    freshness.note_image_changed([elsewhere.session_uid])
+    check(node.stale_reason == "", "an image the stack does not read leaves it alone")
+
+    pixels.write_pixels(picture.image, [1.0, 0.0, 0.0, 1.0] * 64)
+    check(node.derived_stale_pixels, "writing pixels below it marks the layer")
+    check(node.stale_reason == "the pixels below changed",
+          f"and names that as the reason: {node.stale_reason!r}")
+
+    # Structural first: it says which setting to look at, where the pixel
+    # half can only say that something was painted.
+    node.resolution = '4096'
+    check(node.stale_reason == "the resolution changed",
+          f"a structural change is the more useful answer: {node.stale_reason!r}")
+    node.resolution = '2048'
+    restamp(tree, node)
+    check(node.stale_reason == "the pixels below changed", "and the pixel half is still there")
+
+    section("an unbuilt layer")
+    node.derived_stale_pixels = False
+    node.derived_image = None
+    pixels.write_pixels(picture.image, [0.0, 1.0, 0.0, 1.0] * 64)
+    check(not node.derived_stale_pixels,
+          "has no claim about pixels to lose, so nothing marks it")
 
 except Exception:
     traceback.print_exc()
