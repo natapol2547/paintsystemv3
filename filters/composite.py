@@ -122,12 +122,24 @@ def plan_below(node) -> ChainPlan:
     not draw, and `filters.core.Refused` when the bake could not help
     either.
     """
-    with link_index(node.id_data):
-        return _plan_chain(node.inputs['Color'], set())
+    tree = node.id_data
+    with link_index(tree):
+        return _plan_chain(node.inputs['Color'], set(), tree.get_input_node())
 
 
-def _plan_chain(socket, visited: set[str]) -> ChainPlan:
+def _plan_chain(socket, visited: set[str], group_input) -> ChainPlan:
     nodes = list(layers_down_from(socket, visited))
+    # The walk stops at anything that is not a layer -- a group layer, a
+    # hand-made link, a cycle -- and the compiler goes on compositing it,
+    # so a chain that still has something under it would come out of here
+    # missing a layer rather than refusing. The Group Input is the one
+    # thing that legitimately sits under a channel: it is the transparent
+    # backdrop the walk starts from anyway.
+    bottom = feeding_link(nodes[-1].inputs['Color'] if nodes else socket)
+    if bottom is not None and bottom.from_node != group_input:
+        below = bottom.from_node
+        raise Unsupported(f"'{below.name}' below is a {below.bl_label}, "
+                          "which needs a render to draw")
     nodes.reverse()
     positions = {layer.name: index for index, layer in enumerate(nodes)}
     bases = {base.name for base in (clip_base(layer) for layer in nodes)
@@ -137,7 +149,8 @@ def _plan_chain(socket, visited: set[str]) -> ChainPlan:
     images: list[bpy.types.Image] = []
     uv_maps: set[str] = set()
     for layer in nodes:
-        step = _plan_layer(layer, positions, visited, holds_run=layer.name in bases)
+        step = _plan_layer(layer, positions, visited, group_input,
+                           holds_run=layer.name in bases)
         steps.append(step)
         if step.content is not None:
             images.extend(step.content.images)
@@ -148,7 +161,7 @@ def _plan_chain(socket, visited: set[str]) -> ChainPlan:
     return ChainPlan(tuple(steps), tuple(images), frozenset(uv_maps))
 
 
-def _plan_layer(layer, positions, visited, *, holds_run: bool) -> LayerStep:
+def _plan_layer(layer, positions, visited, group_input, *, holds_run: bool) -> LayerStep:
     ps_type = getattr(layer, 'ps_type', '')
     if ps_type not in DRAWN_TYPES:
         raise Unsupported(f"Layer '{layer.name}' is a {layer.bl_label} layer, "
@@ -174,7 +187,7 @@ def _plan_layer(layer, positions, visited, *, holds_run: bool) -> LayerStep:
     fill = TRANSPARENT
     uv_map = ""
     if ps_type == 'FOLDER':
-        content = _plan_chain(layer.inputs['Content Color'], visited)
+        content = _plan_chain(layer.inputs['Content Color'], visited, group_input)
     elif ps_type == 'SOLID_COLOR':
         red, green, blue, alpha = layer.fill_color
         fill = (red, green, blue, alpha)
@@ -202,12 +215,18 @@ def _plan_layer(layer, positions, visited, *, holds_run: bool) -> LayerStep:
 
 
 def _source_image(image):
-    """*image*, checked for what neither path can read. None stays None."""
+    """*image*, checked for what neither path can read. None stays None.
+
+    The size is the test, not `has_data`: a generated image regenerates
+    its buffer lazily and reads as having no data until something asks
+    for it, while an image whose file is gone reports no size at all.
+    `filters.core.PixelSource.from_image` draws the same line.
+    """
     if image is None:
         return None
     if image.source == 'TILED':
         raise Refused(f"Image '{image.name}' below is a UDIM image, which is not supported yet")
-    if not image.has_data:
+    if not image.size[0] or not image.size[1]:
         raise Refused(f"Image '{image.name}' below has no pixels; is its file missing?")
     return image
 
