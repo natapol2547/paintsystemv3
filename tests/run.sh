@@ -79,6 +79,7 @@ if [ ${#files[@]} -eq 0 ]; then
 fi
 
 failed=()
+skipped=()
 for f in "${files[@]}"; do
     name="$(basename "$f")"
     [[ " ${window_only[*]} " == *" $name "* ]] && continue
@@ -105,6 +106,7 @@ if [ "$run_ui" = 1 ]; then
                      --python-exit-code 1 --python "$HERE/$name")
             else
                 echo "no display and no xvfb-run; skipping $name"
+                skipped+=("$name")
                 cmd=()
             fi
         fi
@@ -120,5 +122,13 @@ echo
 if [ ${#failed[@]} -gt 0 ]; then
     echo "FAILED: ${failed[*]}"
     exit 1
+fi
+# Said out loud, and said last: a --ui run on a machine with no display
+# skips every windowed file and would otherwise report the same "ALL
+# TESTS PASSED" as one that ran them.
+if [ ${#skipped[@]} -gt 0 ]; then
+    echo "SKIPPED (no display and no xvfb-run): ${skipped[*]}"
+    echo "THE TESTS THAT RAN PASSED"
+    exit 0
 fi
 echo "ALL TESTS PASSED"
