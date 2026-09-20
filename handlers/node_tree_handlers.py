@@ -4,7 +4,7 @@ from ..common import save_image
 from ..compiler.bake import PS_IMAGE_KEY
 from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty, ps_trees,
                              unblock_compile)
-from ..filters import freshness, layer_job
+from ..filters import derived, freshness, layer_job
 from ..gpu_passes import surface, texel_map
 from ..nodetree.tree import subscribe_name_changes
 from ..selection import overlay as selection_overlay
@@ -15,16 +15,24 @@ from ..undo import pixels
 
 
 def paint_system_images() -> set[bpy.types.Image]:
-    """Images the addon created and every image a Paint System node points at."""
-    images = {image for image in bpy.data.images if image.get(PS_IMAGE_KEY)}
+    """Images the addon created and every image a Paint System node points at.
+
+    A filter result is in only while a layer still points at it. An orphan
+    is a full-resolution image nothing can reach, waiting for the next
+    file read to sweep it; packing it would carry it into the next
+    ``.blend`` instead (PS-057).
+    """
+    pointed_at = set()
     for tree in ps_trees():
         for node in tree.nodes:
             for prop in node.bl_rna.properties:
                 if prop.type == 'POINTER' and prop.fixed_type.identifier == 'Image':
                     image = getattr(node, prop.identifier)
                     if image is not None:
-                        images.add(image)
-    return images
+                        pointed_at.add(image)
+    made = {image for image in bpy.data.images
+            if image.get(PS_IMAGE_KEY) and image.get(derived.OWNER_KEY) is None}
+    return made | pointed_at
 
 
 @bpy.app.handlers.persistent
@@ -90,6 +98,10 @@ def on_load_post(*args):
     unblock_compile()
     subscribe_name_changes()
     cleanup_orphan_artifacts()
+    # A file read is the one moment with no undo stack for a removal to
+    # break, which is why the filter results are swept here and nowhere
+    # else (PS-057).
+    derived.cleanup_orphan_derived()
     # Reading a file frees the undo stack and everything the addon pushed
     # onto it (PS-090).
     pixels.forget_undo_state()

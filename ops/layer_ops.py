@@ -1,3 +1,4 @@
+import bpy
 from bpy.types import Operator
 from bpy.props import EnumProperty
 from bpy.utils import register_classes_factory
@@ -51,6 +52,18 @@ class PAINTSYSTEM_OT_add_layer(Operator):
             self.layout.prop(self, name)
 
 
+def _filter_results(node) -> list:
+    """The derived images *node* and its content own, if any (PS-057).
+
+    A filter result is the layer's content rather than a re-derivable
+    artifact, so removing the layer removes it. A cache image is not in
+    here on purpose: it can always be baked again.
+    """
+    nodes = [node, *descendants(node)] if node.is_folder else [node]
+    return [layer.derived_image for layer in nodes
+            if getattr(layer, 'ps_type', "") == 'FILTER' and layer.derived_image is not None]
+
+
 class PAINTSYSTEM_OT_remove_layer(Operator):
     bl_idname = "paint_system.remove_layer"
     bl_label = "Remove Layer"
@@ -67,6 +80,7 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
         node = parse_context(context).layer
         self.layer_name = node.name
         self.content_count = len(descendants(node)) if node.is_folder else 0
+        self.filter_count = len(_filter_results(node))
         self.undo_restores = undo_restores_data(context)
         return context.window_manager.invoke_props_dialog(self, confirm_text="Remove")
 
@@ -77,6 +91,10 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
             layout.label(text="The layer inside it goes with it.")
         elif self.content_count > 1:
             layout.label(text=f"The {self.content_count} layers inside it go with it.")
+        if self.filter_count == 1:
+            layout.label(text="Its filtered image goes with it.")
+        elif self.filter_count > 1:
+            layout.label(text=f"The {self.filter_count} filtered images go with it.")
         if not self.undo_restores:
             layout.label(text="Undo cannot bring it back in this mode.")
 
@@ -91,6 +109,15 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
         after = [name for name in rows[position:] if name not in gone]
         before = [name for name in rows[:position] if name not in gone]
         next_active = after[0] if after else (before[-1] if before else None)
+
+        # Before the node goes: once its pointer is gone the image is an
+        # orphan nothing can name, and only the next file read would
+        # sweep it. Here rather than in ``Node.free`` because ``free``
+        # also runs on undo-driven teardown, while this operator carries
+        # UNDO -- so the step records the node and the packed image
+        # together and one Ctrl+Z brings back both (PS-057).
+        for image in _filter_results(node):
+            bpy.data.images.remove(image)
 
         tree.remove_layer_node(node)
         if next_active is not None:

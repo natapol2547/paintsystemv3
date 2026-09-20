@@ -297,6 +297,72 @@ Baking builds a temporary group with the node's live Color/Alpha outputs,
 routes it through an Emission shader in a throwaway material, Cycles-bakes
 color and alpha into the cache image, then stores the subtree hash.
 
+## Filter layers (`filters/`)
+
+A filter layer (PS-057) filters the layers below it and stays editable. It
+is an ordinary layer node whose `emit_source` reads a **derived image** it
+owns and whose `emit_blend` *replaces* the stack below with those pixels
+instead of compositing over them, so the layer's Opacity — labelled Amount
+— fades between the filtered and the unfiltered picture with no rebuild.
+A filter layer is never cached; the derived image is the cache.
+
+The pipeline is one generator, `filters/layer_build.py::steps`:
+
+1. `layer_plan.resolve_input` decides how the stack below can be turned
+   into pixels, and refuses before any video memory is spent.
+2. `filters/composite.py` draws that stack into one texture on the GPU.
+3. The layer's kind (`filters/layer_specs.py`) runs over it, followed by
+   an sRGB encode.
+4. The result is read back a band of rows at a time.
+5. The last unit writes it into the image, packs it and stamps it.
+
+Only the last unit writes anything, which is what makes a build
+cancellable: the viewport shows the previous result until the commit, and
+abandoning the generator gives its textures back.
+
+**Colour space.** Everything up to the encode is scene linear and straight
+alpha, which is what the render engines feed a shader. The derived image is
+byte sRGB like a painted layer image, so a dedicated pass encodes on the way
+out and the compiled Image Texture node decodes back to what was filtered.
+
+**Stamps live on the image, not the node** (`filters/derived.py`), for the
+reason the compiler already gives for the artifact: whichever copy of each
+undo restores, the stamp sits next to the pixels it describes. The commit
+packs before it stamps, because an unpacked generated image loses its
+pixels to `image.copy()` and to undo-then-redo while its ID properties
+survive both.
+
+**Freshness** has two halves, because neither covers the other:
+
+- *Structural* (`filters/freshness.py`). The build stamps a fingerprint of
+  what it was asked for — the subtree hash below, the filter and its
+  parameters, the resolution, the UV map, the addon version — as named
+  parts, and every compile recomputes it and compares. The parts stay
+  separate so a disagreement can name which one moved.
+- *Pixels*. `compiler/ir.py` reduces a datablock to its name, so painting
+  into an image below changes no hash at all.
+  `freshness.note_image_changed` closes that from the depsgraph and from
+  `undo/pixels.py`, and marks every built filter layer reading that image.
+
+A filter layer's parameters, resolution, UV map and bookkeeping are all in
+`ps_unhashed_props`, so dragging a slider invalidates no cache above it.
+What consumers above must see — "these pixels are a different picture now" —
+comes back through `hash_parts`, which returns the build stamp.
+
+**Rebuilding** runs the same generator two ways.
+`PAINTSYSTEM_OT_rebuild_filter_layer` drives it from a modal with a
+progress bar and Escape to cancel. `filters/layer_job.py` drives it from a
+`bpy.app.timers` tick, debounced, so a stroke below a filter layer
+refreshes it shortly after the stroke ends. The automatic path is gated to
+the GPU composite and to a GPU context already known good; a layer needing
+a Cycles bake turns its own Auto Refresh off and says so rather than
+freezing the window from a timer.
+
+**Lifecycle.** The derived image is the layer's content, not a re-derivable
+artifact: duplicating a layer copies it, the remove-layer operator removes
+it, and `derived.cleanup_orphan_derived` sweeps what neither saw — on file
+read only, where there is no undo stack to break.
+
 ## Testing
 
 ```
