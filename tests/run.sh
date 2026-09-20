@@ -49,6 +49,7 @@ ui_tests=(
     test_selection_tools_ui.py
     test_keymaps_ui.py
     test_filters_gpu.py
+    test_filter_blend.py
     test_selection_actions.py
     test_action_bar_ui.py
 )
