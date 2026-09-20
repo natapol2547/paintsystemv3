@@ -322,6 +322,12 @@ per axis-pair, and a sigma wider than one kernel is reached by running the
 pair again. Each pass is a unit of the generator, so a wide blur stays
 cancellable. An empty list asks for the stack below unchanged.
 
+A pass whose spec sets `reads_second` gets the composite bound alongside
+the chain's own texture — the unsharp mask needs the picture the blur was
+made from, and by then the chain has overwritten it. `layer_build` holds
+the composite out of the pool for the whole chain when, and only when,
+some pass asks.
+
 Only the last unit writes anything, which is what makes a build
 cancellable: the viewport shows the previous result until the commit, and
 abandoning the generator gives its textures back.

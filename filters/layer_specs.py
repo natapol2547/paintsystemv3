@@ -78,7 +78,28 @@ BLUR = LayerFilterSpec(
     params=('blur_sigma',),
 )
 
-LAYER_FILTERS = {spec.name: spec for spec in (INVERT, BLUR)}
+def _sharpen_passes(node) -> list[tuple[FilterSpec, dict]]:
+    """Blur the stack below, then add back what the blur took away.
+
+    The combine reads the unblurred stack through `second`, which
+    `filters.layer_build` binds: by the time it runs, the chain's own
+    texture holds the blur.
+    """
+    passes = [(registry.BLUR, params)
+              for params in registry.blur_passes(node.sharpen_radius)]
+    passes.append((registry.SHARPEN, {"strength": node.sharpen_strength}))
+    return passes
+
+
+SHARPEN = LayerFilterSpec(
+    name='SHARPEN',
+    label="Sharpen",
+    description="Bring out the detail of everything below this layer",
+    passes_of=_sharpen_passes,
+    params=('sharpen_radius', 'sharpen_strength'),
+)
+
+LAYER_FILTERS = {spec.name: spec for spec in (INVERT, BLUR, SHARPEN)}
 
 
 def layer_filter_items() -> list[tuple[str, str, str]]:

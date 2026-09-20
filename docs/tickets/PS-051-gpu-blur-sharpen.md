@@ -15,9 +15,10 @@ Parameters: radius/sigma, strength.
   `registry.BLUR`. Premultiplied, so a transparent neighbour contributes
   no colour and an edge does not fade towards black, which is what v2's
   `_gaussian_blur_alpha_safe` was for.
-- Sharpen: blur pass at sigma 1.0 into a second target, then a combine
+- Sharpen: the blur passes into the chain's own target, then a combine
   pass `orig + strength * (orig - blurred)` on colour only, alpha
-  copied.
+  copied. The radius is a parameter rather than fixed at sigma 1.0,
+  since the passes are already there.
 - Both registered in PS-050 with the v2 property names so the operator
   dialogs look the same, and both available as filter-layer kinds
   (PS-057) through `filters/layer_specs.py`.
@@ -50,6 +51,22 @@ Parameters: radius/sigma, strength.
   fingerprint hashes the derived pass list rather than the node
   properties behind it, so it records what the pixels actually depend
   on.
+- **A pass can read a second texture.** `FilterSpec.reads_second` and a
+  third sampler on every filter shader, which `run_pass` binds to a 1x1
+  placeholder for the specs that do not use it. The unsharp mask needs
+  the picture the blur was made from, and by then the chain holds the
+  blur. `layer_build` keeps the composite out of the pool for the whole
+  chain when some pass asks and not otherwise, so the cost is one
+  texture and only for Sharpen.
+- **The unsharp difference is taken on the sRGB encoding**, as Invert
+  is, because a high pass on scene-linear values responds to a highlight
+  far more than to a shadow of the same visible contrast -- `strength`
+  would mean something different in each half of the picture. The blur
+  feeding it runs in linear like the Blur kind, which leaves the detail
+  as the difference between an encoded original and the encoding of a
+  linear blur. It is still exactly zero wherever the picture is flat,
+  which is the property that matters, and it saves two full passes that
+  would otherwise encode and decode around the blur.
 
 ## Measurements
 
@@ -83,13 +100,14 @@ because the pack dominates it and a blurred picture is a smaller PNG.
 - The effective sigma stops at `BLUR_MAX_EFFECTIVE_SIGMA` (42 texels).
   Bloom and glow widths are out of reach until the downsample pass
   lands.
-- Sharpen is not built yet. It needs a pass reading two textures at
-  once, which `filters/core.py` does not have: `run_pass` declares one
-  `source` sampler.
 - Blur and sharpen are filter-layer kinds only. The destructive action
   form (PS-052) needs the selection mask applied once at the end rather
   than by every pass, which `apply_filter` cannot express for a
-  multi-pass filter.
+  multi-pass filter: it runs one pass and masks inside it.
+- A pass has one `storage` constant, so a spec reading a second texture
+  needs both to hold alpha the same way. True everywhere in the layer
+  build, where every texture in the chain is straight; an action path
+  starting from a float image would have to convert.
 
 ## Acceptance
 
@@ -102,6 +120,12 @@ because the pack dominates it and a blurred picture is a smaller PNG.
   **Done.**
 - A filter layer set to Blur builds a result matching a numpy blur of
   what the same layer builds at sigma zero, within 2/255. **Done.**
+- An unsharp mask leaves a flat picture alone, leaves alpha alone, and
+  is not a filter at all at strength zero. **Done.**
+- A filter layer set to Sharpen matches the reference through the whole
+  build, and a step edge survives it -- which a combine reading its own
+  input instead of the composite would turn back into the blur.
+  **Done.**
 - ~~8K image blurs in under 2 seconds on the user's machine.~~ Withdrawn.
   PS-050 records why the speed acceptances of that generation are
   unreachable: the transport is `Image.pixels`, and PS-057's own

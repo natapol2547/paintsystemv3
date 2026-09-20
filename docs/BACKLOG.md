@@ -170,7 +170,7 @@ groups and templates (040-042), colour history (062).
 | ID | Title | Size | Depends on |
 |---|---|---|---|
 | [PS-050](tickets/PS-050-gpu-filter-framework.md) | GPU image filter framework (done, no UDIM) | L | 090 |
-| [PS-051](tickets/PS-051-gpu-blur-sharpen.md) | Gaussian blur and sharpen on the GPU (blur done as a filter layer kind) | M | 050 |
+| [PS-051](tickets/PS-051-gpu-blur-sharpen.md) | Gaussian blur and sharpen on the GPU (done as filter layer kinds, not yet as actions) | M | 050 |
 | [PS-052](tickets/PS-052-invert-fill-clear-resize.md) | Invert, fill, clear (done), resize | S | 050 |
 | [PS-053](tickets/PS-053-gpu-brush-painter.md) | Brush painter on the GPU | L | 050 009 |
 | [PS-054](tickets/PS-054-quick-edit.md) | Toggle image editor | S | 020 |

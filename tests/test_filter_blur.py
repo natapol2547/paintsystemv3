@@ -1,13 +1,13 @@
-"""The gaussian blur, against a numpy reference (PS-051).
+"""The gaussian blur and the unsharp mask on it, against numpy (PS-051).
 
-The shader is checked at two levels. The pass itself runs over a texture
-the test builds, so its arithmetic is compared with a kernel written out
-in numpy, exactly -- same truncation, same clamped edges, same
-premultiplied sum. Then a filter layer is built with it, which puts the
-composite, the two axes and the sRGB encode in one line and compares the
-result against a blur of what the same layer built at sigma zero. That
-second form is deliberate: it never models what the composite does, so it
-stays true if the composite changes.
+The shaders are checked at two levels. The passes run over a texture the
+test builds, so their arithmetic is compared with a kernel written out in
+numpy, exactly -- same truncation, same clamped edges, same premultiplied
+sum. Then a filter layer is built with each, which puts the composite,
+the passes and the sRGB encode in one line and compares the result
+against a filter of what the same layer built at sigma zero. That second
+form is deliberate: it never models what the composite does, so it stays
+true if the composite changes.
 
 The properties worth stating outright, because a blur that gets them
 wrong still looks like a blur:
@@ -17,7 +17,11 @@ wrong still looks like a blur:
 - colour does not bleed towards black across a transparent edge, because
   the sum is premultiplied;
 - a blur wider than one kernel is run again rather than widened, so the
-  schedule is checked separately from the pixels.
+  schedule is checked separately from the pixels;
+- an unsharp mask leaves a flat picture and the alpha channel alone, and
+  the combine reads the stack the blur was made from rather than the
+  blur -- which only the layer build can get wrong, because it is the
+  one that has to hold that texture out of the pool.
 
 These need a GPU context, as `tests/test_filter_build.py` explains.
 """
@@ -112,28 +116,58 @@ def blurred(straight, passes):
     return result
 
 
+def sharpened(straight, radius, strength):
+    """An unsharp mask of *straight*, as the shader computes it.
+
+    The difference is taken on the sRGB encoding of a blur that ran in
+    scene linear, which is what the pass does and why a flat picture
+    comes back unchanged either way.
+    """
+    straight = straight.astype(np.float64)
+    blur = blurred(straight, registry.blur_passes(radius))
+    original = to_srgb(straight[..., :3])
+    detail = original - to_srgb(blur[..., :3])
+    sharp = np.clip(original + strength * detail, 0.0, 1.0)
+    return np.concatenate([to_linear(sharp), straight[..., 3:4]], axis=-1)
+
+
 # -- running the pass on its own --------------------------------------------
 
 
-def run_blur(values, sigma):
-    """*values*, a ``(rows, cols, 4)`` straight array, through the real passes."""
+def upload(values):
     rows, cols = values.shape[:2]
     array = np.ascontiguousarray(values, dtype=np.float32)
-    texture = gpu.types.GPUTexture(
+    return gpu.types.GPUTexture(
         (cols, rows), format='RGBA32F',
         data=gpu.types.Buffer('FLOAT', array.size, array.ravel()))
-    passes = registry.blur_passes(sigma)
+
+
+def run_chain(values, passes):
+    """*values*, a ``(rows, cols, 4)`` straight array, through *passes*.
+
+    A pass whose spec reads the second sampler gets the array this
+    started from, which is what `filters.layer_build` binds for it.
+    """
+    rows, cols = values.shape[:2]
+    original = texture = upload(values)
     framebuffer = None
-    for params in passes:
+    for spec, params in passes:
         source = filters_core.PixelSource.from_texture(texture)
         try:
             framebuffer, texture = filters_core.run_pass(
-                registry.BLUR, source, params=params)
+                spec, source, second=original if spec.reads_second else None,
+                params=params)
         finally:
             source.release()
     if framebuffer is None:
-        return values, passes
-    return gpu_core.read_color(framebuffer, cols, rows), passes
+        return values
+    return gpu_core.read_color(framebuffer, cols, rows)
+
+
+def run_blur(values, sigma):
+    """*values* through the real blur passes, and the schedule that ran."""
+    passes = [(registry.BLUR, params) for params in registry.blur_passes(sigma)]
+    return run_chain(values, passes), [params for _, params in passes]
 
 
 def agrees(got, want, label, tol=TOL):
@@ -191,6 +225,32 @@ if available():
         check(edge[3] < 0.5 and edge[0] > 0.9 and edge[1] < 0.05,
               f"and colour does not bleed towards black: {fmt(tuple(float(v) for v in edge))}")
 
+        section("an unsharp mask")
+        step = np.zeros((32, 48, 4), dtype=np.float32)
+        step[:, 24:, :3] = 0.8
+        step[:, :24, :3] = 0.1
+        step[..., 3] = 1.0
+        chain = [(registry.BLUR, params) for params in registry.blur_passes(2.0)]
+        chain.append((registry.SHARPEN, {"strength": 1.5}))
+        check(chain[-1][0].reads_second,
+              "the combine asks for the picture the blur was made from")
+        got = run_chain(step, chain)
+        agrees(got, sharpened(step, 2.0, 1.5), "matches the reference unsharp mask")
+        check(float(got[16, 24, 0]) > 0.8 and float(got[16, 23, 0]) < 0.1,
+              "with a halo: the bright side overshoots and the dark side undershoots")
+
+        flat_sharp = run_chain(flat, chain)
+        agrees(flat_sharp, flat, "and a flat picture comes back unchanged")
+
+        section("what sharpening leaves alone")
+        edged = np.zeros((32, 32, 4), dtype=np.float32)
+        edged[:, :16] = (0.9, 0.2, 0.2, 1.0)
+        none = [(registry.SHARPEN, {"strength": 0.0})]
+        agrees(run_chain(edged, none), edged, "strength zero is not a filter at all")
+        got = run_chain(edged, chain)
+        agrees(got[..., 3], edged[..., 3],
+               "alpha is the original's, so the silhouette gets no halo")
+
         section("a filter layer built with it")
         tree = bpy.data.node_groups.new("Blur", 'PaintSystemNodeTree')
         tree.initialize()
@@ -238,6 +298,27 @@ if available():
         check(bool(np.all(np.diff(column) >= -1.0 / 255.0)) and column[0] < 0.05
               and column[-1] > 0.95,
               "the edge came out as a ramp rather than a step")
+
+        section("a filter layer that sharpens")
+        # The one thing the passes cannot be checked for on their own:
+        # `layer_build` has to hold the composite out of the pool for the
+        # whole chain, or the combine reads a texture the blur overwrote.
+        node.filter_type = 'SHARPEN'
+        node.sharpen_radius = 2.0
+        node.sharpen_strength = 1.5
+        core.flush_now()
+        built = layer_build.build_layer(bpy.context, tree, node)
+        got = np.empty(SIZE * SIZE * 4, dtype=np.float32)
+        built.pixels.foreach_get(got)
+        got = got.reshape(SIZE, SIZE, 4)
+        want = sharpened(linear, 2.0, 1.5)
+        want = np.concatenate([to_srgb(want[..., :3]), want[..., 3:4]], axis=-1)
+        agrees(got, want, "matches the reference through the whole build", tol=BYTE_TOL)
+        # A combine reading its own input rather than the composite would
+        # give the blur back, which at these two columns is half grey.
+        check(float(got[SIZE // 2, SIZE // 2 - 1, 0]) < 0.05
+              and float(got[SIZE // 2, SIZE // 2, 0]) > 0.95,
+              "and the step survived, so the combine read the stack and not the blur of it")
 
     except Exception:
         traceback.print_exc()

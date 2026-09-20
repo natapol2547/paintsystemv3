@@ -144,6 +144,13 @@ class FilterSpec:
     name: str
     apply_source: str
     params: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    # Whether `apply` reads the `second` sampler as well as `source`. An
+    # unsharp mask needs the picture it started from alongside the blur
+    # of it, and by then the chain has overwritten the first. The caller
+    # says which texture that is; the spec only says that it wants one.
+    # There is one `storage` for the pass, so the second texture has to
+    # hold alpha the same way the source does.
+    reads_second: bool = False
 
 
 def storage_of(image: bpy.types.Image) -> int:
@@ -184,6 +191,7 @@ def _shader(spec: FilterSpec):
         info.push_constant(kind, name)
     info.sampler(0, 'FLOAT_2D', "source")
     info.sampler(1, 'FLOAT_2D', "mask")
+    info.sampler(2, 'FLOAT_2D', "second")
     info.vertex_in(0, 'VEC2', "position")
     info.vertex_out(interface)
     info.fragment_out(0, 'VEC4', "out_color")
@@ -194,11 +202,13 @@ def _shader(spec: FilterSpec):
     return _shaders[spec.name]
 
 
-def _no_mask():
-    """A 1x1 zero texture for the mask sampler when the pass uses none.
+def _unused_sampler():
+    """A 1x1 zero texture for a sampler the pass does not use.
 
     A sampler an info declares must be bound even where the shader never
-    reads it.
+    reads it. One texture serves both the mask and the second source: a
+    GLSL sampler does not care what format is behind it, and neither
+    shader reads this one.
     """
     global _placeholder
     if _placeholder is None:
@@ -268,12 +278,15 @@ class PixelSource:
 
 
 def run_pass(spec: FilterSpec, source: PixelSource, target=None, *, mask=None,
+             second=None,
              params: dict | None = None) -> tuple[gpu.types.GPUFrameBuffer, gpu.types.GPUTexture]:
     """Draw *spec* from *source* into *target*, a new texture by default.
 
     *mask* is an `R32F` texture the size of the source, or None to cover
-    the whole image. *params* holds a value per push constant of the
-    spec, by name.
+    the whole image. *second* is a texture the size of the source for a
+    spec whose `reads_second` is set, such as the unsharp mask reading
+    what it started from. *params* holds a value per push constant of
+    the spec, by name.
 
     Both the framebuffer and its texture come back, and both have to be
     held until the result is read: a `GPUFrameBuffer` does not keep its
@@ -305,7 +318,9 @@ def run_pass(spec: FilterSpec, source: PixelSource, target=None, *, mask=None,
                     else:
                         shader.uniform_float(name, value)
                 shader.uniform_sampler("source", source.texture)
-                shader.uniform_sampler("mask", _no_mask() if mask is None else mask)
+                shader.uniform_sampler("mask", _unused_sampler() if mask is None else mask)
+                shader.uniform_sampler("second",
+                                       _unused_sampler() if second is None else second)
                 batch.draw(shader)
                 if last < source.height:
                     # Reading one texel waits for the band, so the driver

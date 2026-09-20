@@ -3,7 +3,9 @@
 
 Each one defines ``vec4 apply(ivec2 texel, vec4 c)`` over straight colour
 in the image's storage space; `core` handles storage, the mask and the
-write back. A later sharpen (PS-051) adds its spec here.
+write back. A spec that needs a second texture as well as the one it is
+drawing over, such as the unsharp mask, sets ``reads_second`` and the
+caller binds it.
 """
 from math import ceil
 
@@ -116,7 +118,39 @@ vec4 apply(ivec2 texel, vec4 c)
     params=(('VEC2', "direction"), ('FLOAT', "sigma"), ('INT', "radius")),
 )
 
-FILTERS = {spec.name: spec for spec in (CLEAR, FILL, INVERT, BLUR)}
+SHARPEN = FilterSpec(
+    name="sharpen",
+    apply_source="""
+/* The second half of an unsharp mask: `source` is the blur, `second` is
+   the picture it was made from, and the difference between them is the
+   detail the blur took away. Adding `strength` of it back is the
+   sharpen.
+
+   The difference is taken on the sRGB encoding, as `invert` does and
+   for the same reason: a high pass on scene-linear values responds to a
+   highlight far more than to a shadow of the same visible contrast, so
+   `strength` would mean something different in each half of the
+   picture. The blur itself ran in linear, which leaves this the
+   difference between an encoded original and the encoding of a linear
+   blur -- still zero wherever the picture is flat, which is the
+   property that matters.
+
+   Alpha is the original's. Sharpening it would carve a halo out of the
+   silhouette rather than out of the detail. */
+vec4 apply(ivec2 texel, vec4 c)
+{
+  vec4 original = stored_to_straight(texelFetch(second, texel, 0));
+  vec3 blurred = ps_to_srgb(clamp(c.rgb, 0.0, 1.0));
+  vec3 sharp = ps_to_srgb(clamp(original.rgb, 0.0, 1.0));
+  sharp = clamp(sharp + strength * (sharp - blurred), 0.0, 1.0);
+  return vec4(ps_to_linear(sharp), original.a);
+}
+""",
+    params=(('FLOAT', "strength"),),
+    reads_second=True,
+)
+
+FILTERS = {spec.name: spec for spec in (CLEAR, FILL, INVERT, BLUR, SHARPEN)}
 
 
 def blur_passes(sigma: float) -> list[dict]:

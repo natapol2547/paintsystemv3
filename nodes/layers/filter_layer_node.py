@@ -67,7 +67,8 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # dragging a blur slider would invalidate every node cache and channel
     # bake above the layer before a single pixel had changed.
     ps_unhashed_props = (
-        'filter_type', 'invert_alpha', 'blur_sigma', 'resolution', 'uv_map', 'auto_refresh',
+        'filter_type', 'invert_alpha', 'blur_sigma', 'sharpen_radius', 'sharpen_strength',
+        'resolution', 'uv_map', 'auto_refresh',
         'derived_image', 'derived_stale_reason', 'derived_stale_pixels', 'derived_error',
     )
 
@@ -84,6 +85,16 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         description="Width of the blur, in pixels of the image this layer builds. "
                     "A layer set to a higher resolution therefore blurs less of "
                     "the picture for the same number")
+
+    sharpen_radius: FloatProperty(
+        name="Radius", default=1.0, min=0.0, max=16.0,
+        subtype='PIXEL', update=mark_tree_dirty,
+        description="How far from an edge the detail to bring out is, in pixels "
+                    "of the image this layer builds")
+    sharpen_strength: FloatProperty(
+        name="Strength", default=1.0, min=0.0, soft_max=3.0, max=10.0,
+        update=mark_tree_dirty,
+        description="How much of that detail to add back")
 
     resolution: EnumProperty(
         name="Resolution", items=RESOLUTION_ITEMS, default='2048',

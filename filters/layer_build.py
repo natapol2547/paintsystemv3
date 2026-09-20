@@ -115,11 +115,20 @@ def steps(context, tree, node, *, plan=None):
         # Empty for a kind whose parameters ask for nothing, such as a
         # blur set to zero; the stack below is then the result.
         passes = kind.passes_of(node)
+        # An unsharp mask reads the stack below alongside the blur of it,
+        # so the composite is held out of the pool for the whole chain
+        # rather than reused by the second pass. One texture more, and
+        # only for a kind that asks.
+        original = current if any(spec.reads_second for spec, _ in passes) else None
         for index, (spec, params) in enumerate(passes):
             yield f"{kind.label}: filtering", 0.2 + 0.1 * index / len(passes)
-            framebuffer, result = _draw(spec, current, params, pool)
-            pool.release(current)
+            framebuffer, result = _draw(spec, current, params, pool,
+                                        second=original if spec.reads_second else None)
+            if current is not original:
+                pool.release(current)
             current = result
+        if original is not None and current is not original:
+            pool.release(original)
         yield f"{kind.label}: filtering", 0.3
         framebuffer, encoded = _draw(ENCODE_SRGB, current, {}, pool)
         pool.release(current)
@@ -137,7 +146,7 @@ def steps(context, tree, node, *, plan=None):
     return commit(tree, node, plan, values, size)
 
 
-def _draw(spec: FilterSpec, texture, params: dict, pool):
+def _draw(spec: FilterSpec, texture, params: dict, pool, *, second=None):
     """Run *spec* over *texture* into a target from *pool*.
 
     The framebuffer comes back with the target because `run_pass` says
@@ -146,7 +155,7 @@ def _draw(spec: FilterSpec, texture, params: dict, pool):
     """
     source = PixelSource.from_texture(texture)
     try:
-        return run_pass(spec, source, pool.acquire(), params=params)
+        return run_pass(spec, source, pool.acquire(), second=second, params=params)
     finally:
         # The texture belongs to the pool; this only drops the reference
         # the source was holding to it.
