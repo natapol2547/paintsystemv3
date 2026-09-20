@@ -116,19 +116,23 @@ def blurred(straight, passes):
     return result
 
 
-def sharpened(straight, radius, strength):
+def sharpened(straight, radius, strength, encode=True):
     """An unsharp mask of *straight*, as the shader computes it.
 
-    The difference is taken on the sRGB encoding of a blur that ran in
-    scene linear, which is what the pass does and why a flat picture
-    comes back unchanged either way.
+    With *encode*, the difference is taken on the sRGB encoding of a blur
+    that ran in scene linear, which is what the layer build asks for.
+    Without it the values are already an encoding -- a byte layer's own
+    pixels -- and the difference is taken as it stands.
     """
     straight = straight.astype(np.float64)
     blur = blurred(straight, registry.blur_passes(radius))
-    original = to_srgb(straight[..., :3])
-    detail = original - to_srgb(blur[..., :3])
-    sharp = np.clip(original + strength * detail, 0.0, 1.0)
-    return np.concatenate([to_linear(sharp), straight[..., 3:4]], axis=-1)
+    if encode:
+        original, low = to_srgb(straight[..., :3]), to_srgb(blur[..., :3])
+    else:
+        original, low = straight[..., :3], blur[..., :3]
+    sharp = np.clip(original + strength * (original - low), 0.0, 1.0)
+    return np.concatenate([to_linear(sharp) if encode else sharp,
+                           straight[..., 3:4]], axis=-1)
 
 
 # -- running the pass on its own --------------------------------------------
@@ -230,8 +234,8 @@ if available():
         step[:, 24:, :3] = 0.8
         step[:, :24, :3] = 0.1
         step[..., 3] = 1.0
-        chain = [(registry.BLUR, params) for params in registry.blur_passes(2.0)]
-        chain.append((registry.SHARPEN, {"strength": 1.5}))
+        blur_part = [(registry.BLUR, params) for params in registry.blur_passes(2.0)]
+        chain = blur_part + [(registry.SHARPEN, {"strength": 1.5, "encode": 1})]
         check(chain[-1][0].reads_second,
               "the combine asks for the picture the blur was made from")
         got = run_chain(step, chain)
@@ -242,10 +246,16 @@ if available():
         flat_sharp = run_chain(flat, chain)
         agrees(flat_sharp, flat, "and a flat picture comes back unchanged")
 
+        # What an action over a byte layer runs: its pixels are already
+        # an encoding, so taking one of them would go round twice.
+        plain = blur_part + [(registry.SHARPEN, {"strength": 1.5, "encode": 0})]
+        agrees(run_chain(step, plain), sharpened(step, 2.0, 1.5, encode=False),
+               "and without the encode the difference is taken as the values stand")
+
         section("what sharpening leaves alone")
         edged = np.zeros((32, 32, 4), dtype=np.float32)
         edged[:, :16] = (0.9, 0.2, 0.2, 1.0)
-        none = [(registry.SHARPEN, {"strength": 0.0})]
+        none = [(registry.SHARPEN, {"strength": 0.0, "encode": 1})]
         agrees(run_chain(edged, none), edged, "strength zero is not a filter at all")
         got = run_chain(edged, chain)
         agrees(got[..., 3], edged[..., 3],

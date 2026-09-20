@@ -140,13 +140,13 @@ SHARPEN = FilterSpec(
 vec4 apply(ivec2 texel, vec4 c)
 {
   vec4 original = stored_to_straight(texelFetch(second, texel, 0));
-  vec3 blurred = ps_to_srgb(clamp(c.rgb, 0.0, 1.0));
-  vec3 sharp = ps_to_srgb(clamp(original.rgb, 0.0, 1.0));
+  vec3 blurred = encode != 0 ? ps_to_srgb(clamp(c.rgb, 0.0, 1.0)) : c.rgb;
+  vec3 sharp = encode != 0 ? ps_to_srgb(clamp(original.rgb, 0.0, 1.0)) : original.rgb;
   sharp = clamp(sharp + strength * (sharp - blurred), 0.0, 1.0);
-  return vec4(ps_to_linear(sharp), original.a);
+  return vec4(encode != 0 ? ps_to_linear(sharp) : sharp, original.a);
 }
 """,
-    params=(('FLOAT', "strength"),),
+    params=(('FLOAT', "strength"), ('INT', "encode")),
     reads_second=True,
 )
 

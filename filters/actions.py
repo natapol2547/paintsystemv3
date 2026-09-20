@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Clear, Fill and Invert Colors on the active layer (PS-052).
+"""Clear, Fill, Invert, Blur and Sharpen on the active layer (PS-052, PS-051).
 
 An action edits exactly what the brush could paint: the active layer's
 image, limited to the live selection, and never a layer the brush cannot
@@ -17,15 +17,21 @@ The scope rule, which is the safety rule:
   so these actions part company with that rule here.
 
 Each action is one write through `undo.pixels`, so one Ctrl+Z takes it
-back, and it changes no document data in the same step (PS-090).
+back, and it changes no document data in the same step (PS-090). An
+action of several passes is still one write: `core.apply_passes` runs the
+chain on the GPU and reads back once.
 """
 from ..selection import raster
 from . import brush_color, core, registry
 
 CLEAR, FILL, INVERT = 'CLEAR', 'FILL', 'INVERT'
+BLUR, SHARPEN = 'BLUR', 'SHARPEN'
 
 NOTHING_COVERED = "The selection covers no pixels of this layer"
 """Refusal of a selection that is live but misses the layer."""
+
+NOTHING_TO_DO = "That radius is too small to change a pixel"
+"""Refusal of a blur or a sharpen whose radius rounds to nothing."""
 
 
 class ActionTarget:
@@ -139,30 +145,48 @@ def selection_mask(target: ActionTarget):
     return mask.texture
 
 
-def _spec_and_params(context, action: str, target: ActionTarget, channels):
+def _passes(context, action: str, target: ActionTarget, channels, sigma, strength):
+    """The passes *action* runs over the layer, in order.
+
+    A pass sees what the image stores, so `encode` says whether that is
+    scene linear and needs its sRGB encoding taken first. A byte layer
+    already holds one.
+    """
     if action == CLEAR:
-        return registry.CLEAR, {}
+        return [(registry.CLEAR, {})]
     if action == FILL:
         colour = brush_color.stored_fill_color(context, target.image)
-        return registry.FILL, {"color": (*colour, 1.0),
-                               "lock_alpha": int(target.layer.lock_alpha)}
+        return [(registry.FILL, {"color": (*colour, 1.0),
+                                 "lock_alpha": int(target.layer.lock_alpha)})]
     if action == INVERT:
-        return registry.INVERT, {
+        return [(registry.INVERT, {
             "channels": tuple(1.0 if on else 0.0 for on in channels),
             # A float layer holds scene linear; inverting its sRGB
             # encoding is what makes it match a byte layer.
             "encode": int(target.image.is_float),
-        }
+        })]
+    blur = [(registry.BLUR, params) for params in registry.blur_passes(sigma)]
+    if action == BLUR:
+        return blur
+    if action == SHARPEN:
+        # Without a blur there is no detail to tell apart from the
+        # picture, so the combine would subtract the layer from itself.
+        if not blur:
+            return []
+        return blur + [(registry.SHARPEN, {"strength": strength,
+                                           "encode": int(target.image.is_float)})]
     raise ValueError(f"Unknown action {action!r}")
 
 
-def run_action(context, action: str, *, channels=(True, True, True, False)) -> bool:
+def run_action(context, action: str, *, channels=(True, True, True, False),
+               sigma: float = 0.0, strength: float = 1.0) -> bool:
     """Run *action* on the active layer, and report whether Ctrl+Z will undo it.
 
     Raises `Refused` when it cannot run; nothing is written then.
     """
     target = resolve_target(context, action)
     mask = selection_mask(target)
-    spec, params = _spec_and_params(context, action, target, channels)
-    return core.apply_filter(spec, target.image, core.LayerImage(target.image),
-                             mask=mask, params=params)
+    passes = _passes(context, action, target, channels, sigma, strength)
+    if not passes:
+        raise core.Refused(NOTHING_TO_DO)
+    return core.apply_passes(passes, target.image, core.LayerImage(target.image), mask=mask)

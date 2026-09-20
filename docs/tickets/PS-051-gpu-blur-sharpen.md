@@ -20,8 +20,11 @@ Parameters: radius/sigma, strength.
   copied. The radius is a parameter rather than fixed at sigma 1.0,
   since the passes are already there.
 - Both registered in PS-050 with the v2 property names so the operator
-  dialogs look the same, and both available as filter-layer kinds
-  (PS-057) through `filters/layer_specs.py`.
+  dialogs look the same, both available as filter-layer kinds (PS-057)
+  through `filters/layer_specs.py`, and both available as destructive
+  actions (PS-052) through `ops/pixel_ops.py`. The action form asks for
+  a radius in a dialog before it runs, because running it again is a
+  second full pass over the layer rather than a redo of a cheap one.
 
 ### What was built differently
 
@@ -67,6 +70,16 @@ Parameters: radius/sigma, strength.
   linear blur. It is still exactly zero wherever the picture is flat,
   which is the property that matters, and it saves two full passes that
   would otherwise encode and decode around the blur.
+- **A masked action masks once, at the end.** `core.apply_passes` runs
+  one pass with the selection mask inline, as `apply_filter` always did,
+  and several passes unmasked followed by a `_COMPOSE` pass that lays
+  the chain's result over the original through the mask. Masking every
+  pass would be wrong rather than slow: pass two would read texels the
+  mask had already faded back towards the original and blur those, so
+  the result inside a soft edge would depend on how many passes the
+  sigma happened to need. Composing once also keeps the promise a
+  destructive edit has to keep, which is that a texel the selection
+  leaves out comes back byte for byte.
 
 ## Measurements
 
@@ -100,10 +113,6 @@ because the pack dominates it and a blurred picture is a smaller PNG.
 - The effective sigma stops at `BLUR_MAX_EFFECTIVE_SIGMA` (42 texels).
   Bloom and glow widths are out of reach until the downsample pass
   lands.
-- Blur and sharpen are filter-layer kinds only. The destructive action
-  form (PS-052) needs the selection mask applied once at the end rather
-  than by every pass, which `apply_filter` cannot express for a
-  multi-pass filter: it runs one pass and masks inside it.
 - A pass has one `storage` constant, so a spec reading a second texture
   needs both to hold alpha the same way. True everywhere in the layer
   build, where every texture in the chain is straight; an action path
@@ -126,6 +135,11 @@ because the pack dominates it and a blurred picture is a smaller PNG.
   build, and a step edge survives it -- which a combine reading its own
   input instead of the composite would turn back into the blur.
   **Done.**
+- Blur and Sharpen run as destructive actions, and a selection stops
+  them: every texel it leaves out comes back byte for byte, and a
+  radius that rounds to nothing refuses by name instead of writing the
+  layer back over itself. **Done** --
+  `tests/test_selection_actions.py`.
 - ~~8K image blurs in under 2 seconds on the user's machine.~~ Withdrawn.
   PS-050 records why the speed acceptances of that generation are
   unreachable: the transport is `Image.pixels`, and PS-057's own

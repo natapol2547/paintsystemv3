@@ -1,18 +1,23 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Clear, Fill and Invert Colors as operators (PS-052).
+"""Clear, Fill, Invert, Blur and Sharpen as operators (PS-052, PS-051).
 
-The work is in `filters.actions`; these three wrap it in Blender's report
-and progress. None of them takes the `UNDO` option: the pixel write
-pushes an image undo step of its own, and a memfile step on top of it
-would cost a second Ctrl+Z (`undo.pixels`).
+The work is in `filters.actions`; these wrap it in Blender's report and
+progress. None of them takes the `UNDO` option: the pixel write pushes an
+image undo step of its own, and a memfile step on top of it would cost a
+second Ctrl+Z (`undo.pixels`).
+
+Blur and Sharpen open their dialog first, because a radius is not
+something to guess at and running them again is a second full pass over
+the layer rather than a redo of a cheap one.
 """
-from bpy.props import BoolProperty
+from bpy.props import BoolProperty, FloatProperty
 from bpy.types import Operator
 from bpy.utils import register_classes_factory
 
 from ..context import get_active_tree
 from ..filters import actions
 from ..filters.core import Refused
+from ..filters.registry import BLUR_MAX_EFFECTIVE_SIGMA
 from ..gpu_passes.core import gpu_known
 
 
@@ -113,10 +118,52 @@ class PAINTSYSTEM_OT_invert_pixels(PixelAction, Operator):
         return {"channels": (self.invert_r, self.invert_g, self.invert_b, self.invert_a)}
 
 
+class PAINTSYSTEM_OT_blur_pixels(PixelAction, Operator):
+    bl_idname = "paint_system.blur_pixels"
+    bl_label = "Blur"
+    bl_description = ("Blur the selected part of the active layer, "
+                      "or all of it when nothing is selected")
+    action = actions.BLUR
+
+    radius: FloatProperty(
+        name="Radius", default=4.0, min=0.0, max=BLUR_MAX_EFFECTIVE_SIGMA,
+        subtype='PIXEL', description="Width of the blur, in pixels of this layer's image")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def action_params(self, context):
+        return {"sigma": self.radius}
+
+
+class PAINTSYSTEM_OT_sharpen_pixels(PixelAction, Operator):
+    bl_idname = "paint_system.sharpen_pixels"
+    bl_label = "Sharpen"
+    bl_description = ("Bring out the detail of the selected part of the active layer, "
+                      "or all of it when nothing is selected")
+    action = actions.SHARPEN
+
+    radius: FloatProperty(
+        name="Radius", default=1.0, min=0.0, max=16.0, subtype='PIXEL',
+        description="How far from an edge the detail to bring out is, "
+                    "in pixels of this layer's image")
+    strength: FloatProperty(
+        name="Strength", default=1.0, min=0.0, soft_max=3.0, max=10.0,
+        description="How much of that detail to add back")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def action_params(self, context):
+        return {"sigma": self.radius, "strength": self.strength}
+
+
 classes = (
     PAINTSYSTEM_OT_clear_pixels,
     PAINTSYSTEM_OT_fill_pixels,
     PAINTSYSTEM_OT_invert_pixels,
+    PAINTSYSTEM_OT_blur_pixels,
+    PAINTSYSTEM_OT_sharpen_pixels,
 )
 
 register, unregister = register_classes_factory(classes)

@@ -173,7 +173,12 @@ def test_the_menu_draws():
         prop=lambda *args, **kwargs: drawn.append(args[1]),
     )
     menu.draw(SimpleNamespace(layout=layout), bpy.context)
-    check(drawn == ["paint_system.select_all"], f"it drew {drawn}")
+    # Blur and Sharpen live here rather than on the bar because both open
+    # a dialog, and a gizmo that opens one is not the one-click thing the
+    # bar is for.
+    check(drawn == ["paint_system.select_all",
+                    "paint_system.blur_pixels",
+                    "paint_system.sharpen_pixels"], f"it drew {drawn}")
 
 
 for test in (test_the_bar_avoids_the_other_regions,

@@ -364,6 +364,22 @@ class ResultImage:
         return True
 
 
+_COMPOSE = FilterSpec(
+    name="compose",
+    apply_source="""
+/* Become the second texture. On its own that is a copy; run with a mask
+   it is how a filter of several passes is limited to a selection, which
+   `apply_passes` explains. It lives here rather than in `registry`
+   because it is part of the masking and not a filter anyone chooses. */
+vec4 apply(ivec2 texel, vec4 c)
+{
+  return stored_to_straight(texelFetch(second, texel, 0));
+}
+""",
+    reads_second=True,
+)
+
+
 def apply_filter(spec: FilterSpec, image: bpy.types.Image, output, *, mask=None,
                  params: dict | None = None) -> bool:
     """Run *spec* over *image* and give the result to *output*.
@@ -371,9 +387,52 @@ def apply_filter(spec: FilterSpec, image: bpy.types.Image, output, *, mask=None,
     Returns what the output reports: for `LayerImage`, whether the write
     reached Blender's undo stack.
     """
+    return apply_passes([(spec, params or {})], image, output, mask=mask)
+
+
+def apply_passes(passes, image: bpy.types.Image, output, *, mask=None) -> bool:
+    """Run *passes* over *image* in order and give the result to *output*.
+
+    *passes* is a list of ``(spec, push constants)``. A spec whose
+    `reads_second` is set reads the image's own values, which is what an
+    unsharp mask needs: by the time the combine runs, the chain holds the
+    blur.
+
+    The mask is where this is more than a loop. A single pass takes it
+    directly, which keeps a masked Invert exactly ``255 - k`` inside the
+    selection and bit-identical outside it. Several passes cannot: a
+    masked blur would blend each pass against the half-filtered picture
+    it was drawn from rather than against the layer, so the passes run
+    unmasked and one more pass composes the result over the original
+    through the mask. The blending is the same either way -- it is
+    `_MAIN` doing it in both -- so the edge of a selection behaves the
+    same for a blur as for a fill.
+    """
     source = PixelSource.from_image(image)
     try:
-        framebuffer, target = run_pass(spec, source, mask=mask, params=params)
+        original = source.texture
+        current = original
+        framebuffer = None
+        # One pass carries the mask itself; several compose at the end.
+        inline_mask = mask if len(passes) == 1 else None
+        for spec, params in passes:
+            step = PixelSource.from_texture(current, storage=source.storage)
+            try:
+                framebuffer, current = run_pass(
+                    spec, step, mask=inline_mask,
+                    second=original if spec.reads_second else None, params=params)
+            finally:
+                step.release()
+        if mask is not None and inline_mask is None:
+            step = PixelSource.from_texture(original, storage=source.storage)
+            try:
+                framebuffer, current = run_pass(_COMPOSE, step, mask=mask, second=current)
+            finally:
+                step.release()
+        if framebuffer is None:
+            # No passes at all, so nothing was written and there is
+            # nothing for an undo step to take back.
+            return True
         values = read_color(framebuffer, source.width, source.height)
         return output.commit(values)
     finally:

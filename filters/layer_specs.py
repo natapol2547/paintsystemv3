@@ -87,7 +87,9 @@ def _sharpen_passes(node) -> list[tuple[FilterSpec, dict]]:
     """
     passes = [(registry.BLUR, params)
               for params in registry.blur_passes(node.sharpen_radius)]
-    passes.append((registry.SHARPEN, {"strength": node.sharpen_strength}))
+    # The stack below arrives scene linear, so the difference is taken on
+    # its sRGB encoding, as Invert's is and for the same reason.
+    passes.append((registry.SHARPEN, {"strength": node.sharpen_strength, "encode": 1}))
     return passes
 
 

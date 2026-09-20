@@ -1,4 +1,4 @@
-"""Clear, Fill and Invert Colors edit exactly what the brush could paint (PS-052).
+"""Clear, Fill, Invert, Blur and Sharpen edit exactly what the brush could paint (PS-052).
 
 `filters.actions` decides what an action may touch and how far the
 selection lets it reach; `ops.pixel_ops` wraps that in an operator. What
@@ -296,12 +296,68 @@ def test_a_live_cache_refuses():
     bpy.data.images.remove(baked)
 
 
+def test_blur_is_limited_to_the_selection():
+    section("a blur of several passes still stops at the selection")
+    if not available():
+        return
+    # The one thing a multi-pass action can get wrong that a single-pass
+    # one cannot: the passes run unmasked and a last one composes them
+    # over the layer through the mask, so a texel the selection leaves
+    # out has to come back byte for byte rather than nearly.
+    before = reset().reshape(SIZE, SIZE, 4)
+    t = tree()
+    t.selection.add_op('BOX', points=[(0.25, 0.25), (0.75, 0.75)])
+    mask = raster.get_mask(t.selection, raster.image_size(canvas()))
+    coverage = mask.read_bytes().astype(np.float64) / 255.0
+    check(bpy.ops.paint_system.blur_pixels(radius=3.0) == {'FINISHED'},
+          "Blur reports finished")
+    after = read().reshape(SIZE, SIZE, 4)
+
+    outside = coverage <= 0.0
+    check(outside.any() and np.array_equal(as_bytes(after[outside]),
+                                           as_bytes(before[outside])),
+          "every texel the selection leaves out is unchanged, byte for byte")
+    inside = coverage >= 1.0
+    check(inside.any() and not np.array_equal(as_bytes(after[inside]),
+                                              as_bytes(before[inside])),
+          "and the ones it covers were blurred")
+    # Random bytes vary far more from one texel to the next than a blur
+    # of them does, which is the cheap way to say a blur really happened.
+    # Only pairs with both texels fully covered, so the mask edge stays out of it.
+    pair = inside[:, :-1] & inside[:, 1:]
+    spread = np.abs(after[:, :-1, 0][pair] - after[:, 1:, 0][pair]).mean()
+    was = np.abs(before[:, :-1, 0][pair] - before[:, 1:, 0][pair]).mean()
+    check(spread < was / 2.0,
+          f"visibly: neighbouring texels differ by {spread:.3f} where they did by {was:.3f}")
+    t.selection.clear()
+
+
+def test_sharpen_runs_and_a_zero_radius_refuses():
+    section("sharpen, and the radius that would do nothing")
+    if not available():
+        return
+    before = reset()
+    check(bpy.ops.paint_system.sharpen_pixels(radius=1.5, strength=1.0) == {'FINISHED'},
+          "Sharpen reports finished")
+    check(not np.array_equal(as_bytes(read()), as_bytes(before)), "and changed the layer")
+
+    reset()
+    check(refusal(actions.BLUR, sigma=0.0) == actions.NOTHING_TO_DO,
+          "a blur of nothing refuses by name rather than running an identity kernel")
+    check(refusal(actions.SHARPEN, sigma=0.0, strength=2.0) == actions.NOTHING_TO_DO,
+          "and so does a sharpen with no radius to find detail at")
+    check(bpy.ops.paint_system.blur_pixels(radius=0.0) == {'CANCELLED'},
+          "the operator cancels rather than reporting a finished no-op")
+
+
 for test in (test_clear_covers_the_whole_layer,
              test_invert_matches_the_byte_inversion,
              test_fill_stores_the_brush_color,
              test_selection_limits_the_action,
              test_a_selection_that_misses_the_layer_does_nothing,
              test_undo_takes_one_step,
+             test_blur_is_limited_to_the_selection,
+             test_sharpen_runs_and_a_zero_radius_refuses,
              test_refusals,
              test_a_live_cache_refuses):
     guarded(test)

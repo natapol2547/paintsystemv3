@@ -162,6 +162,12 @@ class PAINTSYSTEM_MT_action_bar(Menu):
         layout = self.layout
         layout.operator("paint_system.select_all", text="Select All",
                         **icon_kwargs('SELECT_SET')).action = 'SELECT'
+        # Not buttons on the bar: both ask for a radius first, and a
+        # gizmo that opens a dialog is not the one-click thing the bar
+        # is for. Placeholder icons.
+        layout.separator()
+        layout.operator("paint_system.blur_pixels", **icon_kwargs('MOD_SMOOTH'))
+        layout.operator("paint_system.sharpen_pixels", **icon_kwargs('MOD_EDGESPLIT'))
         prefs = preferences(context)
         if prefs is None:
             return

@@ -6,8 +6,9 @@ Epic F. Size S. Milestone M3.
 
 Clear, Fill and Invert Colors shipped on 2026-09-20 as
 `filters/actions.py`, `filters/brush_color.py` and `ops/pixel_ops.py`,
-checked by `tests/test_selection_actions.py`. Resize is not done, and is
-the only part of this ticket left.
+checked by `tests/test_selection_actions.py`. Blur and Sharpen joined
+them on 2026-09-21 on the same operator surface, their passes from
+PS-051. Resize is not done, and is the only part of this ticket left.
 
 What an action covers, which is the safety rule:
 
@@ -44,7 +45,13 @@ Other decisions worth keeping:
   in `poll`; the ones that cost a read or a GPU pass are refusals in
   `execute`, so the user gets a reason rather than a dead button.
 - One Ctrl+Z takes an action back. The operators carry `{'REGISTER'}`
-  only and change no document data in the same call (PS-090).
+  only and change no document data in the same call (PS-090). An action
+  of several passes costs no more undo steps than a one-pass one: the
+  chain runs on the GPU and `core.apply_passes` reads back and writes
+  the image once.
+- Blur and Sharpen ask for a radius in a dialog before they run, unlike
+  the other three, which run on the click. A radius is not a number to
+  guess at, and trying again costs a second full pass over the layer.
 - No keyboard shortcuts: the user chose buttons and the sidebar only.
 
 They draw in the Selection section of the main panel, and in a floating
