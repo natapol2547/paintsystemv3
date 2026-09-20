@@ -316,6 +316,12 @@ The pipeline is one generator, `filters/layer_build.py::steps`:
 4. The result is read back a band of rows at a time.
 5. The last unit writes it into the image, packs it and stamps it.
 
+A kind runs a *list* of passes rather than one, because how many a filter
+needs can depend on its own parameters: a separable blur (PS-051) is two
+per axis-pair, and a sigma wider than one kernel is reached by running the
+pair again. Each pass is a unit of the generator, so a wide blur stays
+cancellable. An empty list asks for the stack below unchanged.
+
 Only the last unit writes anything, which is what makes a build
 cancellable: the viewport shows the previous result until the commit, and
 abandoning the generator gives its textures back.

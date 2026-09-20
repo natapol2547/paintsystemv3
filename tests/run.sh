@@ -52,6 +52,7 @@ ui_tests=(
     test_filter_blend.py
     test_filter_composite.py
     test_filter_build.py
+    test_filter_blur.py
     test_filter_auto.py
     test_selection_actions.py
     test_action_bar_ui.py

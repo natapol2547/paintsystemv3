@@ -1,6 +1,7 @@
 import bpy
 from bpy.types import Node
-from bpy.props import BoolProperty, EnumProperty, PointerProperty, StringProperty
+from bpy.props import (BoolProperty, EnumProperty, FloatProperty, PointerProperty,
+                       StringProperty)
 from bpy.utils import register_classes_factory
 
 from .base_layer_node import PaintSystemLayerNode, emit_image_texture
@@ -10,6 +11,7 @@ from ...compiler.library import filter_mix_group
 from ...filters.derived import FINGERPRINT_KEY, build_stamp, is_built, stamped_uv_map
 from ...filters.freshness import PIXEL_REASON, fingerprint_parts, structure_reason
 from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items, layer_filter_params
+from ...filters.registry import BLUR_MAX_EFFECTIVE_SIGMA
 from ...filters import layer_job
 from ...ops.node_tree_ops import RESOLUTION_ITEMS
 
@@ -65,7 +67,7 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # dragging a blur slider would invalidate every node cache and channel
     # bake above the layer before a single pixel had changed.
     ps_unhashed_props = (
-        'filter_type', 'invert_alpha', 'resolution', 'uv_map', 'auto_refresh',
+        'filter_type', 'invert_alpha', 'blur_sigma', 'resolution', 'uv_map', 'auto_refresh',
         'derived_image', 'derived_stale_reason', 'derived_stale_pixels', 'derived_error',
     )
 
@@ -75,6 +77,13 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     invert_alpha: BoolProperty(
         name="Invert Alpha", default=False, update=mark_tree_dirty,
         description="Invert transparency as well as colour")
+
+    blur_sigma: FloatProperty(
+        name="Blur", default=4.0, min=0.0, max=BLUR_MAX_EFFECTIVE_SIGMA,
+        subtype='PIXEL', update=mark_tree_dirty,
+        description="Width of the blur, in pixels of the image this layer builds. "
+                    "A layer set to a higher resolution therefore blurs less of "
+                    "the picture for the same number")
 
     resolution: EnumProperty(
         name="Resolution", items=RESOLUTION_ITEMS, default='2048',

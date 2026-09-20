@@ -11,17 +11,99 @@ Parameters: radius/sigma, strength.
 
 ## v3 design
 
-- Blur: separable two-pass fragment shader (horizontal, vertical),
-  kernel weights computed on the CPU for the given sigma and passed as a
-  uniform array (cap at 64 taps, downsample for larger radii). Optional
-  "wrap" edge mode for tiling textures.
-- Sharpen: blur pass at sigma 1.0 into the second target, then a combine
-  pass `orig + strength * (orig - blurred)` on colour only, alpha copied.
+- Blur: a separable fragment pass run once per axis, as
+  `registry.BLUR`. Premultiplied, so a transparent neighbour contributes
+  no colour and an edge does not fade towards black, which is what v2's
+  `_gaussian_blur_alpha_safe` was for.
+- Sharpen: blur pass at sigma 1.0 into a second target, then a combine
+  pass `orig + strength * (orig - blurred)` on colour only, alpha
+  copied.
 - Both registered in PS-050 with the v2 property names so the operator
-  dialogs look the same.
+  dialogs look the same, and both available as filter-layer kinds
+  (PS-057) through `filters/layer_specs.py`.
+
+### What was built differently
+
+- **The weights are evaluated in the shader**, not computed on the CPU
+  and uploaded. A 63-tap kernel is 256 bytes of push constant, past the
+  block a Vulkan driver is obliged to offer, and an `exp` per tap costs
+  far less than the texture fetch beside it. The shader takes `sigma`
+  and `radius` and nothing else.
+- **A wide blur is run again rather than widened.** Blurring n times
+  with sigma s is a blur with sigma `s * sqrt(n)`, so `blur_passes`
+  splits a sigma past one kernel into iterations of two passes each,
+  instead of downsampling. Downsampling is the better answer and is not
+  built: it needs a pass that reads at a different size from the one it
+  writes, which the `apply(texel, c)` contract of `filters/core.py`
+  cannot express -- `_MAIN` fetches the source at the target's own
+  coordinates. That is the follow-up, and it is what would lift the cap
+  below.
+- **No wrap edge mode.** Sampling clamps to the edge. The derived image
+  of a filter layer is a UV layout rather than a tiling pattern, and
+  wrapping would fold the far side of the map into the near one. The
+  option belongs with the tiling-texture work, not here.
+- **A kind runs a list of passes.** `LayerFilterSpec.passes_of` replaced
+  the single `filter` plus `params_of`, because the number of passes a
+  blur needs is a function of its sigma. A kind that returns an empty
+  list asks for the stack below unchanged, which is how a blur of zero
+  costs nothing rather than running an identity kernel. The build
+  fingerprint hashes the derived pass list rather than the node
+  properties behind it, so it records what the pixels actually depend
+  on.
+
+## Measurements
+
+A filter-layer rebuild over a 2048² noise source, on the probe machine
+(Blender 5.2.1, headless GPU context). Best of two after a warm-up. "GPU"
+is everything before the commit; the rest is the write and the pack,
+which PS-057 measures on its own.
+
+| Resolution | sigma 0 | sigma 4 | sigma 21 | sigma 42 |
+| --- | --- | --- | --- | --- |
+| | 0 passes | 2 passes | 2 passes | 8 passes |
+| 1024² | 17 ms | 29 ms | 59 ms | 207 ms |
+| 2048² | 55 ms | 85 ms | 249 ms | 841 ms |
+| 4096² | 260 ms | 478 ms | 1020 ms | 3351 ms |
+
+The cap comes from this table. Sixteen iterations, which is where the
+arithmetic would naturally stop, costs 3.4 s at 2048² and 13 s at 4096²
+-- not a slider anybody can drag, and hopeless on the auto-refresh path,
+which would spend that long in 0.02 s slices. Four iterations puts the
+worst case at about a second at the default resolution.
+
+The total rebuild is often *lower* at a wide sigma than at a narrow one,
+because the pack dominates it and a blurred picture is a smaller PNG.
+
+## Known gaps
+
+- Sigma is in texels of the image being built, so raising a filter
+  layer's resolution makes the same number a finer blur. Expressing it as
+  a fraction of the image needs the cap to scale with the resolution,
+  which needs the downsample pass.
+- The effective sigma stops at `BLUR_MAX_EFFECTIVE_SIGMA` (42 texels).
+  Bloom and glow widths are out of reach until the downsample pass
+  lands.
+- Sharpen is not built yet. It needs a pass reading two textures at
+  once, which `filters/core.py` does not have: `run_pass` declares one
+  `source` sampler.
+- Blur and sharpen are filter-layer kinds only. The destructive action
+  form (PS-052) needs the selection mask applied once at the end rather
+  than by every pass, which `apply_filter` cannot express for a
+  multi-pass filter.
 
 ## Acceptance
 
-- Blur of a single white pixel at sigma 2 matches a numpy reference within
-  1/255.
-- 8K image blurs in under 2 seconds on the user's machine.
+- Blur of a single white pixel at sigma 2 matches a numpy reference
+  within 1/255. **Done** -- `tests/test_filter_blur.py` matches it to
+  within 2e-4, the passes running in `RGBA32F`.
+- A flat picture blurs to itself, edges included: the weights normalise
+  and the taps past the edge clamp rather than reading zero. **Done.**
+- Colour does not bleed towards black across a transparent edge.
+  **Done.**
+- A filter layer set to Blur builds a result matching a numpy blur of
+  what the same layer builds at sigma zero, within 2/255. **Done.**
+- ~~8K image blurs in under 2 seconds on the user's machine.~~ Withdrawn.
+  PS-050 records why the speed acceptances of that generation are
+  unreachable: the transport is `Image.pixels`, and PS-057's own
+  measurements put a 4096² pack alone at over two seconds. The table
+  above replaces it.

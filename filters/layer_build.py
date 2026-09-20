@@ -107,12 +107,22 @@ def steps(context, tree, node, *, plan=None):
 
     pool = composite.Pool(size)
     try:
-        below = composite.composite_below(plan.chain, size, pool=pool)
-        yield f"{kind.label}: filtering", 0.2
-        framebuffer, filtered = _draw(kind.filter, below, kind.params_of(node), pool)
-        pool.release(below)
-        framebuffer, encoded = _draw(ENCODE_SRGB, filtered, {}, pool)
-        pool.release(filtered)
+        current = composite.composite_below(plan.chain, size, pool=pool)
+        # A kind runs as many passes as its parameters call for -- a
+        # separable blur is two per iteration -- so each one is a unit of
+        # its own, and a wide blur is cancellable partway through rather
+        # than one long stall.
+        # Empty for a kind whose parameters ask for nothing, such as a
+        # blur set to zero; the stack below is then the result.
+        passes = kind.passes_of(node)
+        for index, (spec, params) in enumerate(passes):
+            yield f"{kind.label}: filtering", 0.2 + 0.1 * index / len(passes)
+            framebuffer, result = _draw(spec, current, params, pool)
+            pool.release(current)
+            current = result
+        yield f"{kind.label}: filtering", 0.3
+        framebuffer, encoded = _draw(ENCODE_SRGB, current, {}, pool)
+        pool.release(current)
 
         bands = []
         for first in range(0, height, READ_ROWS):

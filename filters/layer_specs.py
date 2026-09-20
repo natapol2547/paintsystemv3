@@ -9,12 +9,18 @@ every hash in the addon. A `LayerFilterSpec` says which of those flat
 properties belong to which kind, so the node draws the right ones and a
 build fingerprint hashes the right ones.
 
-A kind also says which `filters.core.FilterSpec` it runs and with what
-push constants, so that adding one is a spec here plus its properties on
-`PaintSystemFilterLayerNode` and nothing else in the layer machinery
-moves. The two vocabularies are deliberately separate: a node property is
-what the user sets, a push constant is what the shader reads, and a kind
-is free to derive one from the other or to hold it constant.
+A kind also says which `filters.core.FilterSpec` passes it runs and with
+what push constants, so that adding one is a spec here plus its
+properties on `PaintSystemFilterLayerNode` and nothing else in the layer
+machinery moves. The two vocabularies are deliberately separate: a node
+property is what the user sets, a push constant is what the shader reads,
+and a kind is free to derive one from the other or to hold it constant.
+
+A kind runs a *list* of passes rather than one. A separable blur is two
+per iteration, and how many iterations depends on how wide it is, so the
+pass list is a function of the node like the push constants are. A kind
+that returns an empty list asks for the stack below unchanged, which is
+how a blur set to zero costs nothing.
 """
 from __future__ import annotations
 
@@ -33,35 +39,46 @@ class LayerFilterSpec:
     name: str
     label: str
     description: str
-    # The filter this kind runs, and a function reading the push
-    # constants for it off the node.
-    filter: FilterSpec
-    params_of: Callable[[Any], dict]
+    # The passes this kind runs over the stack below, in order, as
+    # ``(spec, push constants)`` read off the node.
+    passes_of: Callable[[Any], list[tuple[FilterSpec, dict]]]
     # Names of the node properties this kind reads, in draw order.
     params: tuple[str, ...] = ()
 
 
-def _invert_params(node) -> dict:
-    return {
+def _invert_passes(node) -> list[tuple[FilterSpec, dict]]:
+    return [(registry.INVERT, {
         # The stack below arrives scene linear, where inverting directly
         # turns a mid grey almost white. `encode` runs the inversion on
         # the sRGB encoding instead, which is what a paint program means
         # by Invert.
         "encode": 1,
         "channels": (1.0, 1.0, 1.0, 1.0 if node.invert_alpha else 0.0),
-    }
+    })]
 
 
 INVERT = LayerFilterSpec(
     name='INVERT',
     label="Invert",
     description="Invert the colours of everything below this layer",
-    filter=registry.INVERT,
-    params_of=_invert_params,
+    passes_of=_invert_passes,
     params=('invert_alpha',),
 )
 
-LAYER_FILTERS = {spec.name: spec for spec in (INVERT,)}
+
+def _blur_passes(node) -> list[tuple[FilterSpec, dict]]:
+    return [(registry.BLUR, params) for params in registry.blur_passes(node.blur_sigma)]
+
+
+BLUR = LayerFilterSpec(
+    name='BLUR',
+    label="Blur",
+    description="Blur everything below this layer",
+    passes_of=_blur_passes,
+    params=('blur_sigma',),
+)
+
+LAYER_FILTERS = {spec.name: spec for spec in (INVERT, BLUR)}
 
 
 def layer_filter_items() -> list[tuple[str, str, str]]:
