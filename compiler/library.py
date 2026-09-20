@@ -11,6 +11,7 @@ it. Undo steps keep datablocks without users, so undo still finds them.
 """
 from __future__ import annotations
 
+import functools
 from typing import Callable
 
 import bpy
@@ -50,6 +51,24 @@ MIX_IN_A_COLOR = 6
 MIX_IN_B_COLOR = 7
 MIX_OUT_FLOAT = 0
 MIX_OUT_COLOR = 2
+
+
+def _link(b, source, to_identifier, to_socket) -> None:
+    """Link a ``(node, socket)`` pair into another node's socket."""
+    b.link_nodes(source[0], to_identifier, source[1], to_socket)
+
+
+def _math(b, identifier, operation, lhs, rhs, *, clamp=False):
+    """Math node on two operands, each a ``(node, socket)`` pair or a constant."""
+    inputs = {}
+    for index, operand in enumerate((lhs, rhs)):
+        if isinstance(operand, tuple):
+            _link(b, operand, identifier, index)
+        else:
+            inputs[index] = {'default_value': operand}
+    b.add_node(identifier, 'ShaderNodeMath', inputs=inputs,
+               properties={'operation': operation, 'use_clamp': clamp})
+    return (identifier, 0)
 
 
 def layer_blend_group(blend_type: str) -> bpy.types.NodeTree:
@@ -99,20 +118,8 @@ def _build_layer_blend(tree: bpy.types.NodeTree, blend_type: str) -> None:
     b.add_node('in', 'NodeGroupInput')
     b.add_node('out', 'NodeGroupOutput')
 
-    def link(source, to_identifier, to_socket):
-        b.link_nodes(source[0], to_identifier, source[1], to_socket)
-
-    def math(identifier, operation, lhs, rhs, *, clamp=False):
-        """Math node on two operands, each a (node, socket) pair or a constant."""
-        inputs = {}
-        for index, operand in enumerate((lhs, rhs)):
-            if isinstance(operand, tuple):
-                link(operand, identifier, index)
-            else:
-                inputs[index] = {'default_value': operand}
-        b.add_node(identifier, 'ShaderNodeMath', inputs=inputs,
-                   properties={'operation': operation, 'use_clamp': clamp})
-        return (identifier, 0)
+    link = functools.partial(_link, b)
+    math = functools.partial(_math, b)
 
     # es: source coverage
     es = math('source_alpha', 'MULTIPLY',
@@ -162,6 +169,93 @@ def _build_layer_blend(tree: bpy.types.NodeTree, blend_type: str) -> None:
     link(source_share, 'composite', MIX_IN_FACTOR)
     b.link_nodes('in', 'composite', 'Prev Color', MIX_IN_A_COLOR)
     link(source_color, 'composite', MIX_IN_B_COLOR)
+
+    b.link_nodes('composite', 'out', MIX_OUT_COLOR, 'Color')
+    link(alpha, 'out', 'Alpha')
+
+    b.build()
+
+
+# -- filter mix -------------------------------------------------------
+
+
+def filter_mix_group() -> bpy.types.NodeTree:
+    """Group that replaces the stack below with a filter layer's own pixels.
+
+    Inputs: Prev Color, Prev Alpha, Color, Alpha, Amount, Mask, Clip.
+    Outputs: Color, Alpha.
+    """
+    return get_library_group("Filter Mix", _build_filter_mix)
+
+
+def _build_filter_mix(tree: bpy.types.NodeTree) -> None:
+    """Dry/wet crossfade between the stack below and a filtered copy of it.
+
+    With backdrop ``cb, ab`` (Prev), filtered source ``cs, as``, strength
+    ``f = clamp(Amount * Mask)`` and ``kept = mix(1, ab, Clip)``::
+
+        a     = ab * (1 - f) + as * f * kept
+        share = as * f * kept / a
+        Color = mix(cb, cs, share)
+        Alpha = a
+
+    At ``f == 1`` unclipped the result is exactly the filtered pixels and
+    at ``f == 0`` exactly the stack below, because the two premultiplied
+    weights sum to ``a``. Like ``_build_layer_blend`` this relies on Math
+    DIVIDE returning 0 for a zero divisor, so a fully transparent result
+    takes the backdrop colour rather than NaN.
+
+    The differences from ``_build_layer_blend`` are both deliberate. The
+    source alpha is not part of the coverage term: a filter replaces the
+    stack it was computed from rather than compositing over it, so the two
+    alphas must not compound. And ``kept`` weights only the source, while
+    the backdrop keeps ``1 - f``, which is what holds a clipped filter's
+    output alpha down to the backdrop's instead of letting the filter add
+    coverage outside the layer it is clipped to.
+    """
+    b = NodeTreeBuilder(tree)
+    b.add_socket('INPUT', 'NodeSocketColor', 'Prev Color', default_value=(0.0, 0.0, 0.0, 0.0))
+    b.add_socket('INPUT', 'NodeSocketFloat', 'Prev Alpha', default_value=0.0,
+                 min_value=0.0, max_value=1.0)
+    b.add_socket('INPUT', 'NodeSocketColor', 'Color', default_value=(0.0, 0.0, 0.0, 0.0))
+    b.add_socket('INPUT', 'NodeSocketFloat', 'Alpha', default_value=0.0,
+                 min_value=0.0, max_value=1.0)
+    b.add_socket('INPUT', 'NodeSocketFloat', 'Amount', default_value=1.0,
+                 min_value=0.0, max_value=1.0, subtype='FACTOR')
+    b.add_socket('INPUT', 'NodeSocketFloat', 'Mask', default_value=1.0,
+                 min_value=0.0, max_value=1.0)
+    b.add_socket('INPUT', 'NodeSocketFloat', 'Clip', default_value=0.0,
+                 min_value=0.0, max_value=1.0, subtype='FACTOR')
+    b.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
+    b.add_socket('OUTPUT', 'NodeSocketFloat', 'Alpha')
+
+    b.add_node('in', 'NodeGroupInput')
+    b.add_node('out', 'NodeGroupOutput')
+    link = functools.partial(_link, b)
+    math = functools.partial(_math, b)
+
+    # kept: share of the filter that survives, 1 unclipped, ab clipped
+    b.add_node('kept', 'ShaderNodeMix', properties={
+        'data_type': 'FLOAT', 'clamp_factor': True,
+    }, inputs={MIX_IN_A_FLOAT: {'default_value': 1.0}})
+    b.link_nodes('in', 'kept', 'Clip', MIX_IN_FACTOR)
+    b.link_nodes('in', 'kept', 'Prev Alpha', MIX_IN_B_FLOAT)
+
+    strength = math('strength', 'MULTIPLY', ('in', 'Amount'), ('in', 'Mask'), clamp=True)
+    applied = math('applied', 'MULTIPLY', strength, ('kept', MIX_OUT_FLOAT))
+    source_weight = math('source_weight', 'MULTIPLY', ('in', 'Alpha'), applied)
+    backdrop_weight = math('backdrop_weight', 'MULTIPLY', ('in', 'Prev Alpha'),
+                           math('backdrop_keep', 'SUBTRACT', 1.0, strength))
+    alpha = math('alpha', 'ADD', source_weight, backdrop_weight)
+    source_share = math('source_share', 'DIVIDE', source_weight, alpha)
+
+    b.add_node('composite', 'ShaderNodeMix', properties={
+        'data_type': 'RGBA', 'blend_type': 'MIX',
+        'clamp_factor': True, 'clamp_result': False,
+    })
+    link(source_share, 'composite', MIX_IN_FACTOR)
+    b.link_nodes('in', 'composite', 'Prev Color', MIX_IN_A_COLOR)
+    b.link_nodes('in', 'composite', 'Color', MIX_IN_B_COLOR)
 
     b.link_nodes('composite', 'out', MIX_OUT_COLOR, 'Color')
     link(alpha, 'out', 'Alpha')

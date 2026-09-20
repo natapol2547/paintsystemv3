@@ -13,6 +13,9 @@ layer coverage ``es = Alpha * Opacity * Mask``:
 ``B(cb, cs)`` is baked from a plain ShaderNodeMix of the same blend type
 at factor 1, so these tests check the compositing and not Blender's blend
 functions.
+
+The Filter Mix group (PS-057) is checked the same way against its own
+rule, which replaces the stack below rather than compositing over it.
 """
 import math
 import os
@@ -119,6 +122,63 @@ for mode in BLEND_MODES:
     got = sample(group, **layer, **{"Prev Alpha": 0.0, "Clip": 1.0})
     check(abs(got[3]) <= TOL and all(math.isfinite(c) for c in got),
           f"{mode} clipped over a transparent backdrop is transparent without NaN {fmt(got)}")
+
+section("filter mix")
+
+
+def filter_mix(ab, alpha, *, amount=1.0, mask=1.0, clip=0.0):
+    """Closed form of the Filter Mix rule for backdrop CB/ab and source CS/alpha."""
+    f = min(max(amount * mask, 0.0), 1.0)
+    kept = 1.0 + (ab - 1.0) * clip
+    source_weight = alpha * f * kept
+    out_alpha = source_weight + ab * (1.0 - f)
+    if out_alpha == 0.0:
+        return CB + (0.0,)
+    return mix(CB, CS, source_weight / out_alpha) + (out_alpha,)
+
+
+fmix = library.filter_mix_group()
+filtered = {"Prev Color": CB + (1.0,), "Color": CS + (1.0,)}
+
+for ab, alpha in ((1.0, 1.0), (0.5, 1.0), (1.0, 0.5), (0.5, 0.25), (0.0, 1.0)):
+    got = sample(fmix, **filtered, **{"Prev Alpha": ab, "Alpha": alpha})
+    check_pixel(f"at full amount over backdrop alpha {ab} the filtered pixels replace the stack",
+                got, CS + (alpha,))
+    check_pixel(f"at full amount over backdrop alpha {ab} the closed form agrees",
+                got, filter_mix(ab, alpha))
+
+    got = sample(fmix, **filtered, **{"Prev Alpha": ab, "Alpha": alpha, "Amount": 0.0})
+    check_pixel(f"at zero amount over backdrop alpha {ab} the stack below is untouched",
+                got, CB + (ab,))
+
+    for amount in (0.75, 0.25):
+        got = sample(fmix, **filtered, **{"Prev Alpha": ab, "Alpha": alpha, "Amount": amount})
+        check_pixel(f"amount {amount} over backdrop alpha {ab} crossfades",
+                    got, filter_mix(ab, alpha, amount=amount))
+
+got = sample(fmix, **filtered, **{"Prev Alpha": 0.5, "Alpha": 1.0, "Amount": 0.8, "Mask": 0.5})
+check_pixel("the mask scales the amount", got, filter_mix(0.5, 1.0, amount=0.8, mask=0.5))
+
+got = sample(fmix, **filtered, **{"Prev Alpha": 1.0, "Alpha": 1.0, "Clip": 1.0})
+check_pixel("clipped over an opaque backdrop is the unclipped result", got, CS + (1.0,))
+
+got = sample(fmix, **filtered, **{"Prev Alpha": 0.5, "Alpha": 1.0, "Clip": 1.0})
+check_pixel("clipped, an opaque filter takes the backdrop's alpha exactly", got, CS + (0.5,))
+
+for alpha in (1.0, 0.5, 0.0):
+    got = sample(fmix, **filtered, **{"Prev Alpha": 0.5, "Alpha": alpha, "Clip": 1.0})
+    check_pixel(f"clipped over a half-transparent backdrop, source alpha {alpha}",
+                got, filter_mix(0.5, alpha, clip=1.0))
+    check(got[3] <= 0.5 + TOL,
+          f"clipped, the filter adds no coverage outside the base {fmt(got)}")
+
+got = sample(fmix, **filtered, **{"Prev Alpha": 0.0, "Alpha": 1.0, "Clip": 1.0})
+check(abs(got[3]) <= TOL and all(math.isfinite(c) for c in got),
+      f"clipped over a transparent backdrop is transparent without NaN {fmt(got)}")
+
+got = sample(fmix, **filtered, **{"Prev Alpha": 0.0, "Alpha": 0.0})
+check(abs(got[3]) <= TOL and all(math.isfinite(c) for c in got),
+      f"an empty filter over an empty stack is transparent without NaN {fmt(got)}")
 
 section("library upgrade")
 group = library.layer_blend_group('MULTIPLY')

@@ -102,21 +102,29 @@ layer collapses it and everything below into one image in the usual way.
 `cs`, Alpha `as`, Amount, Mask, Clip; outputs Color and Alpha:
 
 ```
-f     = clamp(Amount * Mask * mix(1, ab, Clip))
-a     = ab * (1 - f) + as * f
-share = as * f / a
+f     = clamp(Amount * Mask)
+kept  = mix(1, ab, Clip)
+a     = ab * (1 - f) + as * f * kept
+share = as * f * kept / a
 Color = mix(cb, cs, share)
 Alpha = a
 ```
 
-At `f == 1` the output is exactly the filtered pixels; at `f == 0`
-exactly the stack below. It is the premultiplied lerp written as a Mix,
-which is possible because `ab*(1-f)/a + as*f/a == 1`, and it reuses
-`_build_layer_blend`'s trick that Math DIVIDE returns 0 for a zero
+At `f == 1` unclipped the output is exactly the filtered pixels; at
+`f == 0` exactly the stack below. It is the premultiplied lerp written as
+a Mix, which is possible because the two weights sum to `a`, and it
+reuses `_build_layer_blend`'s trick that Math DIVIDE returns 0 for a zero
 divisor, so a fully transparent result takes the backdrop colour rather
-than NaN. About eight nodes; a sibling of `_build_layer_blend`
+than NaN. Nine nodes; a sibling of `_build_layer_blend`
 (`compiler/library.py:67-169`) with the source alpha moved out of the
 coverage term.
+
+`kept` weights only the source while the backdrop keeps `1 - f`, exactly
+as `_build_layer_blend` does. Folding `kept` into `f` instead would let a
+clipped filter add coverage outside the layer it is clipped to: backdrop
+alpha 0.5 under an opaque filter at full Amount would come out at 0.75
+rather than 0.5. Clipped, the output alpha is `as * ab` at full Amount
+and never exceeds `ab`.
 
 Inheriting `emit_blend` instead is wrong in a way the artist sees. Source
 over the same stack it was computed from compounds alpha: backdrop alpha
