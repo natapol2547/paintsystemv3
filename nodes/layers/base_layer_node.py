@@ -96,6 +96,23 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         """The image texture painting on this layer draws into, or None."""
         return None
 
+    def copy(self, node):
+        super().copy(node)
+        # Blender copies the pointer, so both layers would share one cache
+        # image, and ``bake_node_cache`` reuses whatever ``cache_image``
+        # holds: baking either copy would overwrite the other's pixels with
+        # no warning. A cache is derived, so the copy arrives without one and
+        # bakes its own. Authored content stays shared on purpose.
+        if self.cache_image is None and not self.cache_enabled:
+            return
+        # ``cache_enabled``, ``cache_image`` and ``cache_uv_map`` recompile on
+        # assignment, so they are only written when there is a cache to clear.
+        self.cache_enabled = False
+        self.cache_image = None
+        self.cache_uv_map = ""
+        self.cache_hash = ""
+        self.cache_stale = False
+
     def init(self, context):
         super().init(context)
         color_in = self.inputs.new('NodeSocketColor', "Color")

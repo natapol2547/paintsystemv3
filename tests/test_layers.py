@@ -223,6 +223,28 @@ try:
     check(scene.tool_settings.image_paint.canvas == image_node.image, "selecting an image layer paints on it")
     check(core.artifact_fingerprint(tree) == fingerprint, "selection does not recompile")
 
+    section("duplicating a layer")
+    tree = build("Duplicate")
+    original = tree.nodes["A"]
+    cache_image = bpy.data.images.new("Cache For A", 8, 8)
+    original.cache_image = cache_image
+    original.cache_enabled = True
+    original.cache_hash = "deadbeef"
+    original.cache_uv_map = "UVMap"
+    duplicate_tree = tree.copy()
+    duplicate = duplicate_tree.nodes["A"]
+    check(duplicate.uuid != original.uuid, "the copy gets its own uuid")
+    check(duplicate.cache_image is None and not duplicate.cache_enabled
+          and duplicate.cache_hash == "" and duplicate.cache_uv_map == "",
+          "and no cache, so baking it cannot overwrite the original's pixels")
+    check(original.cache_image == cache_image and original.cache_enabled
+          and original.cache_hash == "deadbeef", "the original keeps its own")
+    plain = duplicate_tree.nodes["B"]
+    check(plain.cache_image is None and plain.uuid != tree.nodes["B"].uuid,
+          "a layer that had no cache copies unchanged")
+    bpy.data.node_groups.remove(duplicate_tree)
+    bpy.data.images.remove(cache_image)
+
     section("layer type registry")
     types = registry.layer_types()
     check([cls.ps_type for cls in types] == ['FOLDER', 'SOLID_COLOR', 'IMAGE'], "menu order")

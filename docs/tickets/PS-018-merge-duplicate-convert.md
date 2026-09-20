@@ -33,7 +33,12 @@ All of these are `bake_node_cache` with a different target:
 - Transfer UV: bake the image node's own image through the new UV map
   into a new image, then switch `uv_map_name` and `image`.
 - Duplicate layer: `duplicate_subtree` (PS-017) + `insert_above(node)`.
-  Add "Duplicate Layer" to `MAT_MT_LayerMenu` (new in v3).
+  Add "Duplicate Layer" to `MAT_MT_LayerMenu` (new in v3). Expect the
+  duplicate to arrive unbaked: `PaintSystemLayerNode.copy` clears the
+  cache, because the two layers would otherwise share one image and
+  baking either would overwrite the other's pixels. A filter layer copies
+  its derived image instead of dropping it, since that image is the
+  layer's content rather than a re-derivable artifact (PS-057).
 
 ## Acceptance
 
