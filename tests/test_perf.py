@@ -45,6 +45,8 @@ from harness import check, finish, import_from, register_addon, section, skip  #
 
 register_addon()
 core = import_from("compiler.core")
+derived = import_from("filters.derived")
+freshness = import_from("filters.freshness")
 profile = import_from("compiler.profile")
 stack_ops = import_from("nodetree.stack_ops")
 layer_rows = import_from("panels.layers_panels").layer_rows
@@ -53,6 +55,7 @@ link_tree_to_material = import_from("ops.node_tree_ops").link_tree_to_material
 IMAGE = 'PaintSystemImageLayerNode'
 SOLID = 'PaintSystemSolidColorLayerNode'
 FOLDER = 'PaintSystemFolderLayerNode'
+FILTER = 'PaintSystemFilterLayerNode'
 
 LAYERS = 100
 SMALL_LAYERS = 25
@@ -80,6 +83,15 @@ ROWS_TARGET_MS, ROWS_LIMIT_MS = 2.0, 5.0
 
 # An unchanged compile of LAYERS against the same compile of SMALL_LAYERS.
 MAX_SCALING = 6.0
+
+# A patch of a stack carrying one built filter layer, against the same patch
+# of the same stack without one. The filter layer hashes the whole subtree
+# below it on every compile, to tell whether its pixels still describe that
+# subtree; that walk is the one cost the feature adds to a tree nobody is
+# building. It measures 1.3x idle, and both sides scale with the stack, so a
+# ratio well past this means the hash stopped being memoised rather than that
+# the machine was busy.
+FILTER_OVERHEAD = 1.8
 
 WARMUP = 3
 REPS = 7
@@ -194,6 +206,24 @@ def build_tree(name, total, images):
     return tree
 
 
+def built_result(tree, node):
+    """An image stamped as though *node* had just been built from its stack.
+
+    Running a real build would need a GPU context, and what is being
+    measured is the compile that reads the stamps, not the build that
+    writes them.
+    """
+    image = bpy.data.images.new(f"PS Perf {node.name} Result", 64, 64, alpha=True)
+    image.pixels.foreach_set([0.5] * 64 * 64 * 4)
+    image[derived.BUILD_KEY] = "perf"
+    image[derived.UV_MAP_KEY] = ""
+    link = stack_ops.feeding_link(node.inputs['Color'])
+    ctx = core.build_ir(tree).ctx
+    parts = freshness.fingerprint_parts(ctx, node, link.from_node if link else None)
+    image[derived.FINGERPRINT_KEY] = freshness.stamp(parts)
+    return image
+
+
 def instanced(tree):
     """Instance *tree*'s artifact in a material, where a compile's writes cost most.
 
@@ -295,6 +325,31 @@ try:
 
     rows = bench("stack and layer rows", lambda i: (tree.stack(), layer_rows(tree)))
     budget("stack() plus layer_rows()", rows, ROWS_TARGET_MS, ROWS_LIMIT_MS)
+
+    section("a filter layer in the stack")
+    # A built filter layer hashes the whole subtree below it on every
+    # compile, to tell whether its pixels still describe that subtree
+    # (PS-057). That is the one cost the feature adds to a tree nobody is
+    # touching, so it is measured against the same stack without one.
+    # Scale free, like the ratio below it.
+    filtered = build_tree("Perf Filtered", SMALL_LAYERS, images)
+    instanced(filtered)
+    top = filtered.insert_layer_node(FILTER)
+    top.derived_image = built_result(filtered, top)
+    core.flush_now()
+    check(top.derived_stale_reason == "",
+          f"the filter layer reads as up to date ({top.derived_stale_reason!r})")
+
+    small_mid, filtered_mid = plain_middle_layer(small), plain_middle_layer(filtered)
+    plain_patch = bench("opacity edit, no filter layer",
+                        lambda i: setattr(small_mid, 'opacity', opacities[i % 2]))
+    filtered_patch = bench("opacity edit, one built filter layer",
+                           lambda i: setattr(filtered_mid, 'opacity', opacities[i % 2]))
+    small_mid.opacity = filtered_mid.opacity = 1.0
+    overhead = filtered_patch / plain_patch
+    check(overhead < FILTER_OVERHEAD,
+          f"a built filter layer costs {overhead:.2f}x a compile without one "
+          f"(limit {FILTER_OVERHEAD})")
 
     section("scaling")
     # Scale free: both numbers come from the same machine in the same run,

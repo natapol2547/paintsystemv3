@@ -7,7 +7,8 @@ from .base_layer_node import PaintSystemLayerNode, emit_image_texture
 from ..base_node import mark_tree_dirty
 from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
-from ...filters.derived import build_stamp, is_built, stamped_uv_map
+from ...filters.derived import FINGERPRINT_KEY, build_stamp, is_built, stamped_uv_map
+from ...filters.freshness import fingerprint_parts, structure_reason
 from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items, layer_filter_params
 from ...ops.node_tree_ops import RESOLUTION_ITEMS
 
@@ -46,6 +47,7 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # bake above the layer before a single pixel had changed.
     ps_unhashed_props = (
         'filter_type', 'invert_alpha', 'resolution', 'uv_map', 'derived_image',
+        'derived_stale_reason',
     )
 
     filter_type: EnumProperty(
@@ -66,6 +68,11 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # image, so this pointer is all the node has to keep.
     derived_image: PointerProperty(
         type=bpy.types.Image, name="Result", update=mark_tree_dirty)
+    # Written by `emit_source` on every compile, and by nothing else. No
+    # update callback: it is the compiler's own answer, and tagging the
+    # tree from inside a compile would schedule another one.
+    derived_stale_reason: StringProperty(
+        name="Out Of Date", description="Why this layer's image no longer matches what is below it")
 
     def copy(self, node):
         super().copy(node)
@@ -113,17 +120,20 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         image = self.derived_image
         box = layout.box()
         row = box.row(align=True)
-        if is_built(image):
-            row.label(text=f"{image.size[0]} x {image.size[1]}",
-                      **icon_kwargs('CHECKMARK'))
-        else:
+        if not is_built(image):
             row.label(text="Not built", **icon_kwargs('ERROR'))
+        elif self.derived_stale_reason:
+            row.label(text="Out of date", **icon_kwargs('ERROR'))
+        else:
+            row.label(text=f"{image.size[0]} x {image.size[1]}", **icon_kwargs('CHECKMARK'))
         row.operator("paint_system.rebuild_filter_layer", text="Update",
                      **icon_kwargs('FILE_REFRESH'))
         clear = row.row(align=True)
         clear.enabled = image is not None
         clear.operator("paint_system.clear_filter_result", text="", **icon_kwargs('X'))
-        if image is not None:
+        if is_built(image) and self.derived_stale_reason:
+            box.label(text=f"Rebuild: {self.derived_stale_reason}")
+        elif image is not None:
             box.label(text=image.name)
 
     # -- compiler -----------------------------------------------------------------
@@ -148,11 +158,30 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
 
     def emit_source(self, ctx):
         image = self.derived_image
+        self._note_stale(ctx, image)
         if not is_built(image):
             return (0.0, 0.0, 0.0, 1.0), 0.0
         # The UV map stamped on the image, not the authored one: changing
         # the setting relocates nothing until the rebuild runs.
         return emit_image_texture(ctx, self, 'result', image, stamped_uv_map(image))
+
+    def _note_stale(self, ctx, image):
+        """Compare the stack below with what the image was built from.
+
+        The compile is the one moment that has both a context to hash
+        against and a reason to look, so the answer is worked out here
+        and parked on the node for the panel to read.
+        """
+        if not is_built(image):
+            reason = ""
+        else:
+            link = ctx.incoming_link(self.inputs['Color'])
+            parts = fingerprint_parts(ctx, self, link.from_node if link else None)
+            reason = structure_reason(str(image.get(FINGERPRINT_KEY, "")), parts)
+        # Writing an RNA property tags the tree and the materials using
+        # it, so only write when the value actually changes.
+        if self.derived_stale_reason != reason:
+            self.derived_stale_reason = reason
 
     def emit_blend(self, ctx, color, alpha, *, clip=False):
         fmix = ctx.emit_node(self, 'fmix', 'ShaderNodeGroup', properties={

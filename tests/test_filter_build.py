@@ -171,6 +171,22 @@ if available():
         agrees(texel(image), (*(1.0 - to_srgb(to_linear([0.8, 0.2, 0.1]))), 1.0),
                "and the image layer below is what came out inverted")
 
+        section("and the layer says so")
+        # `commit` tags the tree itself, because stamping an image tags
+        # nothing on its own; without that the panel would go on claiming
+        # the layer was out of date after a build.
+        core.flush_now()
+        check(node.derived_stale_reason == "",
+              f"a build leaves the layer up to date: {node.derived_stale_reason!r}")
+        bottom.fill_color = (0.9, 0.1, 0.1, 1.0)
+        core.flush_now()
+        check(node.derived_stale_reason == "the layers below changed",
+              f"and a change under it shows up: {node.derived_stale_reason!r}")
+        bottom.fill_color = (0.2, 0.6, 0.4, 1.0)
+        layer_build.build_layer(bpy.context, tree, node)
+        core.flush_now()
+        check(node.derived_stale_reason == "", "building again clears it")
+
         section("which way up")
         # Every other check here is on one colour, which a readback that
         # assembled its bands upside down would pass. This one cannot.

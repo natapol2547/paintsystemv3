@@ -38,7 +38,7 @@ from ..compiler.bake import create_managed_image
 from ..compiler.core import build_ir, mark_dirty
 from ..compiler.ir import hash_payload
 from ..gpu_passes.core import read_color
-from . import composite, derived, layer_plan
+from . import composite, derived, freshness, layer_plan
 from .core import BAND_ROWS, FilterSpec, PixelSource, Refused, ResultImage, run_pass
 from .layer_specs import layer_filter_kind
 
@@ -124,7 +124,7 @@ def steps(context, tree, node, *, plan=None):
         pool.close()
 
     yield f"{kind.label}: writing the result", 0.9
-    return commit(tree, node, plan, kind, values, size)
+    return commit(tree, node, plan, values, size)
 
 
 def _draw(spec: FilterSpec, texture, params: dict, pool):
@@ -143,7 +143,7 @@ def _draw(spec: FilterSpec, texture, params: dict, pool):
         source.release()
 
 
-def commit(tree, node, plan, kind, values, size):
+def commit(tree, node, plan, values, size):
     """Write *values* into *node*'s derived image, pack it and stamp it.
 
     The pack comes before the stamps for the reason `filters.derived`
@@ -155,7 +155,7 @@ def commit(tree, node, plan, kind, values, size):
     ResultImage(image).commit(values)
     image.pack()
 
-    fingerprint = _fingerprint(tree, node, plan, kind, size)
+    fingerprint = _fingerprint(tree, node, plan)
     image[derived.OWNER_KEY] = f"{tree.uuid}:{node.uuid}"
     image[derived.FINGERPRINT_KEY] = fingerprint
     image[derived.UV_MAP_KEY] = plan.uv_map
@@ -185,17 +185,17 @@ def _result_image(tree, node, size):
     return image
 
 
-def _fingerprint(tree, node, plan, kind, size) -> str:
+def _fingerprint(tree, node, plan) -> str:
     """What the build was asked for: the structural half of freshness.
 
     It records the *inputs* to the build rather than its result, so a
     later compile can tell that nothing structural has moved without
-    looking at a pixel. `compiler.core.subtree_hash` covers everything
-    below, including each source image by name.
+    looking at a pixel. Building the IR is how a context to hash against
+    is come by; the compile that `commit` asks for afterwards makes the
+    same one and compares.
     """
-    below = build_ir(tree).ctx.subtree_hash(plan.source)
-    return hash_payload([derived.FILTER_VERSION, kind.name, kind.params_of(node),
-                         list(size), plan.uv_map, below or "empty"])
+    ctx = build_ir(tree).ctx
+    return freshness.stamp(freshness.fingerprint_parts(ctx, node, plan.source))
 
 
 def _digest(values) -> str:
