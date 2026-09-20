@@ -636,6 +636,54 @@ Auto Refresh, Update, Cancel while a job runs, and Clear Result.
   design reuses and rescales one datablock to keep it rare, but the
   revalidation gap itself belongs to PS-083.
 
+## Measurements
+
+A rebuild through the composite path, on the probe machine (Blender
+5.2.1, headless GPU context), over a two-layer stack: a solid fill and a
+2048² image layer. Best of three after a warm-up run, in milliseconds.
+
+| Resolution | GPU composite, filter and readback | Write to the image | Pack | Total |
+| --- | --- | --- | --- | --- |
+| 1024² | 22 | 4 | 148 | 195 |
+| 2048² | 62 | 15 | 627 | 780 |
+| 4096² | 395 | 62 | 2182 | 2928 |
+
+**The pack is the rebuild.** It is three quarters of the cost at 1024²
+and 2048², and it is the one part that cannot be sliced: `image.pack()`
+is a single blocking call inside the last unit of `steps`, so the
+generator's 0.02 s budget has no purchase on it. Everything the design
+went to trouble over -- banded readback, a cancellable generator, a pool
+that hands textures back -- moves 130 ms of a 780 ms rebuild.
+
+The cost is a PNG encode, so it follows the content rather than only the
+size. Measured on its own, packing a byte image of pure noise against a
+smooth ramp:
+
+| Resolution | Noise | Gradient |
+| --- | --- | --- |
+| 1024² | 151 ms (3.5 MB) | 26 ms (0.0 MB) |
+| 2048² | 636 ms (14.0 MB) | 132 ms (0.1 MB) |
+| 4096² | 2561 ms (55.6 MB) | 532 ms (0.3 MB) |
+
+A painted texture sits nearer the noise end. `Image.file_format` does not
+change either number: a generated image packs as PNG whatever it is set
+to, so there is no cheaper encoding to ask for.
+
+What this means for the two rebuild paths is not the same. A manual
+Update runs modally with a progress bar, and a freeze in its last step
+reads as the end of work the user asked for. The auto-refresh path has no
+such cover: at the default 2048² it would freeze the viewport for a
+fraction of a second shortly after every stroke below a filter layer.
+
+The pack is not there for the save -- `handlers.on_save_pre` already
+packs every dirty Paint System image, including this one. It is there for
+`image.copy()` and for undo-then-redo, both of which drop an unpacked
+generated image's buffer while its ID properties survive. Deferring it
+would trade the refresh hitch for a window in which those two cases lose
+the result; `is_built` already degrades that to "reads as unbuilt" rather
+than to wrong pixels, so the failure is a rebuild rather than a
+corruption. Not taken here.
+
 ## Known gaps
 
 - No region-limited invalidation and no low-resolution proxy. A refresh
@@ -659,6 +707,9 @@ Auto Refresh, Update, Cancel while a job runs, and Clear Result.
   nodes stay. Pre-existing, out of scope.
 - `note_image_changed` marks a whole layer suspect, not a region, so a
   one-texel dab costs a full refresh.
+- The pack cannot be sliced, so the last unit of every rebuild blocks for
+  as long as a PNG encode of the result takes -- see Measurements. The
+  auto-refresh path pays it with no progress bar to explain it.
 
 ## Acceptance
 
