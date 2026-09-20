@@ -1,10 +1,11 @@
-"""The GPU blend pass agrees with the render, mode by mode (PS-057).
+"""The GPU compositing passes agree with the render (PS-057).
 
 `filters.blend_glsl` composites a layer over the stack below it so that a
 filter layer can be handed the same picture the render engines produce.
 "Same" is the whole claim, so every case here is checked against a real
-Cycles bake of `compiler.library.layer_blend_group` for the same mode and
-the same inputs, not against a formula written out twice.
+Cycles bake of `compiler.library.layer_blend_group` — or, for the
+replacement rule a filter layer uses, of `filter_mix_group` — for the
+same mode and the same inputs, not against a formula written out twice.
 
 The modes that pass are what `ALLOWED_BLEND_MODES` may contain. A mode
 that fails is not a bug in the filter layer: it falls back to baking its
@@ -69,46 +70,64 @@ def constant_texture(rgba):
         data=gpu.types.Buffer('FLOAT', values.size, values))
 
 
-def blend_pixel(mode, backdrop, source, opacity, clip):
+def blend_pixel(backdrop, source, opacity, clip, *, rule=blend_glsl.BLEND, mode='MIX'):
     target = gpu.types.GPUTexture((SIZE, SIZE), format='RGBA16F')
     framebuffer = blend_glsl.blend_over(
         constant_texture(backdrop), constant_texture(source), target, (SIZE, SIZE),
-        mode=mode, opacity=opacity, clip=clip)
+        rule=rule, mode=mode, opacity=opacity, clip=clip)
     values = gpu_core.read_color(framebuffer, SIZE, SIZE)
     return tuple(float(v) for v in values[SIZE // 2, SIZE // 2])
 
 
-def baked_pixel(mode, backdrop, source, opacity, clip):
-    rgba = bake_group(library.layer_blend_group(mode), color="Color", alpha="Alpha",
-                      size=SIZE, inputs={
-                          "Prev Color": backdrop[:3] + (1.0,),
-                          "Prev Alpha": backdrop[3],
-                          "Color": source[:3] + (1.0,),
-                          "Alpha": source[3],
-                          "Opacity": opacity,
-                          "Clip": 1.0 if clip else 0.0,
-                      })
+def baked_pixel(group, backdrop, source, strength, clip, *, strength_name="Opacity"):
+    rgba = bake_group(group, color="Color", alpha="Alpha", size=SIZE, inputs={
+        "Prev Color": backdrop[:3] + (1.0,),
+        "Prev Alpha": backdrop[3],
+        "Color": source[:3] + (1.0,),
+        "Alpha": source[3],
+        strength_name: strength,
+        "Clip": 1.0 if clip else 0.0,
+    })
     return pixel_at(rgba, 0.5, 0.5, SIZE)
+
+
+def agrees(got, want):
+    """Whether the two pixels match within TOL, colour only where it shows.
+
+    A transparent result carries no colour on either side, so only its
+    alpha means anything there.
+    """
+    channels = [3] if want[3] <= TOL else [0, 1, 2, 3]
+    return all(abs(got[i] - want[i]) <= TOL for i in channels)
 
 
 if available():
     agreeing = set()
     for mode in sorted(blend_glsl.BLEND_MODE_IDS):
         section(mode)
-        agrees = True
+        group = library.layer_blend_group(mode)
+        matched = True
         for label, backdrop_alpha, source_alpha, opacity, clip in CASES:
             backdrop = CB + (backdrop_alpha,)
             source = CS + (source_alpha,)
-            got = blend_pixel(mode, backdrop, source, opacity, clip)
-            want = baked_pixel(mode, backdrop, source, opacity, clip)
-            # A transparent result carries no colour on either side, so
-            # only its alpha means anything there.
-            channels = [3] if want[3] <= TOL else [0, 1, 2, 3]
-            close = all(abs(got[i] - want[i]) <= TOL for i in channels)
-            agrees = agrees and close
+            got = blend_pixel(backdrop, source, opacity, clip, mode=mode)
+            want = baked_pixel(group, backdrop, source, opacity, clip)
+            close = agrees(got, want)
+            matched = matched and close
             check(close, f"{mode} {label}: {fmt(got)} baked {fmt(want)}")
-        if agrees:
+        if matched:
             agreeing.add(mode)
+
+    section("filter mix")
+    # The replacement rule a filter layer composites with. It has no
+    # modes, so it is checked over the same arrangements at Amount.
+    group = library.filter_mix_group()
+    for label, backdrop_alpha, source_alpha, amount, clip in CASES:
+        backdrop = CB + (backdrop_alpha,)
+        source = CS + (source_alpha,)
+        got = blend_pixel(backdrop, source, amount, clip, rule=blend_glsl.FILTER_MIX)
+        want = baked_pixel(group, backdrop, source, amount, clip, strength_name="Amount")
+        check(agrees(got, want), f"{label}: {fmt(got)} baked {fmt(want)}")
 
     section("the allow-list")
     allowed = set(blend_glsl.ALLOWED_BLEND_MODES)

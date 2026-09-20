@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The layer blend rule as one GPU pass (PS-057).
+"""The layer compositing rules as one GPU pass (PS-057).
 
 `compiler.library._build_layer_blend` is what the render engines run. To
 filter the stack below a layer, the same compositing has to happen on the
@@ -7,6 +7,10 @@ GPU, over textures rather than shader sockets, and agree with the render
 to the texel. This module is that port: the same Porter-Duff split, the
 same clip handling, and Blender's own blend functions at factor 1, which
 is the only factor the library group ever asks them for.
+
+`compiler.library._build_filter_mix` is ported alongside it, because a
+filter layer can sit below another one and replaces the stack rather than
+compositing over it. Which rule a pass runs is the `rule` argument.
 
 Both sides work in straight alpha and scene-linear colour, which is what
 the shader graph carries between layers. Converting a source image's
@@ -50,6 +54,10 @@ BLEND_MODE_IDS = {
 
 # Modes whose parity test passes. See the module docstring.
 ALLOWED_BLEND_MODES = frozenset(BLEND_MODE_IDS)
+
+# Which compositing rule a pass runs: an ordinary layer blend, or a filter
+# layer replacing the stack below it.
+BLEND, FILTER_MIX = 'BLEND', 'FILTER_MIX'
 
 
 _COLOR_UTILS = """
@@ -251,6 +259,21 @@ vec4 ps_layer_blend(vec4 prev, vec4 src, float opacity, float mask, float clip, 
   }
   return vec4(mix(prev.rgb, source_color, clamp(source_share, 0.0, 1.0)), alpha);
 }
+
+/* _build_filter_mix: the stack below is replaced by the filter's own
+   pixels rather than composited under them, faded by Amount. `kept`
+   weights only the source, so a clipped filter never adds coverage
+   outside the layer it is clipped to. */
+vec4 ps_filter_mix(vec4 prev, vec4 src, float amount, float mask, float clip)
+{
+  float f = clamp(amount * mask, 0.0, 1.0);
+  float kept = mix(1.0, prev.a, clamp(clip, 0.0, 1.0));
+  float source_weight = src.a * f * kept;
+  float backdrop_weight = prev.a * (1.0 - f);
+  float alpha = source_weight + backdrop_weight;
+  float source_share = alpha != 0.0 ? source_weight / alpha : 0.0;
+  return vec4(mix(prev.rgb, src.rgb, clamp(source_share, 0.0, 1.0)), alpha);
+}
 """
 
 BLEND_GLSL = _COLOR_UTILS + _BLEND + _COMPOSITE
@@ -277,7 +300,8 @@ void main()
   if (use_mask != 0) {
     m *= clamp(texelFetch(mask, texel, 0).r, 0.0, 1.0);
   }
-  out_color = ps_layer_blend(prev, src, m, 1.0, clip, mode);
+  out_color = filter_mix != 0 ? ps_filter_mix(prev, src, m, 1.0, clip)
+                              : ps_layer_blend(prev, src, m, 1.0, clip, mode);
 }
 """
 
@@ -297,6 +321,7 @@ def blend_shader():
         info.push_constant('FLOAT', "opacity")
         info.push_constant('FLOAT', "clip")
         info.push_constant('INT', "mode")
+        info.push_constant('INT', "filter_mix")
         info.push_constant('INT', "use_mask")
         info.sampler(0, 'FLOAT_2D', "backdrop")
         info.sampler(1, 'FLOAT_2D', "source")
@@ -324,12 +349,14 @@ def _no_mask():
     return _no_mask_texture
 
 
-def blend_over(backdrop, source, target, size, *, mode='MIX', opacity=1.0,
-               clip=False, mask=None):
+def blend_over(backdrop, source, target, size, *, rule=BLEND, mode='MIX',
+               opacity=1.0, clip=False, mask=None):
     """Composite *source* over *backdrop* into *target*, and return the framebuffer.
 
     All three are textures of *size*, holding straight alpha and linear
-    colour. *mask* is an `R32F` texture of the same size or None.
+    colour. *mask* is an `R32F` texture of the same size or None. *rule*
+    picks the layer blend or a filter layer's replacement, where *opacity*
+    is the filter's Amount and *mode* is unused.
 
     The framebuffer has to be held alongside its texture until the result
     is used: a `GPUFrameBuffer` does not keep its colour slot alive, and
@@ -349,6 +376,7 @@ def blend_over(backdrop, source, target, size, *, mode='MIX', opacity=1.0,
             shader.uniform_float("opacity", float(opacity))
             shader.uniform_float("clip", 1.0 if clip else 0.0)
             shader.uniform_int("mode", BLEND_MODE_IDS.get(mode, 0))
+            shader.uniform_int("filter_mix", 1 if rule == FILTER_MIX else 0)
             shader.uniform_int("use_mask", 0 if mask is None else 1)
             shader.uniform_sampler("backdrop", backdrop)
             shader.uniform_sampler("source", source)
