@@ -18,6 +18,11 @@ Storage conventions, which the prelude converts for a filter:
 - byte images hold straight alpha in the image's own colour space;
 - float images hold premultiplied scene linear.
 
+The prelude also carries `ps_to_srgb` and `ps_to_linear`, which a filter
+needs whenever the two disagree about colour space rather than about
+alpha: inverting a float layer, or writing a scene-linear composite into
+a byte sRGB image.
+
 Colour under zero alpha has no straight form, so a float texel with
 ``a == 0`` reaches a filter as transparent black and its stored colour
 does not survive the pass. Nothing visible changes, and no filter here
@@ -65,6 +70,20 @@ void main()
 """
 
 _PRELUDE = """
+vec3 ps_to_srgb(vec3 c)
+{
+  vec3 low = c * 12.92;
+  vec3 high = 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+  return mix(high, low, step(c, vec3(0.0031308)));
+}
+
+vec3 ps_to_linear(vec3 c)
+{
+  vec3 low = c / 12.92;
+  vec3 high = pow((max(c, vec3(0.0)) + 0.055) / 1.055, vec3(2.4));
+  return mix(high, low, step(c, vec3(0.04045)));
+}
+
 vec4 stored_to_straight(vec4 c)
 {
   if (storage == 0) {
@@ -221,6 +240,19 @@ class PixelSource:
             data=gpu.types.Buffer('FLOAT', values.size, values))
         return cls(values, width, height, channels, storage_of(image),
                    texture_format(image), texture)
+
+    @classmethod
+    def from_texture(cls, texture: gpu.types.GPUTexture, *,
+                     storage: int = STRAIGHT) -> "PixelSource":
+        """A source the GPU already holds, such as a composited stack.
+
+        There is no array behind it: `values` exists to keep an uploaded
+        buffer alive, and nothing was uploaded. The caller owns the
+        texture -- `release` drops this reference to it and frees
+        nothing, so a pooled target goes on being pooled.
+        """
+        return cls(None, texture.width, texture.height, 4, storage,
+                   texture.format, texture)
 
     @property
     def size(self) -> tuple[int, int]:

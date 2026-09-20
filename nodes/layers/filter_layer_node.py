@@ -1,6 +1,6 @@
 import bpy
 from bpy.types import Node
-from bpy.props import EnumProperty, FloatProperty, PointerProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, PointerProperty, StringProperty
 from bpy.utils import register_classes_factory
 
 from .base_layer_node import PaintSystemLayerNode, emit_image_texture
@@ -45,16 +45,15 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # dragging a blur slider would invalidate every node cache and channel
     # bake above the layer before a single pixel had changed.
     ps_unhashed_props = (
-        'filter_type', 'blur_sigma', 'resolution', 'uv_map', 'derived_image',
+        'filter_type', 'invert_alpha', 'resolution', 'uv_map', 'derived_image',
     )
 
     filter_type: EnumProperty(
         name="Filter", items=layer_filter_items(), update=mark_tree_dirty,
         description="What this layer does to the layers below it")
-    blur_sigma: FloatProperty(
-        name="Sigma", default=4.0, min=0.0, soft_max=64.0, subtype='PIXEL',
-        update=mark_tree_dirty,
-        description="Blur radius in pixels of the built image")
+    invert_alpha: BoolProperty(
+        name="Invert Alpha", default=False, update=mark_tree_dirty,
+        description="Invert transparency as well as colour")
 
     resolution: EnumProperty(
         name="Resolution", items=RESOLUTION_ITEMS, default='2048',
@@ -78,7 +77,7 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             self.derived_image = self.derived_image.copy()
 
     @classmethod
-    def create(cls, tree, target=None, filter_type='BLUR', resolution='2048', **options):
+    def create(cls, tree, target=None, filter_type='INVERT', resolution='2048', **options):
         node = super().create(tree, target=target)
         node.filter_type = filter_type
         node.resolution = resolution

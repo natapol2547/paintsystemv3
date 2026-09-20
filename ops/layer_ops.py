@@ -19,7 +19,7 @@ class PAINTSYSTEM_OT_add_layer(Operator):
 
     layer_type: EnumProperty(name="Type", items=layer_type_items(), default='IMAGE')
     resolution: EnumProperty(name="Resolution", items=RESOLUTION_ITEMS, default='2048')
-    filter_type: EnumProperty(name="Filter", items=layer_filter_items(), default='BLUR')
+    filter_type: EnumProperty(name="Filter", items=layer_filter_items(), default='INVERT')
 
     @classmethod
     def description(cls, context, properties):

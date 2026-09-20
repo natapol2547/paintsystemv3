@@ -107,7 +107,7 @@ try:
 
     section("what the compiler's fingerprints see")
     before = core.build_ir(tree).ctx.subtree_hash(node)
-    node.blur_sigma = 12.0
+    node.invert_alpha = True
     node.resolution = '4096'
     node.uv_map = "SomeOtherMap"
     check(core.build_ir(tree).ctx.subtree_hash(node) == before,

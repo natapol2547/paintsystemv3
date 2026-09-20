@@ -19,13 +19,22 @@ from __future__ import annotations
 import bpy
 
 
+# Bumped when a build would produce different pixels from the same
+# inputs, so that every stamp an older build wrote reads as out of date.
+FILTER_VERSION = 1
+
 # "<tree uuid>:<node uuid>" of the layer that built these pixels.
 OWNER_KEY = "ps_filter_owner"
 # The structural token: what was asked for, not what it was computed from.
 FINGERPRINT_KEY = "ps_filter_fingerprint"
 # Digest of every source image at build time, keyed by name.
 SOURCES_KEY = "ps_filter_sources"
-# Hash of the two above, and the only stamp the compiler's hashes read.
+# The only stamp the compiler's hashes read, so it has to change exactly
+# when the pixels do. That is the fingerprint plus a digest of the result
+# itself: painting on a layer below moves no property, so two builds
+# around a brush stroke ask for the same thing and produce different
+# pixels, and a fingerprint alone would let a cache above go on showing
+# the old ones.
 BUILD_KEY = "ps_filter_build"
 # The UV map the pixels were laid out in, which is what the compiled
 # Image Texture has to use however the layer's setting has moved since.
