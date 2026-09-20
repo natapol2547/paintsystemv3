@@ -259,7 +259,11 @@ def test_refusals():
           == "Clear changes transparency, and this layer has Lock Alpha on",
           "Clear on a Lock Alpha layer is refused, because it could only do nothing")
     check(not bpy.ops.paint_system.clear_pixels.poll(), "and Clear is greyed out")
-    check(bpy.ops.paint_system.fill_pixels.poll(), "Fill stays available, honouring the lock")
+    if HAS_GPU:
+        # The only check here that asks a poll to pass. Background 4.2 to
+        # 5.1 have no GPU context to run a filter on, and every poll says
+        # so before it looks at the layer.
+        check(bpy.ops.paint_system.fill_pixels.poll(), "Fill stays available, honouring the lock")
     t.nodes[PAINT].lock_alpha = False
 
     select(SOLID)
