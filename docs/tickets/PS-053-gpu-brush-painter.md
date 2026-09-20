@@ -40,6 +40,27 @@ Same look, GPU execution, in place on the image (PS-050):
 
 Presets folder and UI dialog are ported unchanged.
 
+## Working across seams is a requirement, not a refinement
+
+Step 4 is the part to design around rather than the part to add last.
+A stamp is the size of many texels, so every stamp near a seam lands
+half on a shell that continues somewhere else in the map. Without the
+mirrored instance the stroke stops dead at the seam and the model shows
+a hairline of unpainted texels along every one of them, which is the
+failure the whole feature is judged on.
+
+It is also the one part of the painter that no other GPU path here can
+lend anything to. Every pass built so far samples by normalised
+coordinate with clamp-to-edge and knows nothing about the mesh: the
+filter layers, the composite and the texel map all treat the image as a
+flat rectangle. Seam pairs have to come from the mesh, which means the
+painter needs a resolved object and UV map before it can plan a single
+stamp -- unlike a filter layer, which works on the image alone as long
+as the stack below shares one map (`filters/layer_plan.py`). Whichever
+surface the painter ends up on, a destructive action or a filter layer
+kind, that precondition is the first thing it has to check and refuse
+by name.
+
 ## Acceptance
 
 - Visual comparison against v2 output on the sample texture with a fixed
@@ -47,4 +68,5 @@ Presets folder and UI dialog are ported unchanged.
   expected because sampling differs).
 - 4K image with default settings completes in under 10 seconds.
 - Seam duplication produces continuous strokes across a UV seam on the
-  factory monkey.
+  factory monkey. This one is load-bearing: a painter that stops at a
+  seam is not shippable, however good it looks inside a shell.
