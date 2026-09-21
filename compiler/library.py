@@ -1,13 +1,16 @@
-"""Static, shared shader node groups used by compiled trees.
+"""Shared shader node groups that compiled trees use.
 
-Library groups are stateless building blocks (for example the layer blend
-group). They are generated in Python on first use and rebuilt only when
-``LIBRARY_VERSION`` changes. Per-layer state never lives here; it is passed
-in through sockets on the instancing group node.
+Entry points: ``layer_blend_group`` and ``filter_mix_group``.
 
-They have no fake user, so a group no compiled tree uses is not saved with
-the file and does not clutter it; it is generated again when a layer needs
-it. Undo steps keep datablocks without users, so undo still finds them.
+- Library groups are stateless building blocks, such as the layer blend
+  group. Per-layer values never live in them. They come in through the
+  sockets of the group node that uses the library group.
+- A group is generated in Python on first use, and rebuilt only when
+  ``LIBRARY_VERSION`` changes.
+- Groups have no fake user. So a group that no compiled tree uses is not
+  saved with the file and does not clutter it. It is generated again
+  when a layer needs it. Undo steps keep datablocks that have no users,
+  so undo still finds them.
 """
 from __future__ import annotations
 
@@ -39,7 +42,8 @@ def get_library_group(key: str, build: Callable[[bpy.types.NodeTree], None]) -> 
 
 # -- parts shared by the mix groups -----------------------------------
 
-# ShaderNodeMix socket indices (name lookup is ambiguous: "A"/"B" repeat per data type).
+# ShaderNodeMix socket indices. Names cannot be used, because "A" and "B"
+# appear once per data type.
 MIX_IN_FACTOR = 0
 MIX_IN_A_FLOAT = 2
 MIX_IN_B_FLOAT = 3
@@ -50,13 +54,16 @@ MIX_OUT_COLOR = 2
 
 
 def _math(ir, identifier, operation, lhs, rhs, *, clamp=False):
-    """Math node on two operands, each a ``(node, socket)`` pair or a constant."""
+    """Add a Math node on two operands, and return its output ref.
+
+    Each operand is a ``(node, socket)`` pair or a constant.
+    """
     operands = list(enumerate((lhs, rhs)))
     inputs = {index: {'default_value': operand}
               for index, operand in operands if not isinstance(operand, tuple)}
     ir.add_node(identifier, 'ShaderNodeMath', inputs=inputs,
                 properties={'operation': operation, 'use_clamp': clamp})
-    # Linked once the node exists: IR.link checks both ends.
+    # Link after the node exists, because ``IR.link`` checks both ends.
     for index, operand in operands:
         if isinstance(operand, tuple):
             ir.link(operand, identifier, index)
@@ -90,7 +97,10 @@ def _mix_interface(ir, amount_name: str, color_default, alpha_default) -> None:
 
 
 def _kept(ir):
-    """Share of the source that survives: 1 unclipped, the backdrop's alpha clipped."""
+    """Add a node for the share of the source that is kept, and return it.
+
+    It is 1 when unclipped, and the backdrop's alpha when clipped.
+    """
     ir.add_node('kept', 'ShaderNodeMix', properties={
         'data_type': 'FLOAT', 'clamp_factor': True,
     }, inputs={MIX_IN_A_FLOAT: {'default_value': 1.0}})
@@ -100,7 +110,10 @@ def _kept(ir):
 
 
 def _composite(ir, source_share, source_color, alpha) -> None:
-    """Output the backdrop colour mixed toward *source_color* by *source_share*, with *alpha*."""
+    """Mix the backdrop colour toward *source_color*, and link the outputs.
+
+    *source_share* is the mix factor. *alpha* goes to the Alpha output.
+    """
     ir.add_node('composite', 'ShaderNodeMix', properties={
         'data_type': 'RGBA', 'blend_type': 'MIX',
         'clamp_factor': True, 'clamp_result': False,
@@ -131,18 +144,19 @@ def layer_blend_group(blend_type: str) -> bpy.types.NodeTree:
 def _build_layer_blend(tree: bpy.types.NodeTree, blend_type: str) -> None:
     """Porter-Duff compositing of a straight-alpha layer with a blend mode.
 
-    With backdrop ``cb, ab`` (Prev), source ``cs`` and source coverage
-    ``es = Alpha * Opacity * Mask``, a texel splits into three regions:
+    Straight alpha means the colours are not premultiplied. With backdrop
+    ``cb, ab`` (the Prev inputs), source ``cs`` and source coverage
+    ``es = Alpha * Opacity * Mask``, each texel splits into three regions:
 
-    - source over backdrop, weight ``es * ab``, colour ``B(cb, cs)``
-    - source alone, weight ``es * (1 - ab)``, colour ``cs``; dropped when
-      clipped
-    - backdrop alone, weight ``ab * (1 - es)``, colour ``cb``
+    - source over backdrop: weight ``es * ab``, colour ``B(cb, cs)``.
+    - source alone: weight ``es * (1 - ab)``, colour ``cs``. Dropped when
+      clipped.
+    - backdrop alone: weight ``ab * (1 - es)``, colour ``cb``.
 
-    The output alpha is the sum of the weights and the output colour their
-    weighted average (the backdrop colour where the alpha is 0). Unclipped
-    this is W3C source-over with a blend mode; clipped it is source-atop.
-    MIX has ``B = cs`` and skips the blend nodes.
+    The output alpha is the sum of the weights. The output colour is their
+    weighted average, or the backdrop colour where the alpha is 0.
+    Unclipped, this is W3C source-over with a blend mode. Clipped, it is
+    source-atop. MIX has ``B = cs`` and skips the blend nodes.
     """
     ir = IR()
     _mix_interface(ir, 'Opacity', (0.0, 0.0, 0.0, 1.0), 1.0)
@@ -170,8 +184,8 @@ def _build_layer_blend(tree: bpy.types.NodeTree, blend_type: str) -> None:
         }, inputs={MIX_IN_FACTOR: {'default_value': 1.0}})
         ir.link(('in', 'Prev Color'), 'blend', MIX_IN_A_COLOR)
         ir.link(('in', 'Color'), 'blend', MIX_IN_B_COLOR)
-        # Share of the surviving source that lies over the backdrop:
-        # ab unclipped, 1 clipped.
+        # Share of the kept source that lies over the backdrop. It is ab
+        # unclipped, and 1 clipped.
         blended_share = math('blended_share', 'DIVIDE', ('in', 'Prev Alpha'), kept)
         ir.add_node('source', 'ShaderNodeMix', properties={
             'data_type': 'RGBA', 'blend_type': 'MIX',
@@ -201,27 +215,29 @@ def filter_mix_group() -> bpy.types.NodeTree:
 def _build_filter_mix(tree: bpy.types.NodeTree) -> None:
     """Dry/wet crossfade between the stack below and a filtered copy of it.
 
-    With backdrop ``cb, ab`` (Prev), filtered source ``cs, as``, strength
-    ``f = clamp(Amount * Mask)`` and ``kept = mix(1, ab, Clip)``::
+    With backdrop ``cb, ab`` (the Prev inputs), filtered source ``cs, as``,
+    strength ``f = clamp(Amount * Mask)`` and ``kept = mix(1, ab, Clip)``::
 
         a     = ab * (1 - f) + as * f * kept
         share = as * f * kept / a
         Color = mix(cb, cs, share)
         Alpha = a
 
-    At ``f == 1`` unclipped the result is exactly the filtered pixels and
-    at ``f == 0`` exactly the stack below, because the two premultiplied
-    weights sum to ``a``. Like ``_build_layer_blend`` this relies on Math
-    DIVIDE returning 0 for a zero divisor, so a fully transparent result
-    takes the backdrop colour rather than NaN.
+    Unclipped, ``f == 1`` gives exactly the filtered pixels and ``f == 0``
+    exactly the stack below, because the two premultiplied weights add up
+    to ``a``. Like ``_build_layer_blend``, this relies on Math DIVIDE
+    returning 0 for a zero divisor. So a fully transparent result takes
+    the backdrop colour, not NaN.
 
-    The differences from ``_build_layer_blend`` are both deliberate. The
-    source alpha is not part of the coverage term: a filter replaces the
-    stack it was computed from rather than compositing over it, so the two
-    alphas must not compound. And ``kept`` weights only the source, while
-    the backdrop keeps ``1 - f``, which is what holds a clipped filter's
-    output alpha down to the backdrop's instead of letting the filter add
-    coverage outside the layer it is clipped to.
+    It differs from ``_build_layer_blend`` in two deliberate ways:
+
+    - The source alpha is not part of the coverage. A filter replaces the
+      stack it was computed from instead of compositing over it, so the
+      two alphas must not multiply together.
+    - ``kept`` weights only the source, while the backdrop keeps
+      ``1 - f``. This keeps a clipped filter's output alpha at or below
+      the backdrop's, so the filter adds no coverage outside the layer it
+      is clipped to.
     """
     ir = IR()
     _mix_interface(ir, 'Amount', (0.0, 0.0, 0.0, 0.0), 0.0)

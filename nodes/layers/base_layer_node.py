@@ -9,7 +9,7 @@ from ...nodetree.stack_ops import clip_base, feeds_clip_run
 
 
 def update_painting(self, context):
-    """``update=`` callback for settings that change where painting on a layer goes."""
+    """``update=`` callback for settings that change where painting goes."""
     update_active_image(context)
 
 
@@ -26,7 +26,8 @@ for blend_mode in bpy.types.ShaderNodeMix.bl_rna.properties['blend_type'].enum_i
         BLEND_MODE_ITEMS.append(None)
 
 
-# Square image sizes offered for a new image layer, a filter layer's result and a baked cache.
+# Square image sizes offered for a new image layer, a filter layer's
+# result and a baked cache.
 RESOLUTION_ITEMS = [
     ('1024', "1024", ""),
     ('2048', "2048", ""),
@@ -34,12 +35,13 @@ RESOLUTION_ITEMS = [
 ]
 
 
-# What a layer with no content emits: fully transparent, so the stack below shows through.
+# What a layer with no content emits. Its alpha is 0, so the stack below
+# shows through.
 EMPTY_SOURCE = ((0.0, 0.0, 0.0, 1.0), 0.0)
 
 
 def new_hidden_input(node, socket_type: str, name: str, default):
-    """Add an input to *node* that is linked, never edited, so it shows no value field."""
+    """Add an input to *node* that is only ever linked, with no value field."""
     socket = node.inputs.new(socket_type, name)
     socket.default_value = default
     socket.hide_value = True
@@ -47,7 +49,10 @@ def new_hidden_input(node, socket_type: str, name: str, default):
 
 
 def draw_uv_map(context, layout, node):
-    """Draw *node*'s ``uv_map`` field, as a search of the active mesh's UV maps when there is one."""
+    """Draw *node*'s ``uv_map`` field.
+
+    With an active mesh, the field searches that mesh's UV maps.
+    """
     obj = getattr(context, 'object', None)
     if obj is not None and obj.type == 'MESH':
         layout.prop_search(node, "uv_map", obj.data, "uv_layers", text="UV")
@@ -56,7 +61,10 @@ def draw_uv_map(context, layout, node):
 
 
 def emit_image_texture(ctx, node, role: str, image, uv_map: str = ""):
-    """Emit an Image Texture (plus UV Map when set). Returns (color_ref, alpha_ref)."""
+    """Emit an Image Texture node, plus a UV Map node when *uv_map* is set.
+
+    Returns (color_ref, alpha_ref).
+    """
     tid = ctx.emit_node(node, role, 'ShaderNodeTexImage', properties={
         'image': image,
         'interpolation': 'Linear',
@@ -71,11 +79,12 @@ def emit_image_texture(ctx, node, role: str, image, uv_map: str = ""):
 
 def emit_mix_group(ctx, node, role: str, group, amount_socket: str, amount: float,
                    color, alpha, *, clip: bool):
-    """Emit *group*, a library mix group, putting (color, alpha) over *node*'s stack.
+    """Emit the library mix *group* to put (color, alpha) over *node*'s stack.
 
-    The group reads the stack below from *node*'s ``Color``/``Alpha`` inputs
-    and its ``Mask`` input, and takes *amount* on *amount_socket*. Returns
-    the result's colour and alpha refs. *clip* keeps the backdrop's alpha.
+    The group reads the stack below from *node*'s ``Color`` and ``Alpha``
+    inputs, and the mask from its ``Mask`` input. *amount* goes to the
+    *amount_socket* input. *clip* keeps the backdrop's alpha. Returns the
+    colour and alpha refs of the result.
     """
     mix = ctx.emit_node(node, role, 'ShaderNodeGroup', properties={'node_tree': group})
     ctx.connect_input(node.inputs['Color'], mix, 'Prev Color')
@@ -84,40 +93,42 @@ def emit_mix_group(ctx, node, role: str, group, amount_socket: str, amount: floa
     ctx.link_or_set(color, mix, 'Color')
     ctx.link_or_set(alpha, mix, 'Alpha')
     ctx.ir.set_input(mix, amount_socket, default_value=amount)
-    # Always set: the artifact reuses nodes by id and keeps the values of
-    # inputs the IR leaves out.
+    # Always set Clip, even to 0. The artifact reuses nodes by identifier
+    # and keeps the old values of inputs the IR leaves out.
     ctx.ir.set_input(mix, 'Clip', default_value=1.0 if clip else 0.0)
     return (mix, 'Color'), (mix, 'Alpha')
 
 
 class PaintSystemLayerNode(PaintSystemBaseNode):
-    """A layer: takes the previous stack (Color/Alpha), produces a new stack.
+    """A layer. It takes the stack below (Color/Alpha) and outputs a new stack.
 
-    Subclasses implement ``emit_source(ctx)`` returning ``(color, alpha)``
-    where each is an IR ref or a constant. Blending is shared.
+    Subclasses implement ``emit_source(ctx)``, which returns
+    ``(color, alpha)``. Each is an IR ref or a constant. Blending is shared
+    by every layer type.
 
-    Types offered in the Add Layer menu fill in the ``ps_*`` attributes and
-    are listed in ``nodes/layers/registry.py``.
+    Types offered in the Add Layer menu set the ``ps_*`` attributes and are
+    listed in ``nodes/layers/registry.py``.
     """
     bl_width_default = 200
     is_layer_node = True
 
-    # v2 layer type identifier, which migration maps v2 layers through.
+    # Layer type identifier. It uses v2's identifiers, so migration can map
+    # v2 layers through it.
     ps_type = ''
     ps_label = ''
     ps_description = ''
     # Icon names for ``common.icon_kwargs``, newest Blender name first.
     ps_icon: tuple[str, ...] = ('BLANK1',)
-    # Menu entries of different sections are separated.
+    # Add Layer menu section. Entries in different sections are separated.
     ps_menu_section = ''
-    # ``paint_system.add_layer`` properties ``create`` reads; adding a type
-    # that has any asks for them in a dialog first.
+    # Names of the ``paint_system.add_layer`` properties that ``create``
+    # reads. Adding a type that has any first asks for them in a dialog.
     ps_add_options: tuple[str, ...] = ()
-    # False for a type whose ``emit_blend`` does not composite, so the
-    # setting would be a control that does nothing.
+    # False for a type whose ``emit_blend`` does not composite. There the
+    # blend mode setting would do nothing, so it is hidden.
     ps_shows_blend_mode = True
-    # Label on ``opacity``: a type that replaces what is below it fades
-    # between the two rather than making itself see-through.
+    # Label for ``opacity``. A type that replaces what is below it uses
+    # opacity to fade between the two, not to make itself see-through.
     ps_opacity_label = "Opacity"
 
     opacity: FloatProperty(name="Opacity", default=1.0, min=0.0, max=1.0,
@@ -129,14 +140,15 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         name="Clip", default=False, update=mark_tree_dirty,
         description="Show this layer only where the layer below it is visible")
 
-    # Editing state only; the compiler ignores both (core._HASH_EXCLUDED_PROPS).
+    # Editing state only. The compiler ignores both
+    # (``core._HASH_EXCLUDED_PROPS``).
     lock_layer: BoolProperty(name="Lock Layer", default=False, update=update_painting,
                              description="Prevent changes to this layer's settings")
     lock_alpha: BoolProperty(name="Lock Alpha", default=False, update=update_painting,
                              description="Paint without changing this layer's transparency")
 
-    # Cache (hybrid bake). When valid, the compiler replaces this node and its
-    # whole upstream with a single image texture.
+    # Baked cache. While it is valid, the compiler replaces this node and
+    # everything upstream of it with one image texture.
     cache_enabled: BoolProperty(
         name="Use Cache", default=False, update=mark_tree_dirty,
         description="Replace this layer and everything below it with its baked image while the bake is up to date")
@@ -155,14 +167,15 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     def copy(self, node):
         super().copy(node)
         # Blender copies the pointer, so both layers would share one cache
-        # image, and ``bake_node_cache`` reuses whatever ``cache_image``
-        # holds: baking either copy would overwrite the other's pixels with
-        # no warning. A cache is derived, so the copy arrives without one and
-        # bakes its own. Authored content stays shared on purpose.
+        # image. ``bake_node_cache`` reuses whatever ``cache_image`` holds,
+        # so baking either copy would silently overwrite the other's
+        # pixels. A cache can be baked again, so the copy starts without
+        # one and bakes its own. Authored content stays shared on purpose.
         if self.cache_image is None and not self.cache_enabled:
             return
-        # ``cache_enabled``, ``cache_image`` and ``cache_uv_map`` recompile on
-        # assignment, so they are only written when there is a cache to clear.
+        # Assigning ``cache_enabled``, ``cache_image`` or ``cache_uv_map``
+        # triggers a recompile, so only write them when there is a cache to
+        # clear.
         self.cache_enabled = False
         self.cache_image = None
         self.cache_uv_map = ""
@@ -181,8 +194,8 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     def create(cls, tree, target=None, **options):
         """Add a layer of this type to *tree*'s active channel and return it.
 
-        *target* places it as in ``PaintSystemNodeTree.insert_layer_node``;
-        *options* carries the ``ps_add_options`` values by name.
+        *target* places it as in ``PaintSystemNodeTree.insert_layer_node``.
+        *options* holds the ``ps_add_options`` values by name.
         """
         return tree.insert_layer_node(cls.bl_idname, target=target)
 
@@ -198,15 +211,18 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         layout.label(text="", **icon_kwargs(*self.ps_icon))
 
     def draw_row_state(self, layout):
-        """A badge at the end of this layer's row, for a type with something to say.
+        """Draw an optional badge at the end of this layer's row.
 
-        Nothing by default. A filter layer uses it to show that what it
-        renders no longer matches the layers below it, which is not
-        visible in the viewport by design.
+        Nothing by default. A filter layer uses it to show that its result
+        no longer matches the layers below it. By design, the viewport does
+        not show that.
         """
 
     def draw_source_settings(self, context, layout):
-        """Settings of this layer's own content, shared by the node and the Layer Settings panel."""
+        """Draw the settings of this layer's own content.
+
+        The node and the Layer Settings panel both use it.
+        """
 
     def draw_layer_settings(self, context, layout):
         row = layout.row(align=True)
@@ -237,13 +253,16 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     # -- compiler -----------------------------------------------------------------
 
     def emit_source(self, ctx):
-        """Return (color, alpha): IR refs or constants for this layer's own content."""
+        """Return (color, alpha) for this layer's own content.
+
+        Each is an IR ref or a constant.
+        """
         return EMPTY_SOURCE
 
     def emit(self, ctx):
         if ctx.is_cached(self):
-            # Writing an RNA property tags the tree and the materials using
-            # it, so only write when the value actually changes.
+            # Writing an RNA property tags the tree and the materials that
+            # use it for an update, so only write when the value changes.
             if self.cache_stale:
                 self.cache_stale = False
             color, alpha = emit_image_texture(ctx, self, 'cache', self.cache_image,
@@ -260,12 +279,14 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         if base is not None:
             color, alpha = self.emit_blend(ctx, color, alpha, clip=True)
             if not feeds_clip_run(self):
-                # Top of the run: blend the base with everything clipped to it.
+                # Top of the run. Blend the base, with everything clipped to
+                # it, over the stack below the base.
                 color, alpha = base.emit_blend(ctx, color, alpha)
         elif not feeds_clip_run(self):
             color, alpha = self.emit_blend(ctx, color, alpha)
-        # Otherwise this is a base: the clipped layers above composite onto
-        # its content, and the top one blends the result with its settings.
+        # Otherwise this is a clip base. The clipped layers above composite
+        # onto its content. The top clipped layer then blends the result
+        # using this base's settings.
         ctx.alias_output(self, 'Color', color)
         ctx.alias_output(self, 'Alpha', alpha)
 

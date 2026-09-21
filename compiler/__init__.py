@@ -1,11 +1,14 @@
-"""The compiler package. It re-exports nothing: callers import the module they
-need (compiler.core, compiler.ir, ...) directly.
+"""The compiler package.
 
-``core`` is imported inside the hooks rather than at the top, so importing
-any one compiler module does not also load ``core`` and everything it imports.
-That matters for ``nodetree.stack_ops``: it imports ``compiler.builder``, and
-``core`` imports ``stack_ops``, so an eager import here would find
-``stack_ops`` half loaded whenever it is imported first.
+It re-exports nothing. Callers import the module they need, such as
+``compiler.core`` or ``compiler.ir``, directly.
+
+``core`` is imported inside ``register`` and ``unregister``, not at the
+top. So importing one compiler module does not also load ``core`` and
+everything it imports. This avoids a circular import.
+``nodetree.stack_ops`` imports ``compiler.builder``, and ``core`` imports
+``stack_ops``. If this file imported ``core`` at the top, it would find
+``stack_ops`` half loaded whenever ``stack_ops`` is imported first.
 """
 
 

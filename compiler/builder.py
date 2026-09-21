@@ -11,13 +11,14 @@ import bpy
 from .profile import phase
 
 if TYPE_CHECKING:
-    # For annotations only: ir imports this module.
+    # Only for type hints. A real import would be circular, because
+    # ``ir`` imports this module.
     from .ir import IR, IRNode, IRSocket
 
 log = logging.getLogger(__name__)
 
-# Custom ID property that tags each artifact node with the identifier the
-# builder emitted it under, so rebuilds can reuse nodes across renames.
+# Custom property that stores each artifact node's IR identifier. Rebuilds
+# find nodes by it, so a node still matches after it is renamed.
 IDENTIFIER_KEY = "ps_identifier"
 
 
@@ -30,12 +31,13 @@ def node_identifier(node) -> str:
 _pack_float32 = struct.Struct('f').pack
 _unpack_float32 = struct.Struct('f').unpack
 
-# Stands in for a property that cannot be read back, so it is always written.
+# Marks a property that cannot be read back. Such a property is always
+# written.
 _UNREADABLE = object()
 
 
 def _as_float32(value: float) -> float:
-    """*value* as RNA would store it: rounded to float32, widened back."""
+    """Round *value* to float32 precision, the way Blender stores floats."""
     try:
         return _unpack_float32(_pack_float32(value))[0]
     except (OverflowError, struct.error):
@@ -43,10 +45,10 @@ def _as_float32(value: float) -> float:
 
 
 def _same_id(current: Any, desired: Any) -> bool:
-    """Whether two datablock pointers refer to the same datablock.
+    """True when both values point to the same datablock, or both are None.
 
-    Two wrappers of one datablock are different Python objects, so they are
-    compared by address.
+    Two Python wrappers of one datablock are different objects, so they are
+    compared by memory address.
     """
     if current is None or desired is None:
         return current is None and desired is None
@@ -56,15 +58,17 @@ def _same_id(current: Any, desired: Any) -> bool:
 
 
 def same_value(current: Any, desired: Any) -> bool:
-    """Whether writing *desired* over *current* would store the same thing.
+    """True when writing *desired* over *current* would store the same value.
 
-    RNA keeps floats as float32, so *desired* is compared rounded to float32:
-    ``0.1`` reads back as ``0.10000000149011612`` and would otherwise look
-    different on every build. A difference RNA *can* store always compares
-    unequal. Datablocks compare by identity, sequences element by element.
+    Blender stores floats as float32, so *desired* is rounded to float32
+    before the comparison. Otherwise ``0.1``, which reads back as
+    ``0.10000000149011612``, would look changed on every build. Any
+    difference that float32 can hold still compares unequal. Datablocks
+    compare by identity, and sequences compare element by element.
 
-    Answering "no" only costs a redundant write; answering "yes" wrongly
-    leaves the artifact stale for good, so anything unrecognised is "no".
+    A wrong False only costs an extra write. A wrong True would leave the
+    artifact out of date for good. So any type not handled here gives
+    False.
     """
     if isinstance(desired, str):
         return isinstance(current, str) and current == desired
@@ -103,11 +107,11 @@ DEFAULT_NODE_WIDTH = 140.0
 
 @dataclass
 class BuildStats:
-    """What a build actually changed in the tree.
+    """Counts of what a build actually changed in the tree.
 
-    Counted on every build so a test or the profiler can tell a patch from a
-    rebuild; nothing in the add-on branches on it. ``values_written`` counts
-    the RNA writes that happened, not the ones that were asked for.
+    Tests and the profiler use it to tell a small patch from a full
+    rebuild. No add-on code depends on it. ``values_written`` counts only
+    the writes that happened, not the ones skipped as unchanged.
     """
     nodes_created: int = 0
     values_written: int = 0
@@ -117,15 +121,16 @@ class BuildStats:
 
 
 class NodeTreeBuilder:
-    """Patches a node tree into the nodes, links and interface an IR declares."""
+    """Updates a node tree so its nodes, links and interface match an IR."""
 
     def __init__(self, node_tree: bpy.types.NodeTree, ir: IR):
-        """*ir* is only read. Its nodes are used as they are, its links are
-        collected into a set, which also drops a link declared twice, and its
-        sockets are sorted into a copy.
+        """Prepare to build *node_tree* from *ir*. *ir* is never modified.
+
+        Its links are copied into a set, which also drops duplicate links.
+        Its sockets are sorted into a new list.
         """
-        # bl_use_group_interface exists from Blender 4.3; earlier versions
-        # give every node tree an interface.
+        # ``bl_use_group_interface`` exists from Blender 4.3. Earlier
+        # versions give every node tree an interface.
         if ir.sockets and not getattr(node_tree, "bl_use_group_interface", True):
             raise ValueError("Node tree does not use group interface")
         self.node_tree = node_tree
@@ -133,21 +138,23 @@ class NodeTreeBuilder:
         self._link_instructions: set[tuple[str, int | str, str, int | str]] = {
             (link.from_id, link.from_socket, link.to_id, link.to_socket) for link in ir.links
         }
-        # Outputs first, as the interface lists them. A copy, because the order
-        # of the IR's own list is part of its fingerprint.
+        # Outputs first, as Blender lists them in the interface. Sorted into
+        # a copy, because the order of the IR's list is part of its
+        # fingerprint.
         self._socket_instructions: list[IRSocket] = sorted(
             ir.sockets, key=lambda sock: sock.in_out == 'OUTPUT', reverse=True)
         self._existing_nodes: dict[str, bpy.types.Node] = {}
-        # Nodes whose identifier an earlier node already has. See _hydrate_existing_nodes.
+        # Nodes that repeat an earlier node's identifier. See
+        # ``_hydrate_existing_nodes``.
         self._duplicate_nodes: list[bpy.types.Node] = []
         self._newly_created: set[str] = set()
-        # (node pointer, is_input) -> (sockets, name -> socket), filled during
-        # the link phase only. See _socket_by_id.
+        # (node pointer, is_input) -> (sockets, name -> socket). Filled only
+        # during the link phase. See ``_socket_by_id``.
         self._socket_cache: dict[
             tuple[int, bool],
             tuple[list[bpy.types.NodeSocket], dict[str, bpy.types.NodeSocket]],
         ] = {}
-        # node pointer -> the node's box. See _node_bbox.
+        # node pointer -> the node's box. See ``_node_bbox``.
         self._bbox_cache: dict[int, tuple[float, float, float, float]] = {}
         self.stats = BuildStats()
         self._hydrate_existing_nodes()
@@ -156,12 +163,12 @@ class NodeTreeBuilder:
 
     def build(self, *, arrange: bool = True) -> None:
         with phase("upsert", self.node_tree):
-            # Sync node tree interface sockets
             self._sync_interface_sockets()
 
             desired_ids = set(self._node_instructions.keys())
 
-            # Remove excess nodes and duplicates (auto-removes their links)
+            # Remove unwanted and duplicate nodes. Blender removes their
+            # links too.
             for identifier in list(self._existing_nodes.keys()):
                 if identifier not in desired_ids:
                     self.node_tree.nodes.remove(
@@ -170,7 +177,8 @@ class NodeTreeBuilder:
                 self.node_tree.nodes.remove(node)
             self._duplicate_nodes.clear()
 
-            # Upsert nodes and apply properties / socket values
+            # Create missing nodes, replace nodes of the wrong type, then set
+            # properties and socket values.
             for identifier, instr in self._node_instructions.items():
                 node = self._existing_nodes.get(identifier)
 
@@ -199,24 +207,26 @@ class NodeTreeBuilder:
     # ── Link sync ────────────────────────────────────────────────────
 
     def _sync_links(self) -> None:
-        """Make the tree's links exactly the declared ones.
+        """Make the tree's links exactly match the declared links.
 
-        Links are matched by the pair of socket addresses they connect, never
-        by ``ps_identifier``: the tag is copied when a user duplicates an
-        artifact node by hand, so identifier matching would mistake the copy's
-        link for the real one and leave the real link uncreated.
+        Links are matched by the memory addresses of the two sockets they
+        connect, never by ``ps_identifier``. When a user duplicates an
+        artifact node by hand, the copy gets the same tag. Matching by
+        identifier could then mistake the copy's link for the real one, and
+        never create the real link.
 
-        Addresses also keep this off ``NodeSocket.links``, which is a Python
-        property that scans every link of the tree on each read. One pass over
-        ``node_tree.links`` decides every removal, and creation then only
-        looks up a socket address in a dict.
+        Matching by address also avoids ``NodeSocket.links``, a Python
+        property that scans every link in the tree on each read. Instead,
+        one pass over ``node_tree.links`` decides every removal, and each
+        creation only looks up a socket address in a dict.
         """
-        # The cache may only be filled now: up to here a bl_idname change
-        # could still recreate a node, which frees its sockets.
+        # The socket cache may only be filled from here on. Before this
+        # point, a changed ``bl_idname`` could still recreate a node, which
+        # frees its sockets.
         self._socket_cache.clear()
 
-        # to socket address -> from socket addresses, for the declared links
-        # and for the ones the tree already has.
+        # Target socket address -> source socket addresses. ``wanted`` holds
+        # the declared links, and ``present`` the ones the tree already has.
         wanted: dict[int, set[int]] = {}
         declared: list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = []
         for from_id, from_sock_id, to_id, to_sock_id in self._link_instructions:
@@ -247,8 +257,8 @@ class NodeTreeBuilder:
             self.node_tree.links.new(to_socket, from_socket)
             self.stats.links_created += 1
             if linked is None or not to_socket.is_multi_input:
-                # An input that holds one link drops what it held when the new
-                # link lands on it, so the replaced pair is gone.
+                # An input that holds one link drops its old link when a new
+                # one is added, so only the new pair is present now.
                 present[to_pointer] = {from_pointer}
             else:
                 linked.add(from_pointer)
@@ -256,14 +266,17 @@ class NodeTreeBuilder:
     # ── Interface socket sync ────────────────────────────────────────
 
     def _sync_interface_sockets(self) -> None:
-        """Ensure the node tree interface matches _socket_instructions in order."""
+        """Make the tree's interface sockets match ``_socket_instructions``.
+
+        The sockets end up in the same order as the instructions.
+        """
         interface = self.node_tree.interface
 
         def _flat_sockets() -> list[bpy.types.NodeTreeInterfaceSocket]:
             return [item for item in interface.items_tree
                     if item.item_type == 'SOCKET']
 
-        # Key: (name, in_out) — must be unique per declared socket
+        # Sockets are keyed by (name, in_out), which must be unique.
         SocketKey = tuple[str, str]
         desired_keys: dict[SocketKey, IRSocket] = {
             (instr.name, instr.in_out): instr
@@ -274,8 +287,9 @@ class NodeTreeBuilder:
         for sock in _flat_sockets():
             key: SocketKey = (sock.name, sock.in_out)
             instr = desired_keys.get(key)
-            # socket_type is the base type; bl_socket_idname includes the subtype
-            # (e.g. NodeSocketFloatFactor) and would churn sockets on every build.
+            # Compare ``socket_type``, the base type. ``bl_socket_idname``
+            # includes the subtype, such as NodeSocketFloatFactor, so it
+            # would remove and re-create sockets on every build.
             existing_type = getattr(sock, 'socket_type', sock.bl_socket_idname)
             if instr is None or existing_type != instr.socket_type:
                 interface.remove(sock)
@@ -312,11 +326,12 @@ class NodeTreeBuilder:
     # ── Hydration ────────────────────────────────────────────────────
 
     def _hydrate_existing_nodes(self) -> None:
-        """Map the tree's nodes by identifier.
+        """Map the tree's existing nodes by identifier.
 
         A node copied by hand carries the original's ``ps_identifier``. The
-        first node with an identifier keeps it, since the copy is added after
-        the original, and later ones are left for the build to remove.
+        copy is added after the original, so the first node with an
+        identifier keeps it. Later nodes with the same identifier are listed
+        for the build to remove.
         """
         for node in self.node_tree.nodes:
             identifier = node_identifier(node)
@@ -350,15 +365,16 @@ class NodeTreeBuilder:
         self.stats.values_written += 1
 
     def _write_if_changed(self, owner: Any, prop: str, value: Any) -> None:
-        """Write *value* onto *owner* unless RNA already holds it.
+        """Write *value* to *owner*, unless the property already holds it.
 
-        Every RNA write on a node tree tags the tree and the materials using
-        it for an update, which costs about as much as the tree is large. A
-        compile rewrites the whole artifact, so on an unchanged tree those
-        no-op writes were most of the cost of an edit.
+        Every property write on a node tree tags the tree, and the materials
+        that use it, for an update. That update takes time in proportion to
+        the tree's size. A compile sets every value in the artifact. Without
+        this check, writes that change nothing would be most of the cost of
+        an edit.
 
-        A property that cannot be read is written anyway, so this never turns
-        a write that used to work into an error.
+        A property that cannot be read is written anyway. So this check never
+        causes an error where a plain write would work.
         """
         current = getattr(owner, prop, _UNREADABLE)
         if current is _UNREADABLE or not same_value(current, value):
@@ -386,12 +402,12 @@ class NodeTreeBuilder:
     def _socket_by_id(
         self, node: bpy.types.Node, is_input: bool, socket_id: int | str,
     ) -> bpy.types.NodeSocket:
-        """Like ``_resolve_socket``, but keeps *node*'s socket list around.
+        """Like ``_resolve_socket``, but caches *node*'s sockets for reuse.
 
-        A declared link names each of its sockets by index or by name, and the
-        same node is named by many of them, so building the lookup once per
-        node turns the name scans into dict reads. Only valid while the socket
-        lists cannot change, which is why it is confined to the link phase.
+        Each declared link names its sockets by index or by name, and many
+        links use the same node. Building the lookup once per node turns
+        name scans into dict reads. The cache is only valid while socket
+        lists cannot change, so it is only used in the link phase.
         """
         key = (node.as_pointer(), is_input)
         cached = self._socket_cache.get(key)
@@ -420,12 +436,13 @@ class NodeTreeBuilder:
     # ── Arrangement ──────────────────────────────────────────────────
 
     def arrange_nodes(self) -> None:
-        """Lay out nodes left-to-right based on link topology.
+        """Lay out nodes from left to right, following the links.
 
-        Sinks (rightmost) anchor at x=0; predecessors flow left. Only newly
-        created nodes get repositioned; pre-existing positions are preserved
-        unless they overlap a new node, in which case the smaller upstream or
-        downstream cluster (by node count) shifts to make room.
+        Sinks, the nodes that feed nothing, sit at the right at x=0, and
+        the nodes feeding them go to the left. Only newly created nodes are
+        placed. Existing nodes keep their positions unless a new node
+        overlaps them. Then the smaller of the upstream or downstream
+        cluster, by node count, moves to make room.
         """
         if not self._newly_created or not self._existing_nodes:
             return
@@ -445,10 +462,10 @@ class NodeTreeBuilder:
     def _build_adjacency(
         self,
     ) -> tuple[dict[str, list], dict[str, list]]:
-        """Build (successors, predecessors) maps from link instructions.
+        """Build (successors, predecessors) maps from the declared links.
 
-        Skips self-loops. Both ends of every link exist by now: the link
-        phase looked each of them up.
+        Self-loops are skipped. Both ends of every link exist by now,
+        because the link phase looked each of them up.
         """
         successors: dict[str, list] = defaultdict(list)
         predecessors: dict[str, list] = defaultdict(list)
@@ -462,7 +479,10 @@ class NodeTreeBuilder:
     # ── Geometry helpers ─────────────────────────────────────────
 
     def _node_height(self, node: bpy.types.Node) -> float:
-        """Estimate node height. dimensions can be (0,0) right after creation."""
+        """Return the node's height, or an estimate when it is not known yet.
+
+        ``node.dimensions`` can be (0, 0) right after the node is created.
+        """
         try:
             dim_y = float(node.dimensions.y)
         except (AttributeError, TypeError):
@@ -478,12 +498,12 @@ class NodeTreeBuilder:
         return w if w > 0 else DEFAULT_NODE_WIDTH
 
     def _set_loc(self, node: bpy.types.Node, axis: int, value: float) -> None:
-        """Put one component of *node*'s location at *value*, if it is not there.
+        """Set one axis of *node*'s location to *value* if it differs.
 
-        Layout assigns a position to every node it visits, and most of those
-        positions are the ones the node already has. A location write tags the
-        tree and the materials using it like any other RNA write does, so a
-        redundant one costs as much as a real move.
+        Layout gives a position to every node it visits, and most nodes are
+        already there. A location write tags the tree and its materials for
+        an update, like any other property write. So a write that moves
+        nothing costs as much as a real move.
         """
         location = node.location
         if location[axis] != _as_float32(value):
@@ -491,7 +511,11 @@ class NodeTreeBuilder:
             self._bbox_cache.pop(node.as_pointer(), None)
 
     def _shift_x(self, node_ids, delta: float) -> None:
-        """Move the nodes *node_ids* sideways by *delta*, skipping any it would not move."""
+        """Move the nodes *node_ids* sideways by *delta*.
+
+        A node whose stored float32 position would not change is not
+        written.
+        """
         if not delta:
             return
         for nid in node_ids:
@@ -507,11 +531,11 @@ class NodeTreeBuilder:
     ) -> tuple[float, float, float, float]:
         """Return (left, top, right, bottom). Y grows upward, so bottom < top.
 
-        Overlap resolution reads the same boxes many times per build and moves
-        few of the nodes it compares, while each box costs four RNA reads. The
-        answers are cached for the length of the build and dropped per node by
-        the two writers above, which are the only things that can move a node
-        while a build is running.
+        Overlap checks read the same boxes many times per build but move few
+        nodes, and each box costs four Blender property reads. So boxes are
+        cached for the build. ``_set_loc`` and ``_shift_x`` drop a node's
+        entry when they move it. They are the only code that moves a node
+        during a build.
         """
         key = node.as_pointer()
         box = self._bbox_cache.get(key)
@@ -528,10 +552,10 @@ class NodeTreeBuilder:
     def _socket_y(
         self, node: bpy.types.Node, socket_idx: int, is_input: bool,
     ) -> float:
-        """Approximate world Y of a socket.
+        """Return the approximate Y position of a socket in the editor.
 
-        Blender visually shows outputs above inputs regardless of declaration
-        order; we mirror that so socket-to-socket alignment is meaningful.
+        Blender draws outputs above inputs, whatever order they are declared
+        in. This does the same, so that lining up sockets across nodes works.
         """
         out_count = len(node.outputs)
         if is_input:
@@ -545,7 +569,7 @@ class NodeTreeBuilder:
         a: tuple[float, float, float, float],
         b: tuple[float, float, float, float],
     ) -> bool:
-        """AABB overlap test. Boxes are (left, top, right, bottom), Y up."""
+        """True when two boxes overlap. A box is (left, top, right, bottom)."""
         a_left, a_top, a_right, a_bottom = a
         b_left, b_top, b_right, b_bottom = b
         if a_right <= b_left or b_right <= a_left:
@@ -571,12 +595,15 @@ class NodeTreeBuilder:
     def _compute_depths(
         self, successors: dict[str, list],
     ) -> dict[str, int]:
-        """Depth-from-sink. Sinks have depth 0; cycles default to 0.
+        """Return each node's depth, the longest path of links to a sink.
 
-        Walked on an explicit stack rather than by recursion: an artifact is
-        one long chain of layers, so a deep enough stack would raise
-        RecursionError here, and a raise anywhere in layout aborts the compile
-        before the fingerprint is stamped, leaving the artifact unmarked.
+        Sinks have depth 0. In a cycle, a link back to a node that is still
+        being walked counts as depth 0.
+
+        The walk uses an explicit stack, not recursion. An artifact is one
+        long chain of layers, so recursion could raise RecursionError when
+        there are many layers. Any error in layout stops the compile before
+        the new fingerprint is stored on the artifact.
         """
         depths: dict[str, int] = {}
         for start in self._existing_nodes:
@@ -590,8 +617,8 @@ class NodeTreeBuilder:
                     if target in depths:
                         continue
                     if target in on_path:
-                        # Cut the cycle here. The node keeps this 0 only until
-                        # its own frame finishes and overwrites it.
+                        # Cut the cycle here. This 0 is temporary. It is
+                        # overwritten when the node's own frame finishes.
                         depths[target] = 0
                         continue
                     on_path.add(target)
@@ -706,8 +733,11 @@ class NodeTreeBuilder:
         target_top: float,
         column_occupied: dict[int, list[tuple[float, float]]],
     ) -> float:
-        """Set node.y so its top is at target_top, shifting down past any
-        occupied interval in the same column. Records the new interval."""
+        """Place *node*'s top at *target_top*, or lower if that spot is taken.
+
+        The node moves down past any occupied interval in its column. Its
+        own interval is then recorded. Returns the top it was placed at.
+        """
         height = self._node_height(node)
         top = target_top
         max_passes = max(8, len(column_occupied[depth]) * 2)
@@ -755,10 +785,10 @@ class NodeTreeBuilder:
     ) -> None:
         """Place everything upstream of *node_id*, depth first.
 
-        The walk keeps its own stack of part-consumed predecessor lists for
-        the same reason ``_compute_depths`` does: a layer chain is long enough
-        to overflow Python's, and a raise inside layout would abort the
-        compile before the fingerprint is stamped.
+        Like ``_compute_depths``, this uses an explicit stack, not recursion.
+        A long layer chain could exceed Python's recursion limit, and an
+        error in layout would stop the compile before the fingerprint is
+        stored.
         """
         stack = [(node_id, iter(self._sorted_predecessors(node_id, predecessors)))]
         while stack:
@@ -798,10 +828,11 @@ class NodeTreeBuilder:
         new_ids: set[str],
         positioned_ids: set[str],
     ) -> None:
-        # For each new node, compute (anchor, hop_depth) in each direction
-        # plus the IMMEDIATE neighbor on the topmost socket (used for Y
-        # alignment). Chain depths let us spread chained new nodes across
-        # multiple columns instead of piling them up at the same x.
+        # For each new node, find the nearest positioned node (its anchor)
+        # and the number of hops to it, both upstream and downstream. Also
+        # find its direct neighbour on the topmost socket, which sets its Y.
+        # The hop counts spread a chain of new nodes over several columns
+        # instead of piling them up at the same X.
         meta: dict[str, dict] = {}
         for nid in new_ids:
             up_anchor, up_depth = self._chain_depth_and_anchor(
@@ -822,7 +853,8 @@ class NodeTreeBuilder:
                 'up_neighbor': up_neighbor, 'down_neighbor': down_neighbor,
             }
 
-        # Group by (up_anchor, down_anchor) for make-room budgeting.
+        # Group new nodes by (up_anchor, down_anchor), so each group makes
+        # room between its anchors once.
         groups: dict[tuple[str | None, str | None],
                      list[str]] = defaultdict(list)
         for nid in new_ids:
@@ -850,11 +882,12 @@ class NodeTreeBuilder:
         new_ids: set[str],
         positioned_ids: set[str],
     ) -> tuple[str | None, int | None]:
-        """BFS through new nodes to find the closest positioned anchor.
+        """Find the nearest positioned node, walking only through new nodes.
 
-        Returns (anchor_id, hop_count) where hop_count is 1 for a direct
-        positioned neighbor, 2 for one new-node hop away, etc.
-        Returns (None, None) if no positioned node is reachable.
+        The search is breadth first. Returns (anchor_id, hop_count).
+        hop_count is 1 for a direct neighbour, 2 when one new node lies in
+        between, and so on. Returns (None, None) when no positioned node can
+        be reached.
         """
         visited: set[str] = {start}
         queue: list[tuple[str, int]] = [(start, 0)]
@@ -874,10 +907,11 @@ class NodeTreeBuilder:
         adjacency: dict[str, list],
         is_input_side: bool,
     ) -> tuple[str, int, int] | None:
-        """Return (neighbor_id, local_idx_on_nid, remote_idx_on_neighbor)
-        for the connection on the topmost socket of `nid`. Does NOT walk
-        through other nodes — picks the direct neighbor on socket index 0
-        (or lowest connected index).
+        """Return the direct neighbour on *nid*'s topmost linked socket.
+
+        The result is (neighbour id, socket index on *nid*, socket index on
+        the neighbour), or None when *nid* has no links on this side. It
+        does not walk past the direct neighbour.
         """
         node = self._existing_nodes[nid]
         sockets = node.inputs if is_input_side else node.outputs
@@ -908,9 +942,9 @@ class NodeTreeBuilder:
         predecessors: dict[str, list],
         positioned_ids: set[str],
     ) -> None:
-        # column_index from the up side when up_anchor exists, otherwise
-        # from the down side. Members with the same column_index are true
-        # siblings; different indices go in different columns.
+        # A member's column index is its hop count from the up anchor when
+        # there is one, otherwise from the down anchor. Members with the
+        # same index are siblings and share a column.
         def _col_idx(nid: str) -> int:
             m = meta[nid]
             if up_id is not None and m['up_depth'] is not None:
@@ -930,11 +964,13 @@ class NodeTreeBuilder:
             )
             for k, nids in columns.items()
         }
-        # Any column index missing widths (shouldn't happen, defensive)
+        # Give any empty column a default width. This should not happen,
+        # and is only a safeguard.
         for k in range(1, chain_length + 1):
             col_max_width.setdefault(k, DEFAULT_NODE_WIDTH)
 
-        # Make-room if both anchors exist and the gap is too small.
+        # With both anchors, make room when the gap between them is too
+        # small.
         if up_id is not None and down_id is not None:
             up_node = self._existing_nodes[up_id]
             down_node = self._existing_nodes[down_id]
@@ -964,7 +1000,7 @@ class NodeTreeBuilder:
                 col_x[k] = cursor
                 cursor += col_max_width[k] + H_MARGIN
         else:
-            # down-anchor only: right-align columns leftward
+            # Only a down anchor: fill columns leftwards, right-aligned.
             down_node = self._existing_nodes[down_id]
             cursor = float(down_node.location.x) - H_MARGIN
             for k in range(1, chain_length + 1):
@@ -972,10 +1008,10 @@ class NodeTreeBuilder:
                 col_x[k] = cursor - col_max_width[k]
                 cursor = col_x[k] - H_MARGIN
 
-        # Place column by column. When up_id exists we walk left→right
-        # (k=1..chain_length) so each member's up_neighbor is already placed
-        # by the time we reach it. When only down_id exists we walk
-        # right→left (k=1..chain_length) so the down_neighbor is placed first.
+        # Place column by column, for k = 1 to chain_length, moving away
+        # from the anchor. With an up anchor that is left to right. With
+        # only a down anchor it is right to left. Either way, each member's
+        # neighbour on the anchor side is placed before the member.
         column_intervals: dict[int,
                                list[tuple[float, float]]] = defaultdict(list)
         all_placed_members: list[str] = []
@@ -988,7 +1024,7 @@ class NodeTreeBuilder:
                 node = self._existing_nodes[nid]
                 # X: left-align inside the column slot
                 self._set_loc(node, 0, col_x[k])
-                # Y: align to immediate neighbor on the anchor side
+                # Y: line up with the direct neighbour on the anchor side
                 target_top = self._neighbor_aligned_y(nid, meta, up_id)
                 self._place_in_column(node, k, target_top, column_intervals)
                 all_placed_members.append(nid)
@@ -1004,8 +1040,10 @@ class NodeTreeBuilder:
         meta: dict[str, dict],
         up_id: str | None,
     ) -> int:
-        """Sort siblings in a column by the socket index on the shared
-        immediate neighbor — topmost socket wins."""
+        """Sort key that orders siblings by the neighbour socket they use.
+
+        A lower socket index, which is higher on the node, comes first.
+        """
         m = meta[nid]
         if up_id is not None and m['up_neighbor'] is not None:
             return m['up_neighbor'][2]  # remote idx on the neighbor
@@ -1019,13 +1057,15 @@ class NodeTreeBuilder:
         meta: dict[str, dict],
         up_id: str | None,
     ) -> float:
-        """Compute target top-Y for a new node by aligning the socket that
-        connects to its IMMEDIATE neighbor (positioned or just-placed new)
-        to that neighbor's matching socket."""
+        """Return a top Y that lines up *nid*'s socket with its neighbour's.
+
+        The neighbour is the direct one on the anchor side. It may be an
+        existing node, or a new node placed just before this one.
+        """
         node = self._existing_nodes[nid]
         m = meta[nid]
-        # Prefer up-side alignment when up_anchor exists for this group;
-        # otherwise use down-side.
+        # Line up with the up side when this group has an up anchor,
+        # otherwise with the down side.
         if up_id is not None and m['up_neighbor'] is not None:
             neighbor_id, local_idx, remote_idx = m['up_neighbor']
             neighbor = self._existing_nodes[neighbor_id]
@@ -1059,9 +1099,10 @@ class NodeTreeBuilder:
         successors: dict[str, list],
         predecessors: dict[str, list],
     ) -> None:
-        """Shift either the up-cluster left or the down-cluster right by `deficit`.
+        """Move the up cluster left or the down cluster right by *deficit*.
 
-        Picks the smaller cluster (by node count) to minimize displacement.
+        The smaller cluster, by node count, is moved, so fewer nodes change
+        place.
         """
         up_cluster = self._reachable(
             up_id, predecessors, positioned_ids, exclude={down_id},
@@ -1082,7 +1123,7 @@ class NodeTreeBuilder:
         universe: set[str],
         exclude: set[str],
     ) -> set[str]:
-        """BFS reachability over `adjacency`, restricted to `universe`."""
+        """Nodes in *universe* reachable from *start*, avoiding *exclude*."""
         result: set[str] = set()
         if start not in universe or start in exclude:
             return result
@@ -1110,10 +1151,11 @@ class NodeTreeBuilder:
         successors: dict[str, list],
         predecessors: dict[str, list],
     ) -> None:
-        """Push positioned nodes (other than the up/down anchors) out of the
-        way of the just-placed group. Pre-existing overlaps between two
-        already-positioned nodes are left alone — only overlaps introduced by
-        the new group are resolved.
+        """Move positioned nodes out of the way of the group just placed.
+
+        The group's up and down anchors are not tested for overlap. Overlaps
+        between two nodes that were already positioned are left alone. Only
+        overlaps with the new group are fixed.
         """
         excluded = set(group_members)
         if up_id is not None:
@@ -1121,10 +1163,10 @@ class NodeTreeBuilder:
         if down_id is not None:
             excluded.add(down_id)
 
-        # The group itself cannot move in this loop: only positioned nodes are
-        # shifted, and the group's members are new ones, which are not in
-        # positioned_ids. Its box and the list of nodes to test against it are
-        # therefore the same on every pass, and both cost a walk to build.
+        # The group does not move in this loop. Only positioned nodes are
+        # shifted, and the group's members are new nodes, which are not in
+        # positioned_ids yet. So the group's box and the list of nodes to
+        # test are the same on every pass, and are built once here.
         boxes = [
             self._node_bbox(self._existing_nodes[nid])
             for nid in group_members
@@ -1162,7 +1204,8 @@ class NodeTreeBuilder:
             shift_amount = worst_overlap + H_MARGIN
 
             if other_center_x <= group_center_x:
-                # Worst is on (or aligned with) the left side → shift left
+                # The worst node is left of the group's centre, or level
+                # with it, so it and its upstream shift left.
                 cluster = self._reachable(
                     worst, predecessors, positioned_ids,
                     exclude=group_member_set,
@@ -1181,8 +1224,11 @@ class NodeTreeBuilder:
     def _place_orphan_group(
         self, members: list[str], positioned_ids: set[str],
     ) -> None:
-        """Place new nodes with no graph neighbors in a column to the right
-        of every positioned node, stacked vertically."""
+        """Place new nodes whose links reach no positioned node.
+
+        They are stacked in one column, to the right of every positioned
+        node.
+        """
         if positioned_ids:
             rightmost = max(
                 float(self._existing_nodes[nid].location.x)

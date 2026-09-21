@@ -8,31 +8,35 @@ from .header_draw import draw_header
 
 
 def mark_tree_dirty(self, context=None):
-    """Shared ``update=`` callback for node properties that affect the compiled tree."""
+    """``update=`` callback for properties that change the compiled tree."""
     mark_dirty(self.id_data)
 
 
 class PaintSystemBaseNode:
     """Mixin for every node in a PaintSystemNodeTree.
 
-    Nodes are pure data. They never create or own shader datablocks; instead
-    they implement ``emit(ctx)`` which describes their shader graph in the IR.
+    Nodes are pure data. They never create or own shader datablocks.
+    Instead they implement ``emit(ctx)``, which describes their shader graph
+    in the IR.
     """
     uuid: StringProperty(name="UUID")
 
-    # Layer names are the built-in Node.name, which Blender keeps unique
-    # within the tree on every version. Do not redefine ``name`` here: a
-    # Python property shadows it and drifts from the name ``nodes.get``
-    # looks up before Blender 5.2.
+    # A layer's name is the built-in ``Node.name``, which Blender keeps
+    # unique in the tree on every version. Do not redefine ``name`` here. A
+    # Python property would hide the built-in one, and before Blender 5.2
+    # ``nodes.get`` still looks up the built-in name, so the two can differ.
 
-    # No ``update`` override: Blender calls Node.update for every node of a
-    # tree whose links changed and then NodeTree.update once, which compiles.
+    # No ``update`` override. When links change, Blender calls
+    # ``Node.update`` on every node of the tree and then
+    # ``NodeTree.update`` once. That last call compiles.
 
     is_layer_node = False
     is_folder = False
-    # Properties ``compiler.core._hashed_props`` leaves out of node_state.
+    # Property names that ``compiler.core._hashed_props`` leaves out of the
+    # node's hash.
     ps_unhashed_props: tuple[str, ...] = ()
-    # Presentation only: class attributes stay out of compiler fingerprints.
+    # For display only. It is a plain class attribute, not a property, so
+    # it stays out of compiler fingerprints.
     header_color = None
 
     @classmethod
@@ -43,11 +47,13 @@ class PaintSystemBaseNode:
         self.uuid = str(uuid.uuid4())
         if self.header_color is not None:
             self.use_custom_color = True
-            # nodes.new() invokes init with context=None.
+            # ``nodes.new()`` calls ``init`` with context=None, so read
+            # ``bpy.context`` instead.
             self.color = bpy.context.preferences.themes[0].node_editor.node_backdrop[:3]
 
     def copy(self, node):
-        # Called on the new node with the source node; the copy needs its own identity.
+        # Blender calls this on the new node, with the source node as
+        # *node*. The copy needs its own uuid.
         self.uuid = str(uuid.uuid4())
 
     def draw_label(self):
@@ -61,5 +67,8 @@ class PaintSystemBaseNode:
         pass
 
     def hash_parts(self, ctx):
-        """Extra data folded into this node's subtree hash (see CompileContext)."""
+        """Return extra data to add to this node's subtree hash.
+
+        See ``CompileContext.subtree_hash``.
+        """
         return []

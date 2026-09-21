@@ -1,22 +1,26 @@
-"""The layer stack of a Paint System tree: walking it and editing it.
+"""Walk and edit the layer stack of a Paint System tree.
 
-The stack is the graph. The top layer feeds a channel's socket on the
-active Group Output; every layer takes the stack below it on its ``Color``
-and ``Alpha`` inputs, and a folder takes the top of its content on
-``Content Color`` and ``Content Alpha``. Such a pair of input sockets is a
-slot. The bottom layer of a folder has nothing linked below it, which the
-compiler reads as a transparent backdrop.
+Entry points: ``stack`` walks it. ``attach``, ``detach``, ``insert_*``,
+``remove`` and ``move`` edit it. ``arrange_stack`` lays it out.
 
-Invariants the edits keep:
+The links are the stack. The top layer feeds a channel's socket on the
+active Group Output. Each layer takes the stack below it on its ``Color``
+and ``Alpha`` inputs. A folder takes the top of its content on
+``Content Color`` and ``Content Alpha``. Such a pair of inputs is a slot.
+The bottom layer of a folder has nothing linked below it. The compiler
+reads that as a transparent backdrop.
 
-- a layer's ``Color`` output feeds at most one slot;
-- a slot's alpha input is linked from the alpha partner of whatever feeds
-  its colour input, and is unlinked when the colour input is.
+Edits keep two rules:
 
-Hand edits in the node editor can break the second one. The compiler
-reads alpha from the colour link regardless (``CompileContext.source``),
-and ``repair_alpha_links`` tidies the links before the next stack edit.
-It cannot run from ``NodeTree.update``: Blender drops links created there.
+- A layer's ``Color`` output feeds at most one slot.
+- A slot's alpha input is linked from the alpha partner of whatever feeds
+  its colour input. It is unlinked when the colour input is.
+
+Hand edits in the node editor can break the second rule. The compiler
+reads alpha through the colour link anyway (``CompileContext.source``).
+``repair_alpha_links`` fixes the links before the next stack edit. It
+cannot run from ``NodeTree.update``, because Blender drops links created
+there.
 
 Callers batch edits in ``suspend_compile`` so the tree compiles once.
 """
@@ -40,14 +44,15 @@ ROW_HEIGHT = 320
 # ── Link index ───────────────────────────────────────────────────────
 #
 # ``NodeSocket.links`` is a Python property that scans every link of the
-# tree, so a walk down the stack costs O(layers * links). ``link_index``
-# maps a tree's links by socket in one pass and keeps that map for the
-# length of a read-only walk; ``socket_links`` reads it.
+# tree. So a walk down the stack costs O(layers * links). ``link_index``
+# maps a tree's links by socket in one pass. It keeps that map for the
+# length of a read-only walk, and ``socket_links`` reads it.
 #
-# Indexes are keyed by tree pointer, so a nested compile of a child tree
-# cannot clobber the one a parent build installed, and any tree without one
-# falls back to ``NodeSocket.links``. An index must never survive a link
-# edit: a block that edits calls ``invalidate`` before its first change.
+# Indexes are keyed by tree pointer. So a nested compile of a child tree
+# cannot overwrite the index a parent build installed. A tree without an
+# index falls back to ``NodeSocket.links``. An index must never outlive a
+# link edit, so a block that edits calls ``invalidate`` before its first
+# change.
 
 _link_indexes: dict[int, dict[int, tuple]] = {}
 
@@ -62,13 +67,15 @@ def socket_links(socket) -> tuple:
 
 
 def _build_link_index(tree) -> dict[int, tuple]:
-    """Every socket pointer of *tree* mapped to its links, in ``NodeSocket.links`` order.
+    """Map every socket pointer of *tree* to its links.
 
-    That property walks ``tree.links`` in order and then, for an input,
-    sorts by ``multi_input_sort_id`` descending. Python's sort is stable, so
-    links sharing an id keep tree order; sorting the inputs here matches it.
-    Muted and invalid links go in, exactly as the property returns them:
-    ``feeding_link`` does its own filtering and ``consumer_slot`` does not.
+    The links are in ``NodeSocket.links`` order. That property walks
+    ``tree.links`` in order. For an input, it then sorts by
+    ``multi_input_sort_id``, descending. Python's sort is stable, so links
+    with the same id keep tree order. Sorting the inputs here gives the
+    same order. Muted and invalid links are kept, exactly as the property
+    returns them. ``feeding_link`` filters them itself, and
+    ``consumer_slot`` does not filter them.
     """
     by_socket: defaultdict[int, list] = defaultdict(list)
     inputs: set[int] = set()
@@ -87,10 +94,10 @@ def _build_link_index(tree) -> dict[int, tuple]:
 class link_index:
     """Read *tree*'s links from an index inside the ``with`` block.
 
-    Nested blocks on the same tree share the outermost one's index. Only
-    read-only walks may install one; a block that goes on to edit links
-    calls ``invalidate`` first, which drops the index for the enclosing
-    blocks as well and sends their reads back to ``NodeSocket.links``.
+    Nested blocks on the same tree share the outermost block's index. Only
+    read-only walks may install one. A block that then edits links calls
+    ``invalidate`` first. That drops the index for the enclosing blocks
+    too, so their reads go back to ``NodeSocket.links``.
     """
 
     def __init__(self, tree):
@@ -163,7 +170,7 @@ def paired_color_input(socket):
 
 
 def feeding_link(socket) -> bpy.types.NodeLink | None:
-    """The link the compiler reads for *socket*: the first unmuted one.
+    """The first unmuted link into *socket*, which the compiler reads.
 
     ``is_valid`` is not checked. Blender validates links after
     ``NodeTree.update``, so a link created by the edit being compiled still
@@ -278,11 +285,12 @@ def descendants(folder) -> list[bpy.types.Node]:
 
 # ── Clipping ─────────────────────────────────────────────────────────
 #
-# A clipped layer composites onto the content of the first unclipped layer
-# below it, its base, instead of onto the stack. The base's blend then
-# puts the base with its clipped layers over the stack below, as one. The
-# base and the clipped layers under the top one therefore output the run
-# so far, not the stack; the top one outputs the stack.
+# A clipped layer composites onto the content of its base, which is the
+# first unclipped layer below it. It does not composite onto the stack.
+# The base's blend then puts the base, with its clipped layers, over the
+# stack below as one. So the base and the clipped layers under the top
+# one output the run so far, not the stack. Only the top one outputs the
+# stack.
 
 
 def layer_below(node):
@@ -337,7 +345,10 @@ def feeds_clip_run(node) -> bool:
 
 
 def attach(tree, node, slot) -> None:
-    """Put the detached *node* into *slot*; whatever fed the slot now feeds *node*."""
+    """Put the detached *node* into *slot*.
+
+    Whatever fed the slot now feeds *node*.
+    """
     color_in, alpha_in = slot
     link = feeding_link(color_in)
     below_color = link.from_socket if link else None
@@ -417,10 +428,10 @@ def remove(tree, node) -> None:
 class MoveOption:
     """One way to move a layer a row up or down.
 
-    The layer is placed ``ABOVE``, ``BELOW``, ``INTO_TOP`` or ``INTO_BOTTOM``
-    of *target*. *folder* is the folder the option is named after: the one
-    entered or left, or the one ``MOVE_ADJACENT`` lands in (None for the
-    top level).
+    *placement* puts the layer ``ABOVE``, ``BELOW``, ``INTO_TOP`` or
+    ``INTO_BOTTOM`` of *target*. *folder* is the folder the option is named
+    after. That is the folder entered or left, or the one ``MOVE_ADJACENT``
+    lands in. It is None for the top level.
     """
     action: str
     target: bpy.types.Node
@@ -429,26 +440,39 @@ class MoveOption:
 
 
 def movement_options(items: list[StackItem], node, direction: str) -> list[MoveOption]:
-    """The moves one row ``'UP'`` or ``'DOWN'`` offers *node* in the stack *items*.
+    """Return the moves one row ``'UP'`` or ``'DOWN'`` for *node* in *items*.
 
-    Up, from directly below its folder: only out of it, above the folder
-    (``MOVE_OUT``). Otherwise: into an empty folder on the row above, at
-    its bottom (``MOVE_INTO``); into the folder holding the row above, when
-    that is not the node's own (``MOVE_ADJACENT``); and above the previous
-    sibling (``SKIP``).
+    Up:
 
-    Down, the first row after the node's content decides. With no such row
-    and a folder around the node: only out of it, below the folder
-    (``MOVE_OUT_BOTTOM``). Otherwise: into that row at its top when it is a
-    folder (``MOVE_INTO_TOP``); below it when it is the next sibling
-    (``SKIP``); else out of the node's folder, below the folder
-    (``MOVE_OUT_BOTTOM``), and when the row is further out than that,
-    straight to its level above it (``MOVE_ADJACENT``).
+    - Directly below its own folder, the only move is out of it, above the
+      folder (``MOVE_OUT``).
+    - Otherwise the moves are:
 
-    These are v2's options, except that v2 offered a ``SKIP`` that did
-    nothing when there was no next sibling, and reached the next row's
-    level directly with ``MOVE_ADJACENT`` where this also offers leaving
-    one folder at a time.
+      - into an empty folder on the row above, at its bottom
+        (``MOVE_INTO``);
+      - into the folder that holds the row above, when that is not the
+        node's own folder (``MOVE_ADJACENT``);
+      - above the previous sibling (``SKIP``).
+
+    Down, the first row after the node's content decides:
+
+    - With no such row but a folder around the node, the only move is out
+      of it, below the folder (``MOVE_OUT_BOTTOM``).
+    - Otherwise the moves are:
+
+      - into that row at its top, when it is a folder (``MOVE_INTO_TOP``);
+      - below that row, when it is the next sibling (``SKIP``);
+      - when it is not the next sibling, out of the node's folder, below
+        the folder (``MOVE_OUT_BOTTOM``);
+      - when it is further out than the node's folder, also straight to
+        the row's level, above it (``MOVE_ADJACENT``).
+
+    These match v2's options, with two deliberate differences:
+
+    - v2 offered a ``SKIP`` that did nothing when there was no next
+      sibling.
+    - v2 reached the next row's level directly with ``MOVE_ADJACENT``.
+      This also offers leaving one folder at a time.
     """
     position = next((i for i, item in enumerate(items) if item.node == node), None)
     if position is None:
@@ -494,7 +518,10 @@ def movement_options(items: list[StackItem], node, direction: str) -> list[MoveO
 
 
 def move(tree, channel_name: str, node, direction: str, action: str) -> bool:
-    """Make the *action* move ``movement_options`` offers *node*; False if it offers no such move."""
+    """Make the *action* move that ``movement_options`` offers *node*.
+
+    Returns False if no such move is offered.
+    """
     option = next((option for option in movement_options(stack(tree, channel_name), node, direction)
                    if option.action == action), None)
     if option is None:
@@ -510,9 +537,13 @@ def move(tree, channel_name: str, node, direction: str, action: str) -> bool:
 
 
 def repair_alpha_links(tree) -> int:
-    """Make every slot's alpha input follow its colour input. Returns the number of fixes."""
+    """Make every slot's alpha input follow its colour input.
+
+    Returns the number of fixes.
+    """
     fixes = 0
-    # The scan reads through an index; the first fix edits links and drops it.
+    # The scan reads through an index. The first fix edits links and drops
+    # the index.
     index = link_index(tree)
     with index:
         for node in tree.nodes:
@@ -546,10 +577,11 @@ def repair_alpha_links(tree) -> int:
 def _move_node(node, x: float, y: float) -> None:
     """Write ``node.location`` only when that would move the node.
 
-    Every RNA write tags the tree and the materials using it, work that is
-    linear in the tree, so putting a node back where it already is costs as
-    much as a real move. A stack edit re-lays out every layer, and all but a
-    few of them keep their place.
+    Every RNA write tags the tree, and the materials that use it, for an
+    update. That update takes time linear in the size of the tree. So
+    putting a node back where it already is costs as much as a real move.
+    A stack edit lays out every layer again, and most of them keep their
+    place.
     """
     location = node.location
     if same_value(location[0], x) and same_value(location[1], y):
@@ -558,7 +590,10 @@ def _move_node(node, x: float, y: float) -> None:
 
 
 def arrange_stack(tree, channel_name: str) -> None:
-    """Lay the stack out right to left from the Group Output, folder content above its folder."""
+    """Lay the stack out from the Group Output, right to left.
+
+    Folder content sits above its folder, one row higher per nesting level.
+    """
     output = tree.get_output_node()
     if output is None:
         return

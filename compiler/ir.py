@@ -1,9 +1,10 @@
 """Intermediate representation produced by the compiler.
 
-An ``IR`` is a plain Python description of a shader node tree: interface
-sockets, nodes keyed by a stable identifier, and links between them. It has no
-references back into the Paint System tree, so it can be hashed, compared and
-applied to any ``ShaderNodeTree`` through ``NodeTreeBuilder``.
+An ``IR`` is a plain Python description of a shader node tree. It holds
+interface sockets, nodes keyed by a stable identifier, and the links between
+them. It has no references back into the Paint System tree. So it can be
+hashed, compared, and applied to any ``ShaderNodeTree`` with ``IR.apply``,
+which uses ``NodeTreeBuilder``.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from .builder import BuildStats, NodeTreeBuilder
 
 SocketId = int | str
 Ref = tuple[str, SocketId]
-"""(ir node identifier, socket id) — a reference to an output socket in the IR."""
+"""Reference to an IR output socket, as (node identifier, socket id)."""
 
 
 @dataclass
@@ -96,10 +97,10 @@ class IR:
     # -- hashing --------------------------------------------------------
 
     def payload(self) -> dict[str, Any]:
-        """Everything the fingerprint covers, as plain JSON data.
+        """Return everything the fingerprint covers, as plain JSON data.
 
-        Nodes and links are ordered so that two IRs describing the same tree
-        produce the same payload whatever order they were emitted in.
+        Nodes and links are sorted. So two IRs that describe the same tree
+        give the same payload, whatever order they were emitted in.
         """
         return {
             "meta": dict(self.meta),
@@ -128,7 +129,7 @@ class IR:
     # -- applying -------------------------------------------------------
 
     def apply(self, node_tree: bpy.types.NodeTree, *, arrange: bool = True) -> BuildStats:
-        """Patch *node_tree* into this IR. Returns what the build changed."""
+        """Update *node_tree* to match this IR, and return what changed."""
         builder = NodeTreeBuilder(node_tree, self)
         builder.build(arrange=arrange)
         return builder.stats
@@ -143,12 +144,12 @@ def hash_payload(payload: Any) -> str:
 
 
 def _serialize(value: Any) -> Any:
-    """Convert *value* into something json.dumps can handle deterministically.
+    """Convert *value* to plain data that always gives the same JSON.
 
-    Nearly every value in a payload is a float, a string or a dict of those,
-    so the exact type is checked first and anything else goes to the isinstance
-    chain in ``_serialize_other``. Dict keys are not sorted here: the payload
-    is dumped with ``sort_keys=True``, which orders them anyway.
+    Most payload values are floats, strings or dicts of those. So the exact
+    type is checked first, which is fast. Anything else goes to the slower
+    ``isinstance`` checks in ``_serialize_other``. Dict keys are not sorted
+    here, because the payload is dumped with ``sort_keys=True``.
     """
     kind = type(value)
     if kind is float:
@@ -163,10 +164,10 @@ def _serialize(value: Any) -> Any:
 
 
 def _serialize_other(value: Any) -> Any:
-    """The rest of ``_serialize``: datablocks and subclasses.
+    """Slow path of ``_serialize``, for datablocks, subclasses and the rest.
 
-    An ID comes before the container checks because a datablock is
-    identified by name rather than by its contents.
+    Datablocks are checked before containers, because a datablock is
+    identified by its name, not by its contents.
     """
     if isinstance(value, bpy.types.ID):
         return ["id", type(value).__name__, value.name_full]

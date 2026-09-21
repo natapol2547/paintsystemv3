@@ -18,13 +18,14 @@ GROUP_LAYER_ID = 'PaintSystemGroupLayerNode'
 
 
 def sync_sockets(sockets, specs) -> None:
-    """Make *sockets* match *specs* (list of (name, socket_type, props)).
+    """Make *sockets* match *specs*, a list of (name, socket_type, props).
 
-    A rename (same count, same types, new names) is applied in place so
-    existing links survive. Anything else is reconciled by removing, adding
-    and moving sockets. That includes a reorder of sockets of the same
-    type: a moved socket keeps its links, while renaming in place would
-    leave each link on the socket that now has another channel's name.
+    A rename, with the same count, the same types and new names, is
+    applied in place, so existing links survive. Anything else is fixed by
+    removing, adding and moving sockets. That includes a reorder of
+    sockets of the same type. A moved socket keeps its links. Renaming in
+    place would leave each link on a socket that now has another channel's
+    name.
     """
     desired = [(name, socket_type) for name, socket_type, _ in specs]
 
@@ -79,7 +80,7 @@ def _set_active_layer_index(tree, index: int) -> None:
     if not 0 <= index < len(tree.nodes) or not stack_ops.is_layer(tree.nodes[index]):
         return
     tree.activate_layer_node(tree.nodes[index])
-    # Imported here: ``context`` imports this package.
+    # Imported here, because ``context`` imports this package.
     from ..context import update_active_image
     update_active_image(bpy.context)
 
@@ -95,13 +96,14 @@ class PaintSystemNodeTree(NodeTree):
     active_channel_index: IntProperty(name="Active Channel", default=0)
     uuid: StringProperty(name="UUID")
 
-    # The selection on the active layer image, as the operations that built
-    # it (PS-091). Document data, so Blender's undo covers it and it is
-    # saved with the file; the mask is derived and never stored.
+    # The selection on the active layer image, stored as the operations
+    # that built it (PS-091). It is document data, so Blender's undo covers
+    # it and it is saved with the file. The mask is derived from it and
+    # never stored.
     selection: PointerProperty(type=PaintSystemSelection)
 
-    # The layer list shows ``nodes`` directly; its active row is the active
-    # node, so nothing is stored that could disagree with the graph.
+    # The layer list shows ``nodes`` directly, and its active row is the
+    # active node. So nothing is stored that could disagree with the graph.
     active_layer_index: IntProperty(
         name="Active Layer",
         description="Index in nodes of the active layer",
@@ -109,7 +111,8 @@ class PaintSystemNodeTree(NodeTree):
         set=_set_active_layer_index,
     )
 
-    # Build artifact. Owned by this tree, rebuilt by the compiler, never edited by hand.
+    # Build artifact. This tree owns it and the compiler rebuilds it. Never
+    # edit it by hand.
     compiled: PointerProperty(
         type=bpy.types.NodeTree,
         name="Compiled Shader Group",
@@ -119,10 +122,11 @@ class PaintSystemNodeTree(NodeTree):
     # -- Blender callbacks ------------------------------------------------
 
     def update(self):
-        # Called on link changes, node add/remove, and during file load and
-        # undo (where the compiler holds off until the post handler).
-        # Never mutate this tree here: Blender drops links created by the
-        # callback and builds no sockets for new group nodes.
+        # Called on link changes, on node add and remove, and during file
+        # load and undo. During load and undo, the compiler waits for the
+        # post handler. Never change this tree here. Blender drops links
+        # created by this callback and builds no sockets for new group
+        # nodes.
         tree_updated(self)
 
     # -- lifecycle --------------------------------------------------------
@@ -132,7 +136,10 @@ class PaintSystemNodeTree(NodeTree):
         return len(self.channels) > 0 or len(self.nodes) > 0
 
     def initialize(self):
-        """Populate a brand-new tree: io nodes, a Color channel, passthrough link."""
+        """Give a new tree Group Input and Output nodes and a Color channel.
+
+        The channel's input is linked straight through to the output.
+        """
         ensure_tree_uuid(self)
         with suspend_compile(self):
             self.ensure_io_nodes()
@@ -162,8 +169,8 @@ class PaintSystemNodeTree(NodeTree):
         return None
 
     def on_channels_changed(self):
-        # Socket renames fire tree updates one socket at a time; compile
-        # once all of them match the channels again.
+        # Socket renames fire tree updates one socket at a time. Compile
+        # once, when all sockets match the channels again.
         with suspend_compile(self):
             self.sync_group_node_sockets()
             sync_group_nodes_referencing(self)
@@ -177,7 +184,10 @@ class PaintSystemNodeTree(NodeTree):
                 sync_sockets(node.inputs, specs)
 
     def create_channel(self, name: str = "Channel", type: str = 'COLOR'):
-        """Add a channel below the active one, make it active and pass its input straight through."""
+        """Add a channel below the active one and make it active.
+
+        The new channel's input is linked straight through to the output.
+        """
         with suspend_compile(self):
             self.channels.add()
             last = len(self.channels) - 1
@@ -186,11 +196,12 @@ class PaintSystemNodeTree(NodeTree):
             index = max(0, min(self.active_channel_index + 1, last))
             self.channels.move(last, index)
             self.active_channel_index = index
-            # Looked up again: the item `add` returned now refers to the last slot.
+            # Look the channel up again. The item ``add`` returned now
+            # refers to the last slot.
             channel = self.channels[index]
-            # Name and type are set once the channel is in place. Each update
-            # syncs the sockets: the first adds the new channel's sockets in
-            # its row and keeps the other channels' links.
+            # Set the name and type only once the channel is in place. Each
+            # update syncs the sockets. The first one adds the new channel's
+            # sockets in its row and keeps the other channels' links.
             channel.name = name
             channel.type = type
             channel.ensure_uuid()
@@ -216,7 +227,11 @@ class PaintSystemNodeTree(NodeTree):
         self.on_channels_changed()
 
     def delete_channel(self, index: int):
-        """Remove the channel at *index*; the active index stays in range, or -1 once none are left."""
+        """Remove the channel at *index*.
+
+        The active index stays in range, or becomes -1 when no channels are
+        left.
+        """
         self.channels.remove(index)
         self.active_channel_index = min(self.active_channel_index, len(self.channels) - 1)
         self.on_channels_changed()
@@ -245,9 +260,10 @@ class PaintSystemNodeTree(NodeTree):
         return channel.name if channel else None
 
     def stack(self, channel_name: str | None = None) -> list[stack_ops.StackItem]:
-        """Layers of *channel_name* (default: the active channel), top first.
+        """Return the layers of *channel_name*, top first.
 
-        Each folder is followed by its content; see ``nodetree/stack_ops.py``.
+        *channel_name* defaults to the active channel. Each folder is
+        followed by its content. See ``nodetree/stack_ops.py``.
         """
         channel_name = self._channel_name(channel_name)
         return stack_ops.stack(self, channel_name) if channel_name is not None else []
@@ -256,8 +272,8 @@ class PaintSystemNodeTree(NodeTree):
                           target: bpy.types.Node | None = None) -> bpy.types.Node:
         """Add a layer node to the channel's stack and make it active.
 
-        With no *target* the layer goes on top. A folder *target* receives it
-        at the top of its content; any other layer gets it directly above.
+        With no *target*, the layer goes on top. A folder *target* gets it at
+        the top of its content. Any other *target* gets it directly above.
         """
         channel_name = self._channel_name(channel_name)
         with suspend_compile(self):
@@ -286,10 +302,12 @@ class PaintSystemNodeTree(NodeTree):
 
     def move_layer_node(self, node: bpy.types.Node, direction: str, action: str,
                         channel_name: str | None = None) -> bool:
-        """Move a layer a row ``'UP'`` or ``'DOWN'`` by one of ``stack_ops.movement_options``.
+        """Move a layer one row up or down, using a ``movement_options`` move.
 
-        A folder takes its content along. Returns False, changing nothing,
-        when the move is not on offer.
+        *direction* is ``'UP'`` or ``'DOWN'``. *action* picks one of the
+        moves ``stack_ops.movement_options`` offers. A folder takes its
+        content along. Returns False, and changes nothing, when the move is
+        not offered.
         """
         channel_name = self._channel_name(channel_name)
         if channel_name is None:
@@ -326,7 +344,8 @@ owner = object()
 
 
 def on_ps_nodetree_name_change():
-    # Artifact names derive from the tree name; recompile picks up the rename.
+    # Artifact names come from the tree name, so a recompile picks up the
+    # rename.
     mark_dirty()
 
 

@@ -87,6 +87,10 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
     # -- compiler -----------------------------------------------------------------
 
     def hash_parts(self, ctx):
+        """Compile the wrapped tree and return its fingerprint.
+
+        So an edit inside the wrapped tree changes this node's subtree hash.
+        """
         if not self.node_tree:
             return []
         return [compile_tree(self.node_tree)]

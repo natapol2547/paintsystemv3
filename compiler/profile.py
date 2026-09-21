@@ -1,11 +1,13 @@
-"""Per-phase compile timings, switched on with ``PS_PROFILE``.
+"""Per-phase compile timings, turned on with the ``PS_PROFILE`` variable.
 
-A compile runs on every edit, so the profiler has to cost nothing when it is
-off. ``PS_PROFILE`` is read once, at import: with it unset, ``phase`` returns
-one shared do-nothing context manager instead of building a timer, so a
-measured phase costs a call and a branch and allocates nothing.
+Entry point: ``phase(name, tree)``, used as a context manager.
 
-With it set, every phase logs how long it took and which tree it worked on::
+A compile runs on every edit, so the profiler must cost nothing when it is
+off. ``PS_PROFILE`` is read once, at import. When it is unset, ``phase``
+returns one shared do-nothing context manager instead of a timer. A
+measured phase then costs one call and one branch, and allocates nothing.
+
+When it is set, every phase logs its duration and the tree it worked on::
 
     PS_PROFILE=1 blender -b --factory-startup --python tests/test_compile.py
 
@@ -17,11 +19,11 @@ With it set, every phase logs how long it took and which tree it worked on::
     [ps profile] arrange        0.19 ms  PS Stack [5aa4b105]
     [ps profile] apply          0.71 ms  Stack BuildStats(nodes_created=1, ...)
 
-The phases nest: ``upsert``, ``links`` and ``arrange`` are the inside of
-``apply``, on the artifact rather than on the tree, and a build of a library
-group during ``build_ir`` logs its own three. Phases sit outside every
-per-node loop, so their count per compile is fixed and the timings do not
-measure the profiler itself.
+Phases nest. ``upsert``, ``links`` and ``arrange`` run inside ``apply``,
+and they name the artifact, not the Paint System tree. A library group
+built during ``build_ir`` logs its own three. No phase sits inside a
+per-node loop. So each compile logs a fixed number of phases, and the
+timings do not measure the profiler itself.
 """
 from __future__ import annotations
 
@@ -38,8 +40,8 @@ _enabled = os.environ.get("PS_PROFILE", "") not in ("", "0")
 class _NoProfile:
     """What ``phase`` returns while profiling is off.
 
-    One instance serves every call site: it holds no state, so nothing has to
-    be allocated or reset between phases.
+    One instance serves every call site. It holds no state, so nothing is
+    allocated or reset between phases.
     """
 
     __slots__ = ()
@@ -55,7 +57,7 @@ class _NoProfile:
 
 
 class _Phase:
-    """Times one phase and logs it on the way out, exception or not."""
+    """Time one phase and log it on exit, even when the block raises."""
 
     __slots__ = ("_name", "_tree", "_detail", "_start")
 
@@ -73,8 +75,9 @@ class _Phase:
         elapsed_ms = (perf_counter() - self._start) * 1000
         name = getattr(self._tree, "name", "")
         detail = "" if self._detail is None else f" {self._detail}"
-        # Phase and duration first: artifact names are long enough to push
-        # the numbers out of line, and the numbers are what gets read.
+        # Phase name and duration come first. Artifact names are long and
+        # would push the numbers out of line, and the numbers are what
+        # people read.
         log.info("%-11s %7.2f ms  %s%s", self._name, elapsed_ms, name, detail)
         return False
 
@@ -89,8 +92,8 @@ _NO_PROFILE = _NoProfile()
 def phase(name: str, tree: Any = None) -> _NoProfile | _Phase:
     """Time the block as *name*, working on *tree*.
 
-    *tree* is only read when profiling is on, so the disabled path does not
-    touch RNA either.
+    *tree* is only read when profiling is on. So the disabled path does not
+    read Blender properties (RNA) either.
     """
     if not _enabled:
         return _NO_PROFILE
@@ -98,18 +101,20 @@ def phase(name: str, tree: Any = None) -> _NoProfile | _Phase:
 
 
 def _configure_logging() -> None:
-    """Give the timings somewhere to go.
+    """Give this logger its own handler, so the timings are printed.
 
-    They are logged at INFO, which Blender drops: nothing configures logging,
-    so logging's last-resort handler prints WARNING and above and nothing
-    else. Setting ``PS_PROFILE`` is a request for these lines, so this logger
-    gets its own handler and stops propagating, which keeps the output at one
-    line per phase whatever configures logging afterwards.
+    The timings are logged at INFO. Nothing in Blender configures logging,
+    so Python's last-resort handler prints only WARNING and above, and INFO
+    lines are lost. Setting ``PS_PROFILE`` asks for these lines, so this
+    logger gets its own handler. It also stops passing records to parent
+    loggers. That keeps the output at one line per phase, even if something
+    configures logging later.
     """
     log.setLevel(logging.INFO)
     log.propagate = False
     if not log.handlers:
-        # Reloading the add-on re-runs this module against the same logger.
+        # An add-on reload runs this module again on the same logger, so
+        # only add the handler once.
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter("[ps profile] %(message)s"))
         log.addHandler(handler)

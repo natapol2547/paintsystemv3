@@ -1,12 +1,17 @@
 """Compiler: PaintSystemNodeTree -> IR -> compiled ShaderNodeTree.
 
-Data flows one way. The Paint System tree is the document; the compiled shader
-tree is a build artifact owned by the tree (``tree.compiled``). Nodes never own
-shader datablocks. They implement ``emit(ctx)`` which appends to the IR.
+Main entry points: ``compile_tree``, ``mark_dirty``, ``suspend_compile``,
+``build_ir`` and ``CompileContext``.
 
-Edits compile synchronously (see "Scheduling" below for why not on a timer).
-Batches of edits run inside ``suspend_compile`` and compile once at the end.
-An artifact is only rewritten when its IR fingerprint changes.
+- Data flows one way. The Paint System tree is the document. The compiled
+  shader tree is a build artifact that the tree owns (``tree.compiled``).
+- Nodes never own shader datablocks. Each node implements ``emit(ctx)``,
+  which adds its part of the shader graph to the IR.
+- Edits compile right away, not on a timer. See "Scheduling" below for
+  why.
+- A batch of edits runs inside ``suspend_compile`` and compiles once at
+  the end.
+- An artifact is only rewritten when its IR fingerprint changes.
 """
 from __future__ import annotations
 
@@ -27,13 +32,13 @@ log = logging.getLogger(__name__)
 
 PS_TREE_ID = 'PaintSystemNodeTree'
 ARTIFACT_OWNER_KEY = "ps_owner"
-# The fingerprint lives on the artifact, not on the tree, so it always
-# describes the nodes it sits next to whichever copy undo restores.
+# The fingerprint is stored on the artifact, not on the tree. So it always
+# describes the nodes stored with it, whichever copy undo restores.
 ARTIFACT_FINGERPRINT_KEY = "ps_fingerprint"
 
-# What the last ``compile_tree`` wrote into an artifact, ``None`` when it hit
-# the fingerprint and wrote nothing. Tests and profiling read it to tell a
-# value patch from a rebuild; no add-on code branches on it.
+# What the last ``compile_tree`` changed in an artifact. ``None`` when the
+# fingerprint matched and nothing was written. Tests and profiling read it
+# to tell a small patch from a rebuild. No add-on code depends on it.
 last_build_stats: BuildStats | None = None
 
 _BASE_NODE_PROPS = {p.identifier for p in bpy.types.Node.bl_rna.properties}
@@ -63,16 +68,20 @@ def artifact_name(tree) -> str:
 
 
 def normalize_tree(tree) -> None:
-    """Repair invariants without triggering update callbacks.
+    """Fix the tree's basic invariants, without triggering update callbacks.
 
-    - every node has a uuid unique within the tree (duplicates come from copy/paste)
-    - every channel has a uuid
-    - group input/output nodes exist and one output is active
+    Afterwards:
+
+    - every node has a uuid that is unique in the tree (copy and paste can
+      make duplicates);
+    - every channel has a uuid;
+    - the Group Input and Group Output nodes exist, and one output is
+      active.
 
     Links are not repaired here. A compile can run after the edit's undo
-    step was pushed (``tree_updated``), where it must not change the
-    document; the compiler reads around broken alpha links instead
-    (``CompileContext.source``) and stack edits repair them.
+    step was pushed (see ``tree_updated``), and then it must not change the
+    document. Instead, the compiler reads around broken alpha links
+    (``CompileContext.source``), and stack edits repair them.
     """
     ensure_tree_uuid(tree)
     seen: set[str] = set()
@@ -102,8 +111,11 @@ def normalize_all_trees() -> None:
 
 
 class CompileContext:
-    """Passed to every node's ``emit``. Tracks which IR sockets provide each
-    custom node's outputs so downstream nodes can link to them."""
+    """State passed to every node's ``emit`` during one IR build.
+
+    It records which IR socket provides each Paint System node output, so
+    nodes further down the graph can link to them.
+    """
 
     def __init__(self, ir: IR, *, bake_target=None) -> None:
         self.ir = ir
@@ -140,7 +152,8 @@ class CompileContext:
         if _is_ref(source):
             self._outputs[(node.uuid, socket_name)] = source
         else:
-            # Constants need a real socket to be linked from; emit a value node.
+            # A constant needs a real socket to link from, so emit a Value
+            # or RGB node for it.
             role = f"const:{socket_name}"
             if isinstance(source, (int, float)):
                 nid = self.emit_node(node, role, 'ShaderNodeValue',
@@ -156,14 +169,17 @@ class CompileContext:
     # -- reading inputs -------------------------------------------------
 
     def source(self, socket) -> tuple[bpy.types.Node, str] | None:
-        """The node and output name *socket* reads from, or None.
+        """Return the (node, output name) that *socket* reads from, or None.
 
-        That is its link, except for the alpha input of a slot: alpha follows
-        colour, so it reads the alpha partner of whatever feeds the paired
-        colour input, and nothing when that is unlinked. A hand edit that
-        relinks only the colour therefore still composites correctly.
+        Usually that is the other end of the socket's link. The alpha input
+        of a slot (a colour and alpha input pair) is different, because
+        alpha follows colour. It reads the alpha partner of whatever feeds
+        the paired colour input, and nothing when the colour input is
+        unlinked. So a hand edit that relinks only the colour still
+        composites correctly. When that node has no alpha partner output,
+        the alpha input's own link is used.
 
-        Reroutes are skipped: the node returned is the one behind them.
+        Reroutes are skipped. The node returned is the one behind them.
         """
         color_in = paired_color_input(socket)
         if color_in is not None:
@@ -179,7 +195,7 @@ class CompileContext:
         return link.from_node, link.from_socket.name
 
     def upstream(self, socket) -> Ref | None:
-        """IR reference feeding *socket* on a custom node, or None if unlinked.
+        """Return the IR reference that feeds *socket*, or None if unlinked.
 
         Only Paint System nodes emit IR, so a link from any other kind of
         node reads as unlinked.
@@ -212,19 +228,23 @@ class CompileContext:
             return False
         if getattr(node, 'cache_image', None) is None:
             return False
-        # A cache holds the stack; these outputs are a clip run, and the
-        # run's top layer needs the base's inputs compiled.
+        # A cache image holds a finished stack, but these outputs are part
+        # of a clip run. The top layer of the run also needs the base's
+        # inputs compiled.
         if feeds_clip_run(node):
             return False
         return node.cache_hash == self.subtree_hash(node)
 
     def subtree_hash(self, node) -> str:
-        """Hash of everything that influences *node*'s outputs: its own
-        properties, its unlinked socket values and, recursively, its upstream."""
+        """Return a hash of everything that affects *node*'s outputs.
+
+        That is its own properties, its unlinked socket values, its
+        ``hash_parts`` and, recursively, every node upstream of it.
+        """
         cached = self._subtree_hashes.get(node.name)
         if cached is not None:
             return cached
-        # Guard against cycles: a provisional entry stops infinite recursion.
+        # A placeholder entry stops a cycle from recursing forever.
         self._subtree_hashes[node.name] = "cycle"
         parts: list[Any] = [node.bl_idname, _serialize(node_state(node))]
         for sock in node.inputs:
@@ -244,17 +264,17 @@ class CompileContext:
 
 
 def _hashed_props(node) -> tuple[str, ...]:
-    """The property names ``node_state`` reads, memoised per node class.
+    """Return the property names ``node_state`` reads, cached per node class.
 
-    A class's RNA properties never change while it is registered, and walking
-    them is most of what hashing a subtree costs. The cache is keyed by the
-    class object and cleared in ``reset_state``, so an add-on reload cannot
-    answer with the names of a class that no longer exists.
+    A class's properties do not change while it is registered, and listing
+    them is most of the cost of hashing a subtree. The cache is keyed by
+    the class object and cleared in ``reset_state``. So after an add-on
+    reload it never returns the names of a class that no longer exists.
 
-    A node class opts individual properties out with ``ps_unhashed_props``,
-    for state that does not reach the compiled artifact on its own: a filter
-    layer's parameters change nothing until its image is rebuilt, and the
-    rebuild says so through ``hash_parts`` instead.
+    A node class can leave properties out with ``ps_unhashed_props``. This
+    is for state that does not change the compiled artifact by itself. For
+    example, a filter layer's settings change nothing until its image is
+    rebuilt, and the rebuild shows up through ``hash_parts`` instead.
     """
     cls = type(node)
     names = _hashed_prop_names.get(cls)
@@ -272,7 +292,11 @@ def _hashed_props(node) -> tuple[str, ...]:
 
 
 def node_state(node) -> dict[str, Any]:
-    """Node-specific properties (excluding base Node props, uuid, cache_*)."""
+    """Return the node's own property values that go into its hash.
+
+    Base ``Node`` properties, ``uuid`` and ``cache_*`` properties are left
+    out. See ``_hashed_props`` for the other rules.
+    """
     return {ident: getattr(node, ident) for ident in _hashed_props(node)}
 
 
@@ -306,9 +330,9 @@ def interface_outputs(ir: IR, channels) -> None:
 
 
 def topological_order(start, ctx: CompileContext) -> list:
-    """Upstream-first order of every node reachable from *start*.
+    """Return every node reachable from *start*, upstream nodes first.
 
-    Cached nodes are treated as leaves: their upstream is not compiled.
+    Cached nodes are treated as leaves, so their upstream is not compiled.
     """
     order: list = []
     visited: set[str] = set()
@@ -329,8 +353,10 @@ def topological_order(start, ctx: CompileContext) -> list:
 
 
 def build_ir(tree, *, bake_target=None) -> IR:
-    # The build only reads *tree*'s links, so one index serves the whole walk.
-    # A nested compile of a child tree installs its own, under its own key.
+    """Build the IR for *tree*, or for *bake_target*'s subtree when given."""
+    # The build only reads *tree*'s links, so one link index serves the
+    # whole walk. A nested compile of a child tree installs its own index,
+    # under its own key.
     with link_index(tree):
         return _build_ir(tree, bake_target=bake_target)
 
@@ -340,8 +366,9 @@ def _build_ir(tree, *, bake_target=None) -> IR:
     ir.meta['tree'] = tree.name
     ctx = CompileContext(ir, bake_target=bake_target)
 
-    # Inputs are always the channel sockets so a Group Input node upstream of
-    # the bake target still resolves (unlinked in the bake material = empty stack).
+    # The inputs are always the channel sockets, so a Group Input node
+    # upstream of the bake target still resolves. In the bake material
+    # those inputs are unlinked, which reads as an empty stack.
     interface_inputs(ir, tree.channels)
     if bake_target is None:
         interface_outputs(ir, tree.channels)
@@ -365,7 +392,8 @@ def _build_ir(tree, *, bake_target=None) -> IR:
             ref = ctx.output_ref(bake_target, socket_name)
             if ref is not None:
                 ir.link(ref, out_id, socket_name)
-    ir.ctx = ctx  # instance attribute, not part of the fingerprint; bake reads subtree hashes
+    # Not part of the fingerprint. The bake reads subtree hashes from it.
+    ir.ctx = ctx
     return ir
 
 
@@ -429,20 +457,21 @@ def compile_tree(tree, *, force: bool = False) -> str:
 
 # ── Scheduling ───────────────────────────────────────────────────────
 #
-# Edits compile synchronously, before Blender pushes the undo step for
-# them. Memfile undo takes every datablock that is byte-identical in two
-# consecutive steps straight from memory instead of re-reading it. An
-# artifact patched after its step was pushed (from a timer, say) can
-# therefore survive an undo with nodes for layers that no longer exist
-# and pointers to images the undo just freed.
+# Edits compile right away, before Blender pushes the undo step for them.
+# Blender's memfile (global) undo reuses every datablock that is
+# byte-identical in two neighbouring steps, instead of reading it again.
+# So an artifact changed after its step was pushed (from a timer, for
+# example) can survive an undo. It would keep nodes for layers that no
+# longer exist, and pointers to images the undo just freed.
 #
-# Four situations cannot compile on the spot:
-# - inside ``suspend_compile``: the outermost exit compiles once;
-# - while a file loads or an undo step decodes (Blender calls
-#   ``NodeTree.update`` on half-restored data): the post handler compiles;
-# - while ``bpy.data`` is restricted (addon registration) or writing is
-#   forbidden (drawing): a timer compiles as soon as Blender allows it;
-# - inside ``NodeTree.update`` (edits made in the node editor): see
+# Four cases cannot compile on the spot:
+# - Inside ``suspend_compile``. The outermost exit compiles once.
+# - While a file loads or an undo step is restored. Blender calls
+#   ``NodeTree.update`` on half-restored data then. The post handler
+#   compiles.
+# - While ``bpy.data`` is restricted (add-on registration) or writing is
+#   forbidden (drawing). A timer compiles as soon as Blender allows it.
+# - Inside ``NodeTree.update``, for edits made in the node editor. See
 #   ``tree_updated``.
 
 _dirty_uuids: set[str] = set()
@@ -451,8 +480,9 @@ _suspended = 0
 _blocked = False
 _flushing = False
 
-# Compiling a tree can dirty others (parents of a group layer). Settle in
-# a few rounds; anything left after that waits for the next edit.
+# Compiling a tree can mark other trees dirty, such as the trees that wrap
+# it in a group layer. Compiling repeats for up to this many rounds.
+# Anything still dirty after that waits for the next edit.
 _MAX_FLUSH_ROUNDS = 8
 
 
@@ -472,16 +502,19 @@ def mark_dirty(tree=None) -> None:
 
 
 def tree_updated(tree) -> None:
-    """``NodeTree.update`` entry point: compile on the next tick when needed.
+    """Handle ``NodeTree.update``: compile on the next tick when needed.
 
     Blender does not rebuild node sockets while it runs node tree update
-    callbacks (``BKE_ntree_update`` returns early when re-entered), so a
-    group node created here has no sockets to link. The IR is still built
-    to tell a no-op from a real change. A real change stamps the artifact
-    with a token no earlier state holds and leaves the build to a timer.
-    The stamp is part of the edit's undo step, so memfile undo sees the
-    artifact differ from every other step and re-reads it instead of
-    keeping the copy the timer patched after the step was pushed.
+    callbacks, because ``BKE_ntree_update`` returns early when re-entered.
+    So a group node created here would have no sockets to link, and the
+    build is left to a timer.
+
+    The IR is still built here, to tell a no-op from a real change. On a
+    real change, the artifact's fingerprint is set to a new random token
+    that no earlier state has. That stamp is part of the edit's undo step.
+    So memfile undo sees the artifact differ from every other step and
+    reads it again, instead of keeping the copy the timer changed after
+    the step was pushed.
     """
     if _suspended or _flushing or _blocked or not isinstance(bpy.data, bpy.types.BlendData):
         mark_dirty(tree)
@@ -503,12 +536,18 @@ def _schedule() -> None:
         try:
             bpy.app.timers.register(flush, first_interval=0.0)
         except Exception:
-            # Can fail during addon unregister; nothing to schedule then.
+            # This can fail while the add-on unregisters. Nothing needs
+            # scheduling then.
             log.debug("could not schedule compile flush", exc_info=True)
 
 
 def flush():
-    """Compile every dirty tree. Doubles as the fallback timer callback."""
+    """Compile every dirty tree. Also used as the fallback timer callback.
+
+    As a Blender timer, the return value picks the next run. While
+    compiles are suspended or blocked it returns 0.05, so it runs again
+    0.05 seconds later. Otherwise it returns None, which stops the timer.
+    """
     global _dirty_all, _flushing
     if _suspended or _blocked:
         return 0.05
@@ -537,7 +576,13 @@ def flush():
 
 
 def _compile_targets(targets) -> bool:
-    """Compile *targets*; False when writing is forbidden and a timer takes over."""
+    """Compile *targets*, and return False if a timer has to take over.
+
+    Blender forbids writing to its data in some contexts, such as while
+    drawing, and raises an AttributeError that says "not allowed". The
+    tree that failed and the ones after it are then marked dirty again
+    for the timer.
+    """
     for index, tree in enumerate(targets):
         try:
             compile_tree(tree)
@@ -574,7 +619,11 @@ def unblock_compile() -> None:
 
 
 class suspend_compile:
-    """Context manager: batch many edits, compile once at the outermost exit."""
+    """Context manager that batches edits and compiles once at the end.
+
+    Nested blocks only compile when the outermost one exits. Each exit
+    marks *tree* dirty, or every tree when *tree* is None.
+    """
 
     def __init__(self, tree=None):
         self.tree = tree

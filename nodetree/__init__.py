@@ -11,8 +11,9 @@ class PaintSystemNodeCategory(NodeCategory):
 
 
 def node_categories():
-    # Imported on registration: the layer node package imports
-    # ``nodetree.tree`` and may load while this package is initialising.
+    # Imported here, at registration, not at the top. The layer node
+    # package imports ``nodetree.tree``, so it may load while this package
+    # is still initialising.
     from ..nodes.layers.registry import layer_types
     layer_items = [NodeItem(cls.bl_idname) for cls in layer_types()]
     return [

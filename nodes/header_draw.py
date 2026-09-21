@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Custom node headers using ControlRig's draw_label drawing technique.
+"""Coloured node headers, drawn from inside ``draw_label``.
 
-Adapted from ControlRig by Edward Urena (GeneralNode.draw_color and
-blender_draw.Draw/Rect).
+Entry point: ``draw_header(node)``, called from the node's ``draw_label``.
 
-Blender draws the header before draw_label(), then the body and controls
-afterwards. A rounded backdrop drawn here leaves its color in the header.
-Collapsed nodes draw their whole body here, before Blender draws the
-outline and controls. Explicit Node.label values bypass this callback.
+The technique is adapted from ControlRig by Edward Urena
+(``GeneralNode.draw_color`` and ``blender_draw.Draw``/``Rect``).
+
+Blender draws the header before it calls ``draw_label()``, and draws the
+body and controls after. So a rounded shape drawn here stays visible
+only in the header. For a collapsed node, this draws the whole body,
+before Blender draws the outline and controls. A node with an explicit
+``Node.label`` skips ``draw_label``, so it gets no custom header.
 """
 import bpy
 import gpu
@@ -30,7 +33,8 @@ def draw_header(node):
         return
 
     scale = context.preferences.system.ui_scale
-    # Older Blender versions expose only the location relative to a frame.
+    # Older Blender versions only have the location relative to the parent
+    # frame, so add up the parents' locations.
     location = getattr(node, 'location_absolute', None)
     if location is None:
         location = node.location.copy()
@@ -42,18 +46,20 @@ def draw_header(node):
     left, top = location.x * scale - padding, location.y * scale + padding
     corner_radius = 5 * scale
     if node.hide:
-        # Blender centers the collapsed body on the expanded title's center
-        # (NODE_DY / 2 = 10 UI units), rather than on the node's top edge.
+        # Blender centres a collapsed node on the centre of the expanded
+        # title (NODE_DY / 2 = 10 UI units), not on the node's top edge.
         padding = 0.5
         left = round(location.x * scale) - padding
         top = round(location.y * scale) + height / 2 - 10 * scale + padding
-        # 4.x uses a capsule; 5.x uses the standard node corner radius.
+        # Blender 4.x draws a collapsed node as a capsule. 5.x uses the
+        # standard node corner radius.
         corner_radius = 4 * scale if is_newer_than(5, 0) else height / 2
         corner_radius += padding
     right, bottom = left + width + 2 * padding, top - height - 2 * padding
     vertices = rounded_rect(left, bottom, right, top, corner_radius)
 
-    # from_builtin returns Blender's own cached shader, so there is nothing to keep here.
+    # ``from_builtin`` returns Blender's own cached shader, so there is
+    # nothing to store or free here.
     shader = gpu.shader.from_builtin('UNIFORM_COLOR')
     batch = batch_for_shader(shader, 'TRI_FAN', {'pos': vertices})
     blend = gpu.state.blend_get()

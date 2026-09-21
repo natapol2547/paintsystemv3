@@ -7,11 +7,12 @@ from ...common import blender_icon, icon_kwargs
 
 
 class PaintSystemFolderLayerNode(PaintSystemLayerNode, Node):
-    """A layer whose content is the stack linked into ``Content Color``/``Content Alpha``.
+    """A layer whose content is the stack linked into its Content inputs.
 
-    The content composites over a transparent backdrop, and the result
-    blends over the stack below with the folder's own opacity and blend
-    mode, like any other layer.
+    Those inputs are ``Content Color`` and ``Content Alpha``. The content
+    composites over a transparent backdrop. The result then blends over
+    the stack below with the folder's own opacity and blend mode, like
+    any other layer.
     """
     bl_idname = 'PaintSystemFolderLayerNode'
     bl_label = 'Folder'

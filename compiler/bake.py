@@ -1,14 +1,19 @@
-"""Bake a node's output into its cache image (the hybrid part of the model).
+"""Bake a node's output into its cache image.
+
+In the compiled tree, a cached node and everything upstream of it are
+replaced by this image. The rest of the tree stays live.
 
 The compiler builds a temporary shader group whose outputs are the target
-node's live Color/Alpha (ignoring its own cache). A throwaway material routes
-that through an Emission shader and Cycles bakes it twice: once for color,
-once for alpha, merged with numpy.
+node's live Color and Alpha, ignoring the node's own cache. A throwaway
+material sends that through an Emission shader. Cycles bakes it twice,
+once for colour and once for alpha, and numpy merges the two images.
 
-``bake_subtree`` is that bake and writes any image it is handed.
-``bake_node_cache`` wraps it with the cache bookkeeping: on success the
-node's ``cache_hash`` is set to the subtree fingerprint so the next compile
-substitutes the image.
+Entry points:
+
+- ``bake_subtree`` runs the bake and writes into any image it is given.
+- ``bake_node_cache`` adds the cache bookkeeping. On success it sets the
+  node's ``cache_hash`` to the subtree hash, so the next compile uses
+  the image in place of the live nodes.
 """
 from __future__ import annotations
 
@@ -37,7 +42,10 @@ def create_managed_image(name: str, width: int, height: int, *,
 
 
 def build_bake_tree(tree, node) -> tuple[bpy.types.NodeTree, str]:
-    """Compile *node*'s live subtree into the shared bake group. Returns (group, subtree_hash)."""
+    """Compile *node*'s live subtree into the shared bake group.
+
+    Returns the group and the subtree hash.
+    """
     ir = build_ir(tree, bake_target=node)
     subtree_hash = ir.ctx.subtree_hash(node)
     bake_tree = bpy.data.node_groups.get(BAKE_TREE_NAME)
@@ -85,11 +93,11 @@ def _bake_settings(scene):
 
 
 def _remove_last_slot(context, obj) -> None:
-    """Drop the slot ``_temporary_material`` added, leaving the object as it was.
+    """Remove the slot that ``_temporary_material`` added.
 
-    ``obj.data.materials.pop`` empties the mesh's material list but leaves the
-    object's slot count where it was, so the object keeps an empty slot it
-    never had. Only the operator removes both.
+    ``obj.data.materials.pop`` removes the material from the mesh's list,
+    but the object keeps its slot count. That leaves an extra empty slot.
+    Only the ``material_slot_remove`` operator removes both.
     """
     try:
         obj.active_material_index = len(obj.material_slots) - 1
@@ -97,15 +105,16 @@ def _remove_last_slot(context, obj) -> None:
                                    selected_objects=[obj]):
             bpy.ops.object.material_slot_remove()
     except RuntimeError:
-        # This runs in a ``finally``; an empty slot left behind is a much
-        # smaller problem than hiding whatever went wrong during the bake.
+        # Do not raise here. This runs in a ``finally``, and a new error
+        # would hide the one from the bake. An extra empty slot is the
+        # smaller problem.
         if len(obj.data.materials):
             obj.data.materials.pop(index=len(obj.data.materials) - 1)
 
 
 @contextlib.contextmanager
 def _temporary_material(context, obj, material):
-    """Put *material* in every slot of *obj*, and give the slots back after."""
+    """Put *material* in every slot of *obj*, and restore the slots after."""
     appended = len(obj.material_slots) == 0
     if appended:
         obj.data.materials.append(None)
@@ -123,10 +132,10 @@ def _temporary_material(context, obj, material):
 
 @contextlib.contextmanager
 def _borrowed_selection(view_layer, obj):
-    """Make *obj* the only selected and active object, and restore the selection after.
+    """Select only *obj* and make it active, then restore the user's selection.
 
-    ``bpy.ops.object.bake`` bakes the selected objects, so the selection has
-    to change; what the user had selected is theirs to keep.
+    ``bpy.ops.object.bake`` bakes the selected objects, so the selection
+    has to change for the bake.
     """
     previous_active = view_layer.objects.active
     previous_selected = [o for o in view_layer.objects if o.select_get()]
@@ -142,6 +151,11 @@ def _borrowed_selection(view_layer, obj):
 
 
 def _merge_alpha(color_image, alpha_image) -> None:
+    """Copy the red channel of *alpha_image* into the alpha of *color_image*.
+
+    The alpha pass bakes alpha as an emission colour, so the value sits in
+    the red channel.
+    """
     count = color_image.size[0] * color_image.size[1] * 4
     color = np.empty(count, dtype=np.float32)
     alpha = np.empty(count, dtype=np.float32)
@@ -162,12 +176,12 @@ def check_bake_object(obj) -> None:
 
 def bake_subtree(context, tree, node, obj, image, *, margin: int = 8,
                  uv_map: str = "") -> str:
-    """Bake *node*'s live subtree onto *obj* into *image*, and return its fingerprint.
+    """Bake *node*'s live subtree on *obj* into *image*, and return its hash.
 
-    *image* is written in place and left unpacked: whether the result belongs
-    in the .blend is the caller's call. Everything this borrows -- the render
-    settings, the object's material slots, the selection -- is given back
-    before it returns.
+    *image* is written in place and not packed. The caller decides whether
+    the result is saved inside the .blend file. The render settings, the
+    object's material slots and the selection are all restored before this
+    returns.
     """
     check_bake_object(obj)
 
@@ -196,7 +210,7 @@ def bake_subtree(context, tree, node, obj, image, *, margin: int = 8,
                 _borrowed_selection(context.view_layer, obj):
             bake.margin = margin
             with context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
-                # Pass 1: color
+                # Pass 1: colour
                 nt.links.new(group.outputs['Color'], emission.inputs['Color'])
                 target.image = image
                 bpy.ops.object.bake(type='EMIT')
@@ -215,8 +229,8 @@ def bake_subtree(context, tree, node, obj, image, *, margin: int = 8,
 
 def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int = 2048,
                     margin: int = 8, uv_map: str = "") -> bpy.types.Image:
-    # Checked before the image exists, so a bake at a target that cannot take
-    # one does not leave an orphan datablock behind.
+    # Check before creating the image, so an object that cannot be baked
+    # does not leave an unused image datablock behind.
     check_bake_object(obj)
 
     image = node.cache_image
