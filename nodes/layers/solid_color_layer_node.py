@@ -26,7 +26,7 @@ class PaintSystemSolidColorLayerNode(PaintSystemLayerNode, Node):
 
     def draw_row_icon(self, layout):
         swatch = layout.row(align=True)
-        swatch.ui_units_x = 1.5
+        swatch.ui_units_x = 1
         swatch.prop(self, "fill_color", text="")
 
     def draw_source_settings(self, context, layout):
