@@ -1,19 +1,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""An 8-bit RGBA PNG written a band of rows at a time.
+"""An 8-bit RGBA PNG written one band of rows at a time.
 
-What `filters.layer_build` packs into a filter layer's image. Blender's
-own `Image.pack` encodes the whole image in one call -- about 0.9 s at
-4096 x 4096 -- and nothing can run while it does, which made the commit
-the longest freeze of a build by far. Encoding here lets each band go
-into the stream as it comes off the GPU, in the same unit as its
-readback, so the commit only hands over bytes that are already done.
+`filters.layer_build` packs this file into a filter layer's image.
+Blender's own `Image.pack` encodes the whole image in one call, about
+0.9 s at 4096 x 4096, and nothing else can run meanwhile. That would make
+the commit by far the longest freeze of a build. With `RGBAStream`, each
+band is encoded as it comes off the GPU, in the same unit as its
+readback, so the commit only hands over finished bytes.
 
-The encoding is chosen for speed over size: every row is Up-filtered,
+The encoding favours speed over size. Every row uses the PNG Up filter,
 which is one numpy subtraction per band, and zlib runs at level 1 with
-its run-length strategy. On a painted result that comes out smaller
-than Blender's own file; on a blur, all long smooth gradients, somewhat
-larger. Either way it is a plain PNG that any reader, Blender's included,
-decodes.
+its run-length strategy. For a painted result the file is smaller than
+Blender's own. For a blur, which is all long smooth gradients, it is
+somewhat larger. Either way it is a plain PNG that any reader, Blender
+included, can decode.
 """
 from __future__ import annotations
 
@@ -53,8 +53,9 @@ class RGBAStream:
                              f"a PNG {self.width} wide")
         filtered = np.empty((rows.shape[0], rows.shape[1] + 1), dtype=np.uint8)
         filtered[:, 0] = UP
-        # uint8 arithmetic wraps, which is the modulo the filter is defined
-        # with. The first row of the image has zeros above it.
+        # uint8 subtraction wraps around, which is the modulo 256 the Up
+        # filter is defined with. The first row of the image has zeros
+        # above it.
         if self._above is None:
             filtered[0, 1:] = rows[0]
         else:

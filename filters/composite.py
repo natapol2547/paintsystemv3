@@ -1,36 +1,37 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The stack below a filter layer, composited on the GPU (PS-057).
+"""Draws the stack below a filter layer on the GPU (PS-057).
 
 A filter layer needs the picture the render engines would draw for
-everything under it, as one RGBA buffer it can run a filter pass over.
-Baking that with Cycles is exact and takes seconds; this draws it in a
-handful of passes instead, for the stacks it can be certain about.
+everything below it, as one RGBA texture to filter. A Cycles bake gives
+that exactly but takes seconds. This module draws it in a few GPU passes
+instead, for the stacks it can be sure to draw correctly.
 
-"Certain" is what `plan_below` decides. It walks the same links the
-compiler reads -- `feeding_link`, `clip_base`, `feeds_clip_run`, a
-folder's `Content Color` -- and mirrors `PaintSystemLayerNode.emit`
-branch for branch, so the two cannot drift quietly: anything the walk
-does not recognise raises `Unsupported` and the caller bakes instead.
-Planning allocates nothing, so a refusal costs no video memory.
+`plan_below` decides which stacks those are, and `composite_below` draws
+the plan.
 
-The buffers are `RGBA16F`, for the reason `filters.core.texture_format`
-gives: 11 bits of mantissa hold every ``k / 255`` exactly, at half the
-memory of `RGBA32F`. They come from a pool that takes them back as the
-walk finishes with them, so peak video memory is flat in the depth of
-the stack rather than linear -- the backdrop, the layer's own content,
-and one held backdrop per open clip run.
-
-Source images are read through `gpu.texture.from_image`, which shares
-the texture the viewport already has and decodes sRGB in hardware, so a
-byte image arrives as straight scene-linear values: what the shader
-graph carries between layers. A float image is stored premultiplied
-(`filters.core.storage_of`) and is divided back out here. Every image is
-sampled by normalised coordinate rather than by texel, so a source at a
-different resolution than the filter's lands in the right place -- which
-is only true while every layer below shares one UV map, and checking
-that is `filters.layer_plan`'s job, not this module's.
-
-A linked image is not turned away: both paths only ever read it.
+- `plan_below` follows the same links the compiler reads
+  (`feeding_link`, `clip_base`, `feeds_clip_run`, a folder's
+  ``Content Color``) and mirrors `PaintSystemLayerNode.emit` branch for
+  branch. Anything it does not recognise raises `Unsupported`, and the
+  caller bakes instead, so the two cannot silently disagree. Planning
+  allocates nothing, so a refusal costs no video memory.
+- The textures are `RGBA16F`, for the reason `filters.core.texture_format`
+  gives: 11 bits of mantissa hold every ``k / 255`` exactly, at half the
+  memory of `RGBA32F`.
+- Textures come from a `Pool` and go back as soon as the walk is done
+  with them. So peak video memory does not grow with the depth of the
+  stack. It is the backdrop, the layer's own content, and one held
+  backdrop per open clip run.
+- Source images are read with `gpu.texture.from_image`. It shares the
+  texture the viewport already has and decodes sRGB in hardware, so a
+  byte image arrives as straight scene-linear values, as the shader
+  graph carries them. A float image is stored premultiplied
+  (`filters.core.storage_of`), so the shader divides the alpha out.
+- Images are sampled by normalised coordinate, not by texel, so a source
+  at another resolution still lands in the right place. That only holds
+  while every layer below uses the same UV map. `filters.layer_plan`
+  checks that, not this module.
+- Linked images are allowed, because both paths only read them.
 """
 from __future__ import annotations
 
@@ -49,16 +50,17 @@ from .core import PREMULTIPLIED, Refused, new_texture, storage_of
 TARGET_FORMAT = 'RGBA16F'
 TRANSPARENT = (0.0, 0.0, 0.0, 0.0)
 
-# The layer types the walk draws. Everything else -- the layers that
-# evaluate surface data, and any type added later -- falls back.
+# The layer types the walk can draw. Every other type falls back to a
+# bake, including layers that evaluate surface data and any type added
+# later.
 DRAWN_TYPES = frozenset({'IMAGE', 'SOLID_COLOR', 'FOLDER', 'FILTER'})
 
 
 class Unsupported(Exception):
-    """The composite path cannot draw this subtree; bake it instead.
+    """The composite path cannot draw this subtree, so it needs a bake.
 
-    `str()` names the reason, which the layer's state row shows. It is
-    not a failure: `filters.core.Refused` is what neither path can do.
+    `str()` is the reason, which the layer's state row shows. This is not
+    a failure. `filters.core.Refused` is for what neither path can do.
     """
 
 
@@ -67,20 +69,21 @@ class Unsupported(Exception):
 
 @dataclass(frozen=True)
 class LayerStep:
-    """One layer of a chain, and how the walk reaches its output.
+    """One layer of a chain, and how the walk computes its output.
 
     *placement* mirrors the branches of `PaintSystemLayerNode.emit`:
 
-    - ``'BLEND'`` -- composite over the stack below, the ordinary case;
-    - ``'CLIP'`` -- clipped, with a layer above that still blends the run;
-    - ``'CLIP_TOP'`` -- the top of a clip run: composite onto the base's
-      content, then blend base and run together over the stack below;
-    - ``'PASS'`` -- a clip base, whose own content is the run's backdrop
-      and whose blend the top of the run runs instead.
+    - ``'BLEND'``: composite over the stack below. The normal case.
+    - ``'CLIP'``: clipped, with a layer above that still continues the
+      clip run.
+    - ``'CLIP_TOP'``: the top of a clip run. Composite onto the base's
+      content, then blend base and run together over the stack below.
+    - ``'PASS'``: a clip base. Its own content is the run's backdrop, and
+      the top of the run does its blend instead.
 
-    *strength* is Opacity, or a filter layer's Amount, already zeroed
-    for a disabled layer. *content* is a folder's chain; *image* and
-    *fill* are every other type's own pixels.
+    *strength* is Opacity, or a filter layer's Amount. It is already zero
+    for a disabled layer. *content* is a folder's chain. *image* and
+    *fill* hold the pixels of every other layer type.
     """
     node: bpy.types.Node
     placement: str
@@ -98,9 +101,9 @@ class LayerStep:
 
 @dataclass(frozen=True)
 class ChainPlan:
-    """Everything feeding one slot, bottom-up, and what it reads.
+    """The layers feeding one input socket, bottom first, and what they read.
 
-    *images* and *uv_maps* gather a folder's content too, so a caller can
+    *images* and *uv_maps* include folder contents too, so a caller can
     check the whole subtree without walking the plan again.
     """
     layers: tuple[LayerStep, ...]
@@ -111,12 +114,12 @@ class ChainPlan:
 def plan_below(node) -> ChainPlan:
     """Plan the composite of everything feeding *node*'s ``Color`` input.
 
-    That socket is exactly what the compiler hands the layer as Prev
-    Color, so for a clipped filter layer it is its base's own content
-    rather than the stack -- which is what such a layer filters.
+    The compiler passes that socket to the layer as Prev Color. For a
+    clipped filter layer it carries the base's own content, not the
+    stack, and that is what such a layer filters.
 
-    Raises `Unsupported` when the stack holds something this path does
-    not draw, and `filters.core.Refused` when the bake could not help
+    Raises `Unsupported` when the stack holds something this path cannot
+    draw. Raises `filters.core.Refused` when a bake could not draw it
     either.
     """
     tree = node.id_data
@@ -126,12 +129,11 @@ def plan_below(node) -> ChainPlan:
 
 def _plan_chain(socket, visited: set[str], group_input) -> ChainPlan:
     nodes = list(layers_down_from(socket, visited))
-    # The walk stops at anything that is not a layer -- a group layer, a
-    # hand-made link, a cycle -- and the compiler goes on compositing it,
-    # so a chain that still has something under it would come out of here
-    # missing a layer rather than refusing. The Group Input is the one
-    # thing that legitimately sits under a channel: it is the transparent
-    # backdrop the walk starts from anyway.
+    # The walk stops at anything that is not a layer, such as a group
+    # layer, a hand-made link or a cycle. The compiler still composites
+    # it, so without this check the plan would silently miss a layer.
+    # The Group Input is the only node allowed under a channel. It is
+    # the transparent backdrop the walk starts from anyway.
     bottom = feeding_link(nodes[-1].inputs['Color'] if nodes else socket)
     if bottom is not None and bottom.from_node != group_input:
         below = bottom.from_node
@@ -192,15 +194,15 @@ def _plan_layer(layer, positions, visited, group_input, *, holds_run: bool) -> L
         image = _source_image(layer.image)
         uv_map = layer.uv_map
     else:
-        # A filter layer replaces the stack below rather than
-        # compositing over it, and is transparent until it is built.
+        # A filter layer replaces the stack below instead of compositing
+        # over it. It is transparent until it is built.
         rule = blend_glsl.FILTER_MIX
         strength = layer.amount
         if derived.is_built(layer.derived_image):
-            # Not `_source_image`: a built result is packed by the build
-            # that stamped it, so there is nothing to check, and reading
-            # the size of one just committed would decode the whole file
-            # to learn it (`filters.layer_build.commit`).
+            # Skip `_source_image`. A built result was packed by the
+            # build that stamped it, so there is nothing to check. Also,
+            # reading the size of a result just committed would decode
+            # the whole file (`filters.layer_build.commit`).
             image = layer.derived_image
             uv_map = derived.stamped_uv_map(image)
 
@@ -216,12 +218,12 @@ def _plan_layer(layer, positions, visited, group_input, *, holds_run: bool) -> L
 
 
 def _source_image(image):
-    """*image*, checked for what neither path can read. None stays None.
+    """Return *image*, or raise `Refused` when neither path can read it.
 
-    The size is the test, not `has_data`: a generated image regenerates
-    its buffer lazily and reads as having no data until something asks
-    for it, while an image whose file is gone reports no size at all.
-    `filters.core.PixelSource.from_image` draws the same line.
+    None stays None. The test is the size, not `has_data`. A generated
+    image builds its buffer lazily, so it reports no data until something
+    asks for it. An image whose file is missing reports no size at all.
+    `filters.core.PixelSource.from_image` uses the same test.
     """
     if image is None:
         return None
@@ -247,8 +249,8 @@ void main()
 {
   vec4 c = use_texture != 0 ? texture(source, v_uv) : fill;
   if (premultiplied != 0) {
-    /* Colour under zero alpha has no straight form; it shows nothing
-       either way. */
+    /* Colour under zero alpha cannot be un-premultiplied. It is
+       invisible anyway. */
     c = c.a > 0.0 ? vec4(c.rgb / c.a, c.a) : vec4(0.0);
   }
   out_color = c;
@@ -281,10 +283,11 @@ def source_shader():
 
 
 class Pool:
-    """`RGBA16F` targets of one size, handed back as the walk finishes with them.
+    """Reusable `RGBA16F` textures of one size.
 
-    `made` counts the ones the GPU actually allocated, which a test
-    holds to the depth of the clip runs rather than of the stack.
+    The walk hands each texture back as soon as it is done with it.
+    `made` counts the textures actually allocated. A test checks that it
+    follows the depth of the clip runs, not the depth of the stack.
     """
 
     def __init__(self, size: tuple[int, int]):
@@ -309,14 +312,15 @@ class Pool:
 def composite_below(plan: ChainPlan, pool: Pool):
     """Draw *plan* into one of *pool*'s `RGBA16F` textures, and return it.
 
-    The result holds straight alpha and scene-linear colour, the same as
-    the shader graph carries, so a filter pass over it and the render
-    engines are looking at the same picture.
+    The result holds straight alpha and scene-linear colour, as the
+    shader graph carries it. So a filter pass over it sees the same
+    picture as the render engines.
 
-    The walk is `PaintSystemLayerNode.emit` over textures, bottom-up.
-    *prev* is what the next layer up sees on its ``Color`` input, which
-    is the previous layer's ``Color`` output. A clip base's is kept in
-    *held* until the top of its run blends the two together.
+    The walk does what `PaintSystemLayerNode.emit` does, but over
+    textures, from the bottom up. *prev* is what the next layer up sees
+    on its ``Color`` input, which is the ``Color`` output of the layer
+    below. A clip base's *prev* is kept in *held* until the top of its
+    run blends the two together.
     """
     prev = _draw_fill(pool, TRANSPARENT)
     held: dict[int, gpu.types.GPUTexture] = {}
@@ -358,8 +362,8 @@ def _draw_fill(pool: Pool, fill: tuple):
 
 
 def _draw_image(pool: Pool, image):
-    # The texture has to outlive the draw, so it is held here rather
-    # than passed straight through.
+    # Keep the texture in a variable, because it has to stay alive until
+    # the draw is done.
     texture = gpu.texture.from_image(image)
     return _draw_into(pool.acquire(), texture=texture,
                       premultiplied=storage_of(image) == PREMULTIPLIED)
@@ -379,8 +383,8 @@ def _draw_into(target, *, fill=TRANSPARENT, texture=None, premultiplied=False):
 
 def _draw_blend(pool: Pool, backdrop, source, step: LayerStep, *, clip: bool):
     target = pool.acquire()
-    # The framebuffer is not kept: the draw has already written into the
-    # target, and the target is what the walk carries on with.
+    # The framebuffer is not kept. The draw has already written into the
+    # target, and the walk only needs the target.
     blend_glsl.blend_over(backdrop, source, target, pool.size, rule=step.rule,
                           mode=step.blend_mode, opacity=step.strength * step.mask,
                           clip=clip)

@@ -1,25 +1,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The layer compositing rules as one GPU pass (PS-057).
+"""Layer compositing as one GPU pass (PS-057).
 
-`compiler.library._build_layer_blend` is what the render engines run. To
-filter the stack below a layer, the same compositing has to happen on the
-GPU, over textures rather than shader sockets, and agree with the render
-to the texel. This module is that port: the same Porter-Duff split, the
-same clip handling, and Blender's own blend functions at factor 1, which
-is the only factor the library group ever asks them for.
+Entry point: `blend_over`. The render engines composite layers with the
+node group from `compiler.library._build_layer_blend`. To filter the
+stack below a layer, the same compositing has to run on the GPU, over
+textures instead of shader sockets, and match the render texel for
+texel. This module is a port of that group: the same Porter-Duff split,
+the same clip handling, and Blender's own blend functions at factor 1.
+The library group never uses any other factor.
 
-`compiler.library._build_filter_mix` is ported alongside it, because a
-filter layer can sit below another one and replaces the stack rather than
-compositing over it. Which rule a pass runs is the `rule` argument.
+`compiler.library._build_filter_mix` is ported too, because the stack
+below a filter layer can hold another filter layer. A filter layer
+replaces the stack instead of compositing over it. The `rule` argument
+picks which of the two a pass runs.
 
-Both sides work in straight alpha and scene-linear colour, which is what
-the shader graph carries between layers. Converting a source image's
-stored values into that is the caller's job.
+Both work in straight alpha and scene-linear colour, which is what the
+shader graph carries between layers. The caller converts a source
+image's stored values into that form.
 
-`ALLOWED_BLEND_MODES` is an allow-list, not a claim. A mode joins it once
-its per-texel parity test against a Cycles bake of the library group
-passes (`tests/test_filter_blend.py`). A mode outside it is not an error:
-the filter layer falls back to baking its input with Cycles instead.
+`ALLOWED_BLEND_MODES` lists only the modes whose per-texel parity test
+against a Cycles bake of the library group passes
+(`tests/test_filter_blend.py`). A mode outside it is not an error. The
+filter layer falls back to baking its input with Cycles instead.
 """
 from __future__ import annotations
 
@@ -29,9 +31,9 @@ from gpu_extras.batch import batch_for_shader
 from ..gpu_passes.core import UNIT_QUAD, offscreen_state
 
 
-# The identifiers of ShaderNodeMix.blend_type, numbered for the shader.
-# The values are part of no file and no artifact, so they may be
-# renumbered freely; they only have to agree within this module.
+# ShaderNodeMix.blend_type identifiers, numbered for the shader. The
+# numbers are not saved in any file or artifact, so they can change
+# freely. They only have to match the GLSL in this module.
 BLEND_MODE_IDS = {
     'MIX': 0,
     'DARKEN': 1,
@@ -126,9 +128,9 @@ vec3 ps_hsv_to_rgb(vec3 hsv)
 }
 """
 
-# Blender's own mix functions with the factor at 1, which is all the
-# library group asks for: it sets the blend node's Factor to a constant 1
-# and does the fading in the compositing around it.
+# Blender's own mix functions at factor 1. The library group sets the
+# blend node's Factor to a constant 1 and does the fading in the
+# compositing around it, so no other factor is needed.
 _BLEND = """
 float ps_burn(float a, float b)
 {
@@ -240,8 +242,8 @@ vec3 ps_blend(int mode, vec3 a, vec3 b)
 }
 """
 
-# The compositing of _build_layer_blend, texel for texel. The comments
-# there explain the split; this only has to agree with it.
+# The compositing of `_build_layer_blend`, texel for texel. The comments
+# there explain the split. This code only has to match it.
 _COMPOSITE = """
 vec4 ps_layer_blend(vec4 prev, vec4 src, float opacity, float mask, float clip, int mode)
 {
@@ -250,8 +252,8 @@ vec4 ps_layer_blend(vec4 prev, vec4 src, float opacity, float mask, float clip, 
   float source_weight = es * kept;
   float backdrop_weight = prev.a * (1.0 - es);
   float alpha = source_weight + backdrop_weight;
-  /* Math DIVIDE returns 0 for a zero divisor, so a transparent result
-     takes the backdrop colour instead of NaN. */
+  /* Like the Math node's DIVIDE, return 0 for a zero divisor. A
+     transparent result then takes the backdrop colour instead of NaN. */
   float source_share = alpha != 0.0 ? source_weight / alpha : 0.0;
   vec3 source_color = src.rgb;
   if (mode != 0) {
@@ -262,10 +264,10 @@ vec4 ps_layer_blend(vec4 prev, vec4 src, float opacity, float mask, float clip, 
   return vec4(mix(prev.rgb, source_color, clamp(source_share, 0.0, 1.0)), alpha);
 }
 
-/* _build_filter_mix: the stack below is replaced by the filter's own
-   pixels rather than composited under them, faded by Amount. `kept`
-   weights only the source, so a clipped filter never adds coverage
-   outside the layer it is clipped to. */
+/* Port of _build_filter_mix. The filter's own pixels replace the stack
+   below instead of compositing over it, faded by Amount. `kept` weights
+   only the source, so a clipped filter never adds coverage outside the
+   layer it is clipped to. */
 vec4 ps_filter_mix(vec4 prev, vec4 src, float amount, float mask, float clip)
 {
   float f = clamp(amount * mask, 0.0, 1.0);
@@ -332,14 +334,15 @@ def blend_over(backdrop, source, target, size, *, rule=BLEND, mode='MIX',
                opacity=1.0, clip=False):
     """Composite *source* over *backdrop* into *target*, and return the framebuffer.
 
-    All three are textures of *size*, holding straight alpha and linear
-    colour. *rule* picks the layer blend or a filter layer's replacement,
-    where *opacity* is the filter's Amount and *mode* is unused.
+    All three are textures of *size* in straight alpha and linear colour.
+    *rule* is `BLEND` for a layer blend or `FILTER_MIX` for a filter
+    layer. For `FILTER_MIX`, *opacity* is the filter's Amount and *mode*
+    is unused.
 
-    The framebuffer has to be held alongside its texture until the result
-    is used: a `GPUFrameBuffer` does not keep its colour slot alive, and
-    reading one whose texture Python has already freed gives zeroes
-    rather than an error.
+    Hold both the framebuffer and *target* until the result has been
+    read. A `GPUFrameBuffer` does not keep its colour texture alive, and
+    reading one whose texture Python has freed gives zeroes, not an
+    error.
     """
     shader, batch = blend_shader()
     framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))

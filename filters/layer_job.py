@@ -1,47 +1,44 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Refreshing a filter layer without being asked (PS-057).
+"""Refreshes out-of-date filter layers automatically (PS-057).
 
-The same generator `ops.filter_layer_ops` drives from a modal, pulled
-from a `bpy.app.timers` tick instead. What it buys is the ordinary case:
-paint under a filter layer, stop, and a moment later the filter shows
-what you painted. What it must never do is make Blender feel broken, so
-it is fenced in four ways.
+Runs the same build generator that `ops.filter_layer_ops` drives from a
+modal operator, but from a `bpy.app.timers` tick. The goal: paint under
+a filter layer, stop, and a moment later the filter shows the new paint.
+It must never make Blender feel broken, so it has these limits.
 
-**Only the composite path.** A layer whose input needs a Cycles bake is
-left alone with a message saying so, because a background render would
-lock the window for seconds with nothing to cancel it. The auto path
-decides that before allocating anything.
+- **Composite path only.** A layer whose input needs a Cycles bake is
+  left alone, with a message saying so. A background render would lock
+  the window for seconds with no way to cancel it. This is decided
+  before anything is allocated.
+- **Only a GPU context already known to work.** `gpu.init()` crashes
+  instead of raising on some builds without a driver
+  (`gpu_passes/core.py`). So this path asks `gpu_known()` and is never
+  the first caller to find out.
+- **Debounced and budgeted.** A build starts only after things have
+  been quiet for `DEBOUNCE` seconds, and each tick spends about `BUDGET`
+  seconds on it. The viewport shows the previous pixels for the whole
+  job. The commit is one atomic write, so no half-built state is ever
+  visible.
+- **Bounded.** A layer that is out of date again right after its own
+  build stops refreshing itself and says why, instead of rebuilding
+  forever. `settled` is the signal that a cycle ended properly: a
+  compile found the layer up to date.
+- **Restarted when its input changes.** A setting dragged or a stroke
+  finished during a build means the build is filtering old input.
+  Finishing would still be correct, because `filters.layer_build` stamps
+  what it read and the layer stays out of date. But the time would be
+  wasted, so the job is dropped and a new one waits for the debounce.
+  Neither case counts towards `BUILD_LIMIT`, which is for a build that
+  cannot satisfy its own check, not one that was overtaken. After
+  `RESTART_LIMIT` restarts in a row the build is allowed to finish, so
+  someone painting in short bursts still sees the filter catch up.
 
-**Only a GPU context that is already known good.** `gpu.init()` crashes
-rather than raises on some driverless builds (`gpu_passes/core.py`), so
-this path asks `gpu_known()` and refuses to be the caller that finds out.
-
-**Debounced and budgeted.** A pass starts only after things have been
-quiet, and each tick spends a slice of a frame on the build. The viewport
-goes on showing the previous pixels for the whole job; the commit is one
-atomic write, so no intermediate state is ever visible.
-
-**Bounded.** A layer that comes back out of date immediately after its
-own build stops refreshing itself and says why, rather than rebuilding
-forever. `settled` is the signal that the cycle was genuine: a compile
-that found the layer fresh.
-
-**Restarted when what it read moves.** A setting dragged or a stroke
-finished partway through a build leaves that build filtering the past.
-It would still be correct to finish -- `filters.layer_build` stamps what
-it read, so the layer comes out still out of date -- but the time spent
-is wasted, so the job is dropped and a new one waits out the debounce.
-Neither kind of ending counts towards the bound, which is for a build
-that cannot satisfy its own check rather than one that was overtaken.
-After a few restarts in a row the build is let finish anyway, so that
-someone painting in short bursts still sees the filter catch up.
-
-Undo, redo and a file read call `cancel_all`. The generator holds the
-tree and the node it was started with, and those references do not
-survive a restore (PS-090) -- so the rule is that no job does either.
-A pixel write the timer made after an undo step was pushed is lost on a
-Ctrl+Z together with its stamp, which leaves the layer out of date and
-schedules another refresh: self-healing, and worth keeping that way.
+Undo, redo and a file read call `cancel_all`. A job holds the tree and
+the node it started with, and those references do not survive a restore
+(PS-090), so no job may survive one either. A pixel write the timer made
+after an undo step was pushed is lost on Ctrl+Z together with its stamp.
+The layer is then out of date and schedules another refresh, so this
+heals itself. Keep it that way.
 """
 from __future__ import annotations
 
@@ -57,26 +54,26 @@ from .core import Refused
 
 log = logging.getLogger(__name__)
 
-# Quiet time before a pass starts. Long enough that the tail of updates a
-# stroke leaves behind does not start one, short enough to feel automatic.
+# Seconds of quiet before a build starts. Long enough that the updates at
+# the end of a stroke do not start one, short enough to feel automatic.
 DEBOUNCE = 0.4
-# Seconds of build per tick. Shorter than the modal's slice: that one has
-# a progress bar saying where the time went, and this one does not.
+# Seconds of build work per tick. Shorter than the modal operator's
+# slice, because the modal shows a progress bar and this does not.
 BUDGET = 0.02
-# Builds of one layer started with no compile finding it fresh in
-# between. Real editing always produces one, so reaching this means the
-# build cannot satisfy the check that asked for it.
+# Most builds of one layer with no compile finding it up to date in
+# between. Normal editing always produces such a compile, so reaching
+# this means the build cannot satisfy the check that asked for it.
 BUILD_LIMIT = 3
-# Builds of one layer dropped in a row because what they read moved.
+# Most builds of one layer dropped in a row because their input changed.
 # The next one runs to the end whatever happens meanwhile.
 RESTART_LIMIT = 2
 
 _deadline = 0.0
 _job = None
-# Whether `notify` has been called since the running job last looked.
+# Whether `notify` has been called since the running job last checked.
 _poked = False
 # Node uuid to auto builds started since a compile last found that layer
-# fresh.
+# up to date.
 _builds: dict[str, int] = {}
 # Node uuid to builds of it dropped in a row, see RESTART_LIMIT.
 _restarts: dict[str, int] = {}
@@ -89,8 +86,8 @@ class _Job:
         self.tree_name = tree.name
         self.node_name = node.name
         self.uuid = node.uuid
-        # Taken in the same tick as the build's own, which is the first
-        # unit `_run` drives, so the two agree.
+        # Taken in the same tick as the build's own `inputs_of` call,
+        # which runs in the first unit `_run` drives, so the two agree.
         self.read = layer_build.inputs_of(tree, node, plan)
         self.steps = layer_build.steps(bpy.context, tree, node, plan=plan)
 
@@ -101,7 +98,8 @@ class _Job:
     def moved(self) -> bool:
         """Whether anything the build read has changed since it started.
 
-        About a millisecond: one resolve and one IR build, no pixels.
+        Costs about a millisecond: one resolve and one IR build, with no
+        pixels read.
         """
         node = _node_of(self)
         if node is None:
@@ -114,8 +112,8 @@ class _Job:
         return layer_build.inputs_of(tree, node, plan) != self.read
 
     def close(self):
-        # Raises GeneratorExit at whichever yield the build reached,
-        # which is what gives its textures back.
+        # Raises GeneratorExit at the build's current yield, which frees
+        # its textures.
         self.steps.close()
 
 
@@ -123,13 +121,12 @@ class _Job:
 
 
 def notify() -> None:
-    """Ask for a refresh pass once things go quiet. Safe from anywhere.
+    """Ask for a refresh once things go quiet. Safe to call from anywhere.
 
-    Called from a compile that found a filter layer out of date, which
-    covers a stroke below one as well: the pixel half of
-    `filters.freshness` sets the flag, and the next compile reads it.
-    It is also what tells a running job to check whether it has been
-    overtaken.
+    Called by a compile that found a filter layer out of date. This also
+    covers a stroke below a filter layer, because the pixel half of
+    `filters.freshness` sets the flag and the next compile reads it. It
+    also tells a running job to check whether it has been overtaken.
     """
     global _deadline, _poked
     _deadline = time.monotonic() + DEBOUNCE
@@ -139,16 +136,17 @@ def notify() -> None:
     try:
         bpy.app.timers.register(_tick, first_interval=DEBOUNCE)
     except Exception:
-        # Can fail during addon unregister; nothing to schedule then.
+        # Can fail during addon unregister, when there is nothing to
+        # schedule anyway.
         log.debug("could not schedule a filter refresh", exc_info=True)
 
 
 def settled(node) -> None:
-    """A compile found *node* up to date, so its build cycle was genuine.
+    """Called when a compile finds *node* up to date. Resets its build count.
 
-    Also how a job learns that its layer went back to what it was built
-    from partway through -- a setting nudged and returned -- which leaves
-    nothing to build, so no `notify` to hear it by.
+    This is also how a running job learns that its layer went back to
+    what the job read, for example a setting nudged and then returned.
+    Then nothing is out of date, so no `notify` call would tell the job.
     """
     global _poked
     _builds.pop(node.uuid, None)
@@ -205,12 +203,12 @@ def _tick():
 
 
 def _overtaken(job) -> bool:
-    """Whether *job* is filtering pixels or settings that have since moved.
+    """True when the pixels or settings *job* read have changed since it started.
 
-    A stroke below is a count to compare, so it is looked for on every
-    tick: the addon's own pixel writes mark a layer that is already
-    marked without anything calling `notify`. A structural change costs
-    an IR build to see, and always comes through a compile that does.
+    Strokes below are checked every tick, because comparing a counter is
+    cheap and the addon's own pixel writes do not call `notify`. Setting
+    changes need an IR build to detect, so they are only checked after a
+    compile has called `notify`.
     """
     global _poked
     poked, _poked = _poked, False
@@ -221,19 +219,19 @@ def _overtaken(job) -> bool:
     if not poked:
         return False
     moved = job.moved()
-    # The IR build inside `moved` compiles the layer, which is still
-    # stale, so it calls `notify` again. That call is not news, and
-    # left set it would make every tick pay for another IR build.
+    # The IR build inside `moved` compiles the layer, which is still out
+    # of date, so it calls `notify` again. That call brings no news. Left
+    # set, it would make every tick pay for another IR build.
     _poked = False
     return moved
 
 
 def _restart(job) -> None:
-    """Drop *job*, which is filtering pixels or settings that have moved on.
+    """Drop *job*, because the pixels or settings it read have changed.
 
-    The next pass starts it again once things have been quiet for the
-    debounce, counted from now: a stroke found by counting came with no
-    `notify` to push the deadline out.
+    A new build starts once things have been quiet for `DEBOUNCE`,
+    counted from now. A stroke found by the counter came with no `notify`
+    call to push the deadline back.
     """
     global _job, _deadline
     _job = None
@@ -245,7 +243,10 @@ def _restart(job) -> None:
 
 
 def _uncount(job) -> None:
-    """Take *job* back off `_builds`: it was overtaken, not unsettled."""
+    """Undo *job*'s count in `_builds`.
+
+    The job was overtaken, which does not mean its layer failed to settle.
+    """
     count = _builds.get(job.uuid, 0) - 1
     if count > 0:
         _builds[job.uuid] = count
@@ -260,9 +261,9 @@ def _start():
     so here and the pass moves on to the next one.
     """
     if gpu_known() is not True:
-        # Never the caller that runs `gpu.init()`: it crashes rather than
-        # raises where there is no usable driver, and a timer is the worst
-        # place to find that out.
+        # Never be the first to call `gpu.init()`. It crashes instead of
+        # raising where there is no usable driver, and a timer is the
+        # worst place to find that out.
         return None
     for tree, node in _candidates():
         try:
@@ -278,9 +279,9 @@ def _start():
             _give_up(node, "Refreshing this layer did not settle; press Update to try again")
             continue
         _set_error(node, "")
-        # Counted at the start rather than at the end: the commit marks
-        # the tree, so the compile that clears this again runs inside the
-        # build's own last unit.
+        # Count at the start, not the end. The commit marks the tree, so
+        # the compile that clears this count runs inside the build's own
+        # last unit.
         _builds[node.uuid] = _builds.get(node.uuid, 0) + 1
         log.debug("refreshing %s: %s", node.name, node.stale_reason)
         return _Job(tree, node, plan)
@@ -288,21 +289,21 @@ def _start():
 
 
 def _candidates():
-    """Filter layers asking to be refreshed, the bottom of each stack first.
+    """Filter layers that need a refresh, the bottom of each stack first.
 
-    Bottom first because a filter layer below an out-of-date one has to
-    be rebuilt before it, or the upper layer filters pixels that are
-    about to change and goes out of date again the moment they do.
+    Bottom first, because a filter layer below an out-of-date one must be
+    rebuilt first. Otherwise the upper layer filters pixels that are
+    about to change, and goes out of date again as soon as they do.
 
-    A switched-off layer is left alone. It renders as a pass-through, so
-    a rebuild would spend the video memory and the frame time of a full
-    composite on pixels nothing can show, and turning it off is the
-    ordinary way to compare with and without. It stays marked out of
-    date, and switching it back on is what asks for the refresh -- see
-    `PaintSystemFilterLayerNode._enabled_changed`, which cannot leave
-    that to the compile it schedules.
+    A switched-off layer is skipped. It renders as a pass-through, so a
+    rebuild would spend the video memory and frame time of a full
+    composite on pixels nothing can show. Switching a layer off is also
+    the normal way to compare with and without it. The layer stays
+    marked out of date, and switching it back on asks for the refresh.
+    See `_enabled_changed` in `nodes/layers/filter_layer_node.py`, which
+    cannot leave that to the compile it schedules.
 
-    A layer the Update button is already building is skipped too. Its
+    A layer the Update button is already building is skipped too. The
     build's first unit compiles, which calls `notify`, so a long Update
     would otherwise start a second build of the same layer. The commit
     compiles again, and that asks for a refresh if one is still needed.
@@ -323,10 +324,10 @@ def _candidates():
 
 
 def _run(job):
-    """Spend a slice of this tick on *job*, and say when to come back."""
+    """Spend about `BUDGET` seconds on *job*, and return when to tick again."""
     global _job
-    # At least one unit per tick, whatever the budget: a tick that does
-    # nothing and asks to be called again is a spin, not a pause.
+    # Run at least one unit per tick, whatever the budget. A tick that
+    # does nothing and asks to be called again would only spin.
     deadline = time.perf_counter() + BUDGET
     while True:
         try:
@@ -334,9 +335,10 @@ def _run(job):
         except StopIteration as done:
             _job = None
             _restarts.pop(job.uuid, None)
-            # Let finish past RESTART_LIMIT, or overtaken in its last
-            # unit. It committed what it read and the layer is still out
-            # of date, which says nothing about whether it can settle.
+            # If its input changed, the build either was allowed to
+            # finish past RESTART_LIMIT or was overtaken in its last unit.
+            # It committed what it read, so the layer being out of date
+            # says nothing about whether it can settle.
             if job.moved():
                 _uncount(job)
             log.debug("refreshed %s", done.value.name)
@@ -347,9 +349,9 @@ def _run(job):
             _give_up(_node_of(job), str(refusal))
             return DEBOUNCE
         except Exception:
-            # A driver that gives up mid-build. Logged and stopped rather
-            # than retried: the same build would fail the same way, and
-            # the layer still shows the pixels it had.
+            # For example a driver that fails mid-build. Log and stop
+            # instead of retrying, because the same build would fail the
+            # same way. The layer still shows its previous pixels.
             _job = None
             _restarts.pop(job.uuid, None)
             job.close()
@@ -361,7 +363,7 @@ def _run(job):
 
 
 def _node_of(job):
-    """*job*'s node, re-fetched, or None when it did not survive (PS-090)."""
+    """*job*'s node looked up again, or None when it is gone (PS-090)."""
     tree = bpy.data.node_groups.get(job.tree_name)
     if tree is None:
         return None

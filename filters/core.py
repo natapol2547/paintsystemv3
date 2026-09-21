@@ -1,39 +1,35 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""One GPU pass over a layer image, in and out of the image's own pixels (PS-050).
+"""One GPU pass over a layer image's own stored values (PS-050).
 
-`PixelSource.from_image` reads `Image.pixels` into a float32 array and
-uploads it unchanged. `run_pass` draws one full-target fragment pass in
-bands, and `filters.actions.apply_passes` reads the result back into the
-image. Nothing here converts colour: what the image stores is what the
-pass sees, so an identity filter writes the bytes it read and `Invert`
-gives exactly ``255 - k``. A byte image is carried in
-`RGBA16F`, whose 11 bits of mantissa round back to the byte they came
-from; a float image is carried in `RGBA32F` unchanged.
+`FilterSpec` describes a filter. `PixelSource.from_image` uploads an
+image, `run_pass` draws one pass over the whole target in bands, and
+`filters.actions.apply_passes` reads the result back into the image.
 
-`gpu.texture.from_image` is not used for the source. It returns an sRGB
-byte image as straight linear values and a float image through a CPU
-conversion, neither of which can be written back.
-
-Storage conventions, which the prelude converts for a filter:
-
-- byte images hold straight alpha in the image's own colour space;
-- float images hold premultiplied scene linear.
-
-The prelude also carries `ps_to_srgb` and `ps_to_linear`, which a filter
-needs whenever the two disagree about colour space rather than about
-alpha: inverting a float layer, or writing a scene-linear composite into
-a byte sRGB image.
-
-Colour under zero alpha has no straight form, so a float texel with
-``a == 0`` reaches a filter as transparent black and its stored colour
-does not survive the pass. Nothing visible changes, and no filter here
-reads colour a texel does not show.
-
-The mask is any `R32F` texture the size of the image: a selection mask
-from `selection.raster`, or later the coverage of a flood fill (PS-095).
-It is sampled quantised to 8 bits, exactly as the brush stencil reads a
-selection, so an action changes what a stroke would have painted. A texel
-the mask leaves at zero is copied through bit-exactly.
+- Nothing here converts colour. The pass sees exactly what the image
+  stores, so an identity filter writes back the bytes it read, and
+  `Invert` gives exactly ``255 - k``.
+- `PixelSource.from_image` reads `Image.pixels` into a float32 array and
+  uploads it unchanged. A byte image goes into `RGBA16F`, whose 11 bits
+  of mantissa round back to the original byte. A float image goes into
+  `RGBA32F` unchanged.
+- `gpu.texture.from_image` is not used for the source. It returns an
+  sRGB byte image as straight linear values, and a float image through a
+  CPU conversion. Neither can be written back.
+- Byte images store straight alpha in the image's own colour space.
+  Float images store premultiplied scene linear. The GLSL prelude
+  converts both to straight alpha for a filter.
+- The prelude also has `ps_to_srgb` and `ps_to_linear`. A filter needs
+  them when the colour space differs, for example to invert a float
+  layer, or to write a scene-linear composite into a byte sRGB image.
+- A float texel with ``a == 0`` reaches a filter as transparent black,
+  because colour under zero alpha cannot be un-premultiplied. Its stored
+  colour is lost, but nothing visible changes, and no filter here reads
+  colour that a texel does not show.
+- The mask is any `R32F` texture the size of the image: a selection mask
+  from `selection.raster`, or later the coverage of a flood fill
+  (PS-095). It is quantised to 8 bits, exactly as the brush stencil reads
+  a selection, so an action changes what a stroke would have painted. A
+  texel where the mask is zero is copied through bit-exactly.
 """
 import logging
 from dataclasses import dataclass, field
@@ -121,10 +117,10 @@ void main()
     out_color = straight_to_stored(after);
     return;
   }
-  /* Partial coverage mixes premultiplied, so a feathered Clear lowers
-     alpha and leaves colour alone. Where both sides are invisible the
-     colour is mixed straight instead, so colour under transparency
-     follows the action rather than fading to black. */
+  /* Partial coverage mixes premultiplied values, so a feathered Clear
+     lowers alpha and leaves colour alone. Where both sides are fully
+     transparent, colour is mixed straight instead. Colour under
+     transparency then follows the action instead of fading to black. */
   float a = mix(before.a, after.a, m);
   vec3 c = a > 0.0 ? mix(before.rgb * before.a, after.rgb * after.a, m) / a
                    : mix(before.rgb, after.rgb, m);
@@ -138,28 +134,28 @@ class FilterSpec:
     """One single-pass filter, as the GLSL body of its `apply`.
 
     `apply_source` defines ``vec4 apply(ivec2 texel, vec4 c)``, where `c`
-    is straight colour in the image's storage space and the result is
-    read the same way. `params` are the push constants it reads, as
-    ``(type, name)`` pairs; `run_pass` takes their values by name.
+    is straight colour in the colour space the image stores. The return
+    value is in the same form. `params` lists the push constants it reads
+    as ``(type, name)`` pairs. `run_pass` takes their values by name.
     """
 
     name: str
     apply_source: str
     params: tuple[tuple[str, str], ...] = field(default_factory=tuple)
-    # Whether `apply` reads the `second` sampler as well as `source`. An
-    # unsharp mask needs the picture it started from alongside the blur
-    # of it, and by then the chain has overwritten the first. The caller
-    # says which texture that is; the spec only says that it wants one.
-    # There is one `storage` for the pass, so the second texture has to
-    # hold alpha the same way the source does.
+    # True when `apply` reads the `second` sampler as well as `source`.
+    # An unsharp mask needs the original picture next to its blur, and by
+    # then the chain of passes has replaced the original. The caller
+    # binds the texture. The spec only says that it needs one. A pass has
+    # one `storage` value, so the second texture must store alpha the
+    # same way as the source.
     reads_second: bool = False
 
 
 def storage_of(image: bpy.types.Image) -> int:
-    """Whether *image* stores premultiplied or straight alpha.
+    """`PREMULTIPLIED` or `STRAIGHT`, for how *image* stores alpha.
 
-    Blender's float buffers are premultiplied whatever `alpha_mode` says;
-    byte buffers hold what was painted into them, which is straight.
+    Blender's float buffers are premultiplied whatever `alpha_mode` says.
+    Byte buffers hold what was painted into them, which is straight.
     """
     return PREMULTIPLIED if image.is_float else STRAIGHT
 
@@ -206,8 +202,8 @@ def _shader(spec: FilterSpec):
 class PixelSource:
     """The stored values of one image, on the GPU and in a numpy array.
 
-    The array stays alive for as long as the texture: `gpu.types.Buffer`
-    shares its memory rather than copying it.
+    The array is kept alive as long as the texture, because
+    `gpu.types.Buffer` shares its memory instead of copying it.
     """
 
     __slots__ = ('values', 'width', 'height', 'storage', 'texture')
@@ -244,24 +240,25 @@ def run_pass(spec: FilterSpec, source: gpu.types.GPUTexture, target=None, *,
              params: dict | None = None) -> tuple[gpu.types.GPUFrameBuffer, gpu.types.GPUTexture]:
     """Draw *spec* from the *source* texture into *target*.
 
-    *target* defaults to a new texture the size and format of *source*.
-    The pass covers *target*. That is the size of the source for a
-    filter; a pass that reads the source at coordinates of its own, such
-    as a reduction or a gather, can draw into a smaller one, whose texels
-    `apply` still sees as its own and `_MAIN` still reads the source at
-    -- inside it, so long as the target is no larger.
+    *target* defaults to a new texture with the size and format of
+    *source*. The pass covers all of *target*. For a filter that is the
+    size of the source. A pass that picks its own source coordinates,
+    such as a reduction or a gather, can draw into a smaller target.
+    `apply` then gets the target's texel, and `_MAIN` reads the source at
+    that same texel, which stays inside the source while the target is
+    no larger.
 
-    *storage* is how *source* holds alpha, `STRAIGHT` or `PREMULTIPLIED`,
+    *storage* is how *source* stores alpha, `STRAIGHT` or `PREMULTIPLIED`,
     as `storage_of` reports for an image. *mask* is an `R32F` texture the
     size of the source, or None to cover the whole image. *second* is a
-    texture the size of the source for a spec whose `reads_second` is
-    set, such as the unsharp mask reading what it started from. *params*
-    holds a value per push constant of the spec, by name.
+    texture the size of the source, for a spec with `reads_second` set,
+    such as the unsharp mask reading its original. *params* maps each
+    push constant name of the spec to a value.
 
-    Both the framebuffer and its texture come back, and both have to be
-    held until the result is read: a `GPUFrameBuffer` does not keep its
-    colour slot alive, and reading one whose texture Python has already
-    freed gives zeroes rather than an error.
+    Returns the framebuffer and the target. Hold both until the result
+    has been read. A `GPUFrameBuffer` does not keep its colour texture
+    alive, and reading one whose texture Python has freed gives zeroes,
+    not an error.
     """
     if target is None:
         target = new_texture((source.width, source.height), source.format)

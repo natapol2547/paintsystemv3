@@ -1,53 +1,50 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Whether a filter layer's pixels still describe the layers below (PS-057).
+"""Whether a filter layer's pixels still match the layers below (PS-057).
 
-This is the structural half: what the build was *asked* for, recomputed
-on every compile and compared with what the image was stamped with. It is
-free, because `compiler.core.CompileContext.subtree_hash` is memoised per
-compile and already covers a layer added, removed, reordered or muted, a
-fill colour, another layer's blend mode or opacity, a clip flag, and an
-image datablock swapped or renamed.
+There are two halves: structure and pixels.
 
-Note what it hashes: the upstream of the filter's ``Color`` input, not
-the filter node itself. Opacity, Amount, `enabled` and Mask are outside
-it by construction, which is the point -- fading a built filter must not
-make it ask to be rebuilt.
+The structural half recomputes what a build would be asked for
+(`fingerprint_parts`) on every compile, and compares it with the stamp on
+the image. This costs almost nothing, because
+`compiler.core.CompileContext.subtree_hash` is memoised per compile. That
+hash already covers a layer added, removed, reordered or muted, a fill
+colour, another layer's blend mode or opacity, a clip flag, and an image
+datablock swapped or renamed.
 
-Clip is the exception, and looks like one of those until you follow what
-the socket carries. A clipped layer's ``Color`` input is its clip base's
-own content rather than the stack below, because the base holds its
-blend for the top of the run to make. So toggling Clip on a filter layer
-swaps what it filters without moving one property upstream, and
-`subtree_hash` cannot see it: the node feeding the socket is the same
-node either way.
+- It hashes what feeds the filter's ``Color`` input, not the filter node
+  itself. So Opacity, Amount, `enabled` and Mask are left out on
+  purpose. Fading a built filter must not make it ask for a rebuild.
+- Clip on the filter layer is the exception. A clipped layer's ``Color``
+  input carries its clip base's own content, not the stack below,
+  because the base leaves its blend to the top of the clip run. So
+  toggling Clip changes what the layer filters, but the node feeding the
+  socket stays the same, and `subtree_hash` cannot see it. Clip gets its
+  own part.
+- The parts are stamped separately, not as one hash, so a mismatch can
+  say which part changed. "Out of date" with no reason is a button the
+  user has to press on faith.
 
-The parts are stamped as they are rather than as one hash, so that a
-disagreement can say which one moved. "Out of date" with no reason is a
-button the user has to press on faith.
+The pixel half covers painting. `compiler.ir` reduces a datablock to its
+name, so painting into an image below changes no hash at all.
+`note_image_changed` handles this. Blender tags a painted image in the
+depsgraph at the end of a stroke, and the addon's own pixel writes call
+it directly. Either way, every filter layer reading that image is
+marked. The flag lives on the node, not the image, because it describes
+a build and not the pixels.
 
-The other half is pixels. `compiler.ir` reduces a datablock to its name,
-so painting into an image below changes no hash at all and the structural
-half is blind to it by construction. `note_image_changed` closes that:
-Blender tags a painted image in the depsgraph at the end of a stroke, the
-addon's own pixel writes say so directly, and either way every filter
-layer reading that image is marked. The flag lives on the node rather than
-on the image, because it is a statement about a build and not about the
-pixels.
-
-Which images a filter layer reads is worked out on demand rather than
-recorded at build time. `filters.composite.plan_below` already answers it
-exactly, the walk only runs when an image is actually tagged, and a
-recorded set would be one more thing to invalidate -- while any change to
-*which* images are below is a structural change the other half already
-catches.
-
-A build in flight is the one reader the flag cannot serve on its own. The
-layer is usually marked already -- that is why it is being built -- so a
-second stroke landing partway through would change nothing, and the
-commit clearing the flag would then claim pixels the build never saw.
-`reading` covers that span: while a build of a layer is running, every
-stroke below it is counted in `changes`, marked or not, and the commit
-clears the flag only when the count is the one it started with.
+- Which images a filter layer reads is worked out when needed
+  (`source_uids`), not recorded at build time.
+  `filters.composite.plan_below` already answers it exactly, and it only
+  runs when an image is tagged. A recorded set would be one more thing
+  to invalidate. A change in which images are below is already a
+  structural change.
+- A build in flight needs more than the flag. The layer is usually
+  already marked, which is why it is being built, so a second stroke
+  during the build would change nothing. The commit would then clear the
+  flag for pixels the build never saw. `reading` covers that time. While
+  a build of a layer runs, every stroke below it adds to `changes`,
+  marked or not. The commit clears the flag only when the count still
+  matches the one it started with.
 """
 from __future__ import annotations
 
@@ -66,10 +63,10 @@ log = logging.getLogger(__name__)
 PIXEL_REASON = "the pixels below changed"
 
 # Checked in this order, so the reason names the most useful difference
-# when several moved at once. Two parts change along with another one, so
-# they come after it: switching the filter changes the settings too, and
-# a Painterly layer's settings record its blur in texels, which a new
-# resolution changes.
+# when several changed at once. `params` comes after `filter` and `size`
+# because it changes along with either one. Switching the filter changes
+# the settings too, and a Painterly layer's settings record its blur in
+# texels, which a new resolution changes.
 REASONS = (
     ("below", "the layers below changed"),
     ("clip", "clipping changed what it filters"),
@@ -82,13 +79,13 @@ REASONS = (
 
 
 def fingerprint_parts(ctx, node, below) -> dict:
-    """What a build of *node* would be asked for, as named parts.
+    """What a build of *node* would be asked for, as a dict of named parts.
 
     *below* is the node feeding the filter's ``Color`` input, which is
-    the whole stack the filter replaces. *ctx* is any
-    `compiler.core.CompileContext`: the hash is a function of the tree,
-    not of the context that walked it, so the one a build makes and the
-    one a compile is holding agree.
+    the whole stack the filter replaces. *ctx* can be any
+    `compiler.core.CompileContext`. The hash depends only on the tree,
+    not on the context that walked it, so a build's context and a
+    compile's context give the same result.
     """
     kind = LAYER_FILTERS.get(node.filter_type)
     size = int(node.resolution)
@@ -96,27 +93,26 @@ def fingerprint_parts(ctx, node, below) -> dict:
         "version": derived.FILTER_VERSION,
         "filter": node.filter_type,
         # See `LayerFilterSpec.fingerprint`. An unregistered kind has
-        # nothing to read -- the build refuses such a layer outright, so
-        # here it only has to not raise.
+        # nothing to record. The build refuses such a layer anyway, so
+        # this only has to avoid raising.
         "params": kind.fingerprint(node) if kind is not None else [],
         "size": [size, size],
-        # The map as authored, not as resolved. Resolving needs a mesh,
-        # and a compile serves every object the tree is on.
+        # The map name as set on the layer, not resolved. Resolving needs
+        # a mesh, and one compile serves every object that uses the tree.
         "uv_map": node.uv_map,
         "below": ctx.subtree_hash(below) if below is not None else "empty",
     }
-    # `clip_base` rather than `is_clip`, because a clipped layer with no
-    # unclipped layer under it composites as if it were not clipped and
-    # filters the same stack.
+    # Uses `clip_base`, not `is_clip`. A clipped layer with no unclipped
+    # layer under it composites as if it were not clipped, and filters
+    # the same stack.
     #
-    # Present only when it is clipped, so that a stamp written before
-    # this part existed still matches for the unclipped layer it was
-    # already right about. A clipped layer whose stamp predates the part
-    # reads as out of date instead. Its pixels were most likely right --
-    # both build paths have always honoured the clip -- but the stamp
-    # cannot say whether the layer was clipped before or after the build,
-    # and clipped afterwards is exactly the case this part exists to
-    # catch. One rebuild is the cost of not being able to tell.
+    # The part is only present when the layer is clipped. So a stamp
+    # written without this part still matches for an unclipped layer. A
+    # clipped layer with such a stamp reads as out of date. Its pixels
+    # are probably right, because both build paths honour the clip. But
+    # the stamp cannot say whether the layer was clipped before or after
+    # the build, and clipping after the build is the case this part
+    # exists to catch. One rebuild is the price.
     if clip_base(node) is not None:
         parts["clip"] = True
     return parts
@@ -136,9 +132,9 @@ def structure_reason(stored: str, parts: dict) -> str:
     except ValueError:
         log.debug("unreadable filter fingerprint: %r", stored)
         return "its build could not be read"
-    # json round-trips a tuple as a list, so compare the encodings rather
-    # than the dicts: `params` holds a tuple on one side and a list on
-    # the other, and every other value is already a string or a number.
+    # JSON turns a tuple into a list, so compare the encoded strings, not
+    # the dicts. `params` holds a tuple on one side and a list on the
+    # other. Every other value is already a string or a number.
     if stamp(was) == stamp(parts):
         return ""
     for key, reason in REASONS:
@@ -152,7 +148,7 @@ def structure_reason(stored: str, parts: dict) -> str:
 # Node uuid to the number of builds of that layer in flight. The auto job
 # skips a layer listed here, so in practice the count is 0 or 1.
 _reading: dict[str, int] = {}
-# Node uuid to the strokes below that layer noticed so far. Only ever
+# Node uuid to the number of strokes noticed below that layer. It is only
 # compared with an earlier value of itself, so it is never reset.
 _changes: dict[str, int] = {}
 
@@ -161,8 +157,8 @@ _changes: dict[str, int] = {}
 def reading(uuid: str):
     """Count every stroke below the layer *uuid* for as long as this is open.
 
-    Held by a build from before it reads anything until after it commits,
-    so that a stroke landing in between is seen even when the layer is
+    A build holds this from before it reads anything until after it
+    commits. A stroke in between is then counted even when the layer is
     already marked.
     """
     _reading[uuid] = _reading.get(uuid, 0) + 1
@@ -187,16 +183,17 @@ def changes(uuid: str) -> int:
 
 
 def note_image_changed(uids) -> None:
-    """Mark every built filter layer that reads one of *uids*.
+    """Mark every built filter layer that reads one of the images *uids*.
 
-    *uids* are `Image.session_uid` values: the datablock a name lookup
-    would miss after a rename, and what the depsgraph hands over.
+    *uids* are `Image.session_uid` values. They still find the image after
+    a rename, where a name lookup would miss, and they are what the
+    depsgraph provides.
 
     Called from `handlers.node_tree_handlers.on_depsgraph_update_post`
-    with whatever Blender tagged, and from the addon's own pixel writes,
-    which are exact rather than tagged. Setting the flag is all this
-    does -- nothing rebuilds from here, because a filter layer goes on
-    rendering its previous pixels until something asks it not to.
+    with the images Blender tagged, and directly from the addon's own
+    pixel writes. This only sets the flag and counts the stroke. It never
+    rebuilds anything itself. A filter layer keeps rendering its previous
+    pixels until something asks it to rebuild.
     """
     uids = {int(uid) for uid in uids}
     if not uids:
@@ -206,13 +203,14 @@ def note_image_changed(uids) -> None:
             if getattr(node, 'ps_type', "") != 'FILTER':
                 continue
             read = building(node.uuid)
-            # A marked layer has nothing more to learn, unless a build of
-            # it is running: that build may have read the pixels already.
+            # A marked layer needs nothing more, unless a build of it is
+            # running. That build may have read the pixels already.
             if node.derived_stale_pixels and not read:
                 continue
-            # An unbuilt layer has no claim about pixels to lose, and the
-            # walk below is the expensive part. One being built for the
-            # first time is about to make such a claim.
+            # Skip an unbuilt layer. It makes no claim about pixels, and
+            # the walk below is the expensive part. A layer being built
+            # for the first time is about to make such a claim, so it is
+            # not skipped.
             if not (read or derived.is_built(node.derived_image)):
                 continue
             if not uids & source_uids(node):
@@ -226,10 +224,10 @@ def note_image_changed(uids) -> None:
 def source_uids(node) -> frozenset[int]:
     """The `session_uid` of every image the layers below *node* read.
 
-    Empty when the composite cannot plan the stack -- there is nothing
-    below, or it holds something only a Cycles bake can draw. Both mean
-    the layer was not built from what is there now, which the structural
-    half already says.
+    Empty when the composite cannot plan the stack, because there is
+    nothing below or it holds something only a Cycles bake can draw.
+    Both mean the layer was not built from what is there now, and the
+    structural half already reports that.
     """
     try:
         chain = composite.plan_below(node)

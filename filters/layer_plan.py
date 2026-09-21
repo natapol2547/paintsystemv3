@@ -1,30 +1,29 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Which path a filter layer's input comes down (PS-057).
+"""Chooses how a filter layer gets the picture below it (PS-057).
 
-There are two ways to get the picture under a filter layer. The GPU
-composite (`filters.composite`) draws it in a handful of passes and is
-what the auto refresh is allowed to run. The Cycles bake
-(`compiler.bake.bake_subtree`) renders it, which is exact for anything --
-group layers, the layers that evaluate surface data, a blend mode with no
-parity test -- and takes seconds.
+There are two paths. The GPU composite (`filters.composite`) draws the
+stack in a few passes, and is the only path the auto refresh may run.
+The Cycles bake (`compiler.bake.bake_subtree`) renders it. The bake is
+exact for anything, including group layers, layers that evaluate
+surface data, and blend modes with no parity test, but takes seconds.
 
-`resolve_input` picks between them and allocates nothing while doing it,
-so a layer that cannot be built says why before any video memory is
-spent. Two outcomes are distinct on purpose:
+`resolve_input` picks the path and allocates nothing while doing it, so
+a layer that cannot be built says why before any video memory is spent.
+It has two different outcomes on purpose:
 
-- an `InputPlan` on the ``BAKE`` path carries the reason in `reason`.
-  Only the bake could build it, and the bake path is not built yet, so
-  `filters.layer_build.steps` refuses it with that reason for now;
-- `filters.core.Refused` means neither path can, and is shown to the
-  user as written.
+- An `InputPlan` on the ``BAKE`` path, with the cause in `reason`. Only
+  the bake could build it. The bake path is not implemented yet, so
+  `filters.layer_build.steps` refuses it with that reason for now.
+- `filters.core.Refused`, which means neither path can build it. The
+  message is shown to the user as written.
 
-The UV map is the subtle one. The composite samples every source image by
-normalised coordinate, which only lands in the right place while the
-whole stack below shares one UV map with the derived image. Layers that
-all leave `uv_map` empty share the active render map whatever it is, so
-that case needs no object at all and a filter layer works with nothing
-selected. As soon as one layer names a map, telling whether the others
-resolve to the same one needs a mesh to ask.
+UV maps need care. The composite samples every source image by
+normalised coordinate, which is only correct while the whole stack below
+uses the same UV map as the derived image. Layers that all leave
+`uv_map` empty use the active render map, whatever it is. That case
+needs no object, so a filter layer works with nothing selected. Once any
+layer names a map, a mesh is needed to tell whether the others resolve
+to the same one.
 """
 from __future__ import annotations
 
@@ -46,16 +45,16 @@ COMPOSITE, BAKE = 'COMPOSITE', 'BAKE'
 
 @dataclass(frozen=True)
 class InputPlan:
-    """How to get the picture below a filter layer, and what it costs.
+    """How to get the picture below a filter layer.
 
-    *source* is the node feeding the layer's ``Color`` input, which is
-    what `compiler.core.build_ir` takes as its `bake_target` -- for a
-    clipped filter layer that is its base's own content, which is what
-    such a layer filters. *chain* is the composite plan on the composite
-    path and None on the bake path, where *reason* says why.
+    *source* is the node feeding the layer's ``Color`` input, which
+    `compiler.core.build_ir` takes as its `bake_target`. For a clipped
+    filter layer it is the base's own content, which is what such a layer
+    filters. *chain* is the composite plan on the composite path. On the
+    bake path it is None, and *reason* says why.
 
-    *uv_map* is the map the result is laid out in, resolved: "" only
-    when nothing below names one and no object was needed to decide.
+    *uv_map* is the resolved map the result is laid out in. It is "" only
+    when nothing below names a map and no object was needed to decide.
     """
     path: str
     source: bpy.types.Node
@@ -127,8 +126,8 @@ def resolve_input(context, tree, node) -> InputPlan:
 
     authored = set(chain.uv_maps) | {node.uv_map}
     if authored == {""}:
-        # Every layer renders through the active render UV map, so they
-        # agree whatever it is and no mesh has to be asked.
+        # Every layer uses the active render UV map, so they agree
+        # whatever it is, and no mesh is needed.
         return InputPlan(COMPOSITE, source, chain, "", "")
     if obj is None:
         raise Refused(f"The layers below '{node.name}' name a UV map, so filtering them "
@@ -145,7 +144,7 @@ def resolve_input(context, tree, node) -> InputPlan:
 
 
 def _bake_plan(node, source, obj, reason: str) -> InputPlan:
-    """The fallback, with the bake's own preconditions checked."""
+    """The bake plan, after checking the bake's own requirements."""
     if obj is None:
         raise Refused(f"Filtering the layers below '{node.name}' needs an active mesh "
                       f"object with a UV map, because {reason}")

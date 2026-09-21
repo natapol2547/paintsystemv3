@@ -1,38 +1,38 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The filters PS-052 runs, as `FilterSpec` values (PS-050).
+"""The GPU filters, as `FilterSpec` values (PS-050, PS-052).
 
 Each one defines ``vec4 apply(ivec2 texel, vec4 c)`` over straight colour
-in the image's storage space; `core` handles storage, the mask and the
-write back. A spec that needs a second texture as well as the one it is
-drawing over, such as the unsharp mask, sets ``reads_second`` and the
-caller binds it.
+in the colour space the image stores. `core` handles alpha storage, the
+mask and the write back. A spec that needs a second texture besides the
+one it draws over, such as the unsharp mask, sets ``reads_second``, and
+the caller binds that texture.
 
-`ENCODE_SRGB` and `DECODE_SRGB` are here too, though nobody chooses
-them. The filter layer build and the painter need the encode, the Blur
-and Sharpen actions need both, and the painter cannot import them from
-`layer_build`, which reaches the painter through `layer_specs`.
+`ENCODE_SRGB` and `DECODE_SRGB` are here too, though no user picks them.
+The filter layer build and the painter need the encode, and the Blur and
+Sharpen actions need both. They cannot live in `layer_build`, because
+the painter would then import `layer_build`, which already imports the
+painter through `layer_specs`.
 """
 from math import ceil
 
 from .core import FilterSpec
 
-# Taps to either side of the centre of the blur kernel. A gaussian is
-# below half a byte step past about three sigma, so this covers sigma 21
-# without a visible truncation edge.
+# Taps on each side of the blur kernel's centre. A gaussian falls below
+# half a byte step past about three sigma, so this covers sigma 21
+# without a visible cut-off edge.
 BLUR_TAPS = 63
 BLUR_MAX_SIGMA = BLUR_TAPS / 3.0
 
-# Blurring twice with sigma s is a blur with sigma s*sqrt(2), so a sigma
-# past one kernel is reached by running the pair again rather than by
-# widening it.
+# Blurring twice with sigma s gives a blur with sigma s*sqrt(2). So a
+# sigma wider than one kernel is reached by running the pair of passes
+# again, not by widening the kernel.
 #
-# The bound is where the cost stops being worth the width. Each
-# iteration is two full passes at the cap's 63 taps, and on the probe
-# machine a 2048 build costs about 0.5 s at one iteration and 1.1 s at
-# four; at sixteen it is 3.4 s, and 13 s at 4096, which is not a slider
-# anybody can drag. A blur wider than this one wants the taps spread
-# over a downsampled copy rather than more passes at full size, which is
-# the follow-up PS-051 records.
+# The limit is where more width stops being worth the cost. Each
+# iteration is two full passes at 63 taps. On the test machine a 2048
+# build takes about 0.5 s at one iteration and 1.1 s at four. At sixteen
+# it takes 3.4 s, and 13 s at 4096, far too slow for a slider. A wider
+# blur should spread the taps over a downsampled copy instead of adding
+# passes at full size. PS-051 records that follow-up.
 BLUR_MAX_ITERATIONS = 4
 BLUR_MAX_EFFECTIVE_SIGMA = BLUR_MAX_SIGMA * BLUR_MAX_ITERATIONS ** 0.5
 
@@ -60,11 +60,11 @@ vec4 apply(ivec2 texel, vec4 c)
 INVERT = FilterSpec(
     name="invert",
     apply_source="""
-/* A float layer holds scene linear, and inverting that directly turns a
-   mid grey almost white. The inversion runs on the sRGB encoding of the
-   colour instead, so a float layer and a byte layer of the same picture
-   come out looking the same. Values outside 0 to 1 have no encoding and
-   are clamped into it. */
+/* With `encode` set, the colour is scene linear, as in a float layer.
+   Inverting that directly turns a mid grey almost white, so the
+   inversion runs on the sRGB encoding instead. A float layer and a byte
+   layer of the same picture then look the same after Invert. Values
+   outside 0 to 1 have no encoding and are clamped. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   vec3 rgb = encode != 0 ? ps_to_srgb(clamp(c.rgb, 0.0, 1.0)) : c.rgb;
@@ -83,20 +83,19 @@ BLUR = FilterSpec(
     apply_source="""
 const int PS_BLUR_TAPS = 63;
 
-/* One axis of a separable gaussian: the caller runs this twice, with
+/* One axis of a separable gaussian. The caller runs this twice, with
    `direction` (1, 0) and then (0, 1).
 
-   The weights are evaluated here rather than uploaded. A 63-tap kernel
-   is 256 bytes of push constant, well past the block a Vulkan driver
-   has to offer, and an `exp` costs far less than the texture fetch
-   beside it.
+   The weights are computed here, not uploaded. A 63-tap kernel would
+   need 256 bytes of push constants, well past what a Vulkan driver has
+   to offer, and an `exp` costs far less than the texture fetch next to
+   it.
 
-   The sum is premultiplied, so a transparent texel contributes no
-   colour and an edge does not bleed towards black, which is what v2's
-   `_gaussian_blur_alpha_safe` was for. Sampling is clamped to the
-   edge: the derived image of a filter layer is a UV layout, not a
-   tiling pattern, and wrapping would fold the far side of the map into
-   the near one. */
+   The sum is premultiplied, so a transparent texel adds no colour and
+   an edge does not bleed towards black. Sampling is clamped to the
+   edge, because a filter layer's derived image is a UV layout, not a
+   tiling pattern. Wrapping would fold the far side of the map into the
+   near side. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   if (radius <= 0) {
@@ -126,22 +125,20 @@ vec4 apply(ivec2 texel, vec4 c)
 SHARPEN = FilterSpec(
     name="sharpen",
     apply_source="""
-/* The second half of an unsharp mask: `source` is the blur, `second` is
-   the picture it was made from, and the difference between them is the
-   detail the blur took away. Adding `strength` of it back is the
-   sharpen.
+/* The second half of an unsharp mask. `source` is the blur and `second`
+   is the original picture. Their difference is the detail the blur
+   removed, and adding `strength` times that detail back sharpens.
 
-   The difference is taken on the sRGB encoding, as `invert` does and
-   for the same reason: a high pass on scene-linear values responds to a
-   highlight far more than to a shadow of the same visible contrast, so
-   `strength` would mean something different in each half of the
-   picture. The blur itself ran in linear, which leaves this the
-   difference between an encoded original and the encoding of a linear
-   blur -- still zero wherever the picture is flat, which is the
-   property that matters.
+   With `encode` set, the difference is taken on the sRGB encoding, like
+   `invert`. On scene-linear values a high pass reacts far more to a
+   highlight than to a shadow of the same visible contrast, so `strength`
+   would mean different things in bright and dark areas. The blur itself
+   ran in linear, so this is the encoded original minus the encoding of
+   a linear blur. That is still zero wherever the picture is flat, which
+   is what matters.
 
-   Alpha is the original's. Sharpening it would carve a halo out of the
-   silhouette rather than out of the detail. */
+   Alpha is kept from the original. Sharpening alpha would carve a halo
+   into the silhouette instead of into the detail. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   vec4 original = stored_to_straight(texelFetch(second, texel, 0));
@@ -158,10 +155,10 @@ vec4 apply(ivec2 texel, vec4 c)
 ENCODE_SRGB = FilterSpec(
     name="encode_srgb",
     apply_source="""
-/* Scene linear in, sRGB out: what a filter layer's derived image stores,
-   and what the painter works on because v2 painted stored bytes. Values
-   outside 0 to 1 have no sRGB encoding and are clamped into one; eight
-   bits could not have carried them anyway. */
+/* Scene linear in, sRGB out. A filter layer's derived image stores sRGB.
+   The painter also works on sRGB so that its look matches v2, which
+   painted stored byte values. Values outside 0 to 1 have no sRGB
+   encoding and are clamped. Eight bits could not store them anyway. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   return vec4(ps_to_srgb(clamp(c.rgb, 0.0, 1.0)), clamp(c.a, 0.0, 1.0));
@@ -172,9 +169,9 @@ vec4 apply(ivec2 texel, vec4 c)
 DECODE_SRGB = FilterSpec(
     name="decode_srgb",
     apply_source="""
-/* sRGB in, scene linear out: the reverse of `encode_srgb`. The Blur and
-   Sharpen actions put a byte layer's blur between the two, so that it
-   blurs in linear light like a float layer and a filter layer do. */
+/* sRGB in, scene linear out, the reverse of `encode_srgb`. The Blur and
+   Sharpen actions run a byte layer's blur between the two, so it blurs
+   in linear light like float layers and filter layers do. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   return vec4(ps_to_linear(c.rgb), c.a);
@@ -186,15 +183,15 @@ vec4 apply(ivec2 texel, vec4 c)
 def blur_passes(sigma: float) -> list[dict]:
     """Push constants for the passes a gaussian blur of *sigma* texels needs.
 
-    Two per iteration, one per axis. A sigma wider than one kernel is
-    split across several iterations instead of more taps, because
-    blurring n times with sigma s is a blur with sigma ``s * sqrt(n)``.
-    Repeating a truncated kernel compounds its truncation, but at three
-    sigma that error starts below half a byte step and sixteen of them
-    stay under one.
+    Two passes per iteration, one per axis. A sigma wider than one kernel
+    is split across several iterations instead of using more taps,
+    because blurring n times with sigma s gives sigma ``s * sqrt(n)``.
+    Repeating a truncated kernel adds up its truncation error. At three
+    sigma that error starts below half a byte step, and sixteen of them
+    stay under one step.
 
-    Empty for a sigma too small to move a texel, which is how a blur set
-    to zero costs nothing rather than running an identity kernel.
+    Empty when *sigma* is zero or less, so a blur set to zero costs
+    nothing instead of running an identity kernel.
     """
     sigma = min(float(sigma), BLUR_MAX_EFFECTIVE_SIGMA)
     if sigma <= 0.0:

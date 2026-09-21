@@ -1,25 +1,26 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Clear, Fill, Invert, Blur and Sharpen on the active layer (PS-052, PS-051).
 
-An action edits exactly what the brush could paint: the active layer's
-image, limited to the live selection, and never a layer the brush cannot
-reach either. Everything it will not do it refuses by name, so the user
-reads why instead of watching nothing happen.
+Entry point: `run_action`. An action edits only what the brush could
+paint: the active layer's image, inside the live selection. It never
+edits a layer the brush cannot reach. When it cannot run, it raises
+`core.Refused` with the reason, so the user sees why nothing happened.
 
-The scope rule, which is the safety rule:
+What an action covers is the safety rule:
 
-- no selection on the tree: the whole layer;
-- a selection: inside its mask, weighted by coverage, so soft edges blend;
-- a selection whose mask covers no texel of this layer: nothing at all,
-  with a message. `selection.session` treats that mask as no selection
-  (`NOTHING_SELECTED`) because painting through it is harmless. Clearing
-  a whole layer because a box was dragged over empty background is not,
-  so these actions part company with that rule here.
+- No selection on the tree: the whole layer.
+- A selection: the inside of its mask, weighted by coverage, so soft
+  edges blend.
+- A selection whose mask covers no texel of this layer: nothing, with a
+  message. This differs from `selection.session` on purpose. The session
+  treats such a mask as no selection (`NOTHING_SELECTED`), which is
+  harmless for painting. For an action, that rule would let Clear wipe
+  a whole layer because a box was dragged over empty background.
 
-Each action is one write through `undo.pixels`, so one Ctrl+Z takes it
-back, and it changes no document data in the same step (PS-090). An
-action of several passes is still one write: `apply_passes` runs the
-chain on the GPU and reads back once.
+Each action is one write through `undo.pixels`, so one Ctrl+Z undoes it.
+It changes no document data in the same step (PS-090). An action of
+several passes is still one write, because `apply_passes` runs them all
+on the GPU and reads back once.
 """
 from ..gpu_passes.core import read_color
 from ..selection import raster
@@ -30,10 +31,10 @@ CLEAR, FILL, INVERT = 'CLEAR', 'FILL', 'INVERT'
 BLUR, SHARPEN = 'BLUR', 'SHARPEN'
 
 NOTHING_COVERED = "The selection covers no pixels of this layer"
-"""Refusal of a selection that is live but misses the layer."""
+"""Message when a selection exists but covers none of the layer."""
 
 NOTHING_TO_DO = "That radius is too small to change a pixel"
-"""Refusal of a blur or a sharpen whose radius rounds to nothing."""
+"""Message when a blur or sharpen radius gives no blur passes."""
 
 
 class ActionTarget:
@@ -48,7 +49,7 @@ class ActionTarget:
 
 
 def _consumers(tree) -> dict[str, list]:
-    """Nodes reading each node's outputs, by node name, from one pass over the links."""
+    """Map each node name to the nodes that read its outputs."""
     found: dict[str, list] = {}
     for link in tree.links:
         found.setdefault(link.from_node.name, []).append(link.to_node)
@@ -56,11 +57,11 @@ def _consumers(tree) -> dict[str, list]:
 
 
 def _showing_cache(node) -> bool:
-    """Whether *node* is compiled as its baked image rather than from its inputs.
+    """True when *node* is compiled as its baked cache, not from its inputs.
 
-    The compiler's own test also compares the stored hash with the tree's
-    (`compiler.core.CompileContext.is_cached`); this is the cheap half,
-    which is what the operator needs and errs towards refusing.
+    `compiler.core.CompileContext.is_cached` also compares the stored hash
+    with the tree. This is only the cheap part of that test. It can only
+    err towards refusing, which is enough for an operator.
     """
     return (getattr(node, 'cache_enabled', False)
             and getattr(node, 'cache_image', None) is not None
@@ -68,11 +69,11 @@ def _showing_cache(node) -> bool:
 
 
 def _cache_hiding(tree, layer):
-    """A node whose live cache would hide an edit of *layer*, or None.
+    """The node whose live cache would hide an edit of *layer*, or None.
 
-    A cache stands for its node and everything that feeds it, and holds
-    pixels, not a hash of them, so an edit under one changes nothing on
-    screen until the bake runs again.
+    A cache replaces its node and everything that feeds it. It stores
+    pixels, so an edit below it changes nothing on screen until the cache
+    is baked again.
     """
     consumers = _consumers(tree)
     seen = {layer.name}
@@ -89,7 +90,10 @@ def _cache_hiding(tree, layer):
 
 
 def resolve_target(context, action: str) -> ActionTarget:
-    """What *action* would edit, or `Refused` with the reason it cannot."""
+    """The layer and image *action* would edit.
+
+    Raises `Refused` with the reason when it cannot run.
+    """
     from ..context import parse_context
 
     ps = parse_context(context)
@@ -126,8 +130,8 @@ def resolve_target(context, action: str) -> ActionTarget:
 def selection_mask(target: ActionTarget):
     """The selection's mask texture for *target*, or None for no selection.
 
-    Raises `Refused` when a selection exists but no mask can stand for
-    it, and when the mask it builds covers nothing of this layer.
+    Raises `Refused` when a selection exists but no mask can be built for
+    it, or when its mask covers none of this layer.
     """
     selection = target.tree.selection
     if not len(selection.ops):
@@ -150,9 +154,9 @@ def selection_mask(target: ActionTarget):
 def _passes(context, action: str, target: ActionTarget, channels, sigma, strength):
     """The passes *action* runs over the layer, in order.
 
-    A pass sees what the image stores, so `encode` says whether that is
-    scene linear and needs its sRGB encoding taken first. A byte layer
-    already holds one.
+    A pass sees the values the image stores. The `encode` push constant
+    is set for a float image, which stores scene linear, so the filter
+    works on its sRGB encoding. A byte layer already stores sRGB values.
     """
     if action == CLEAR:
         return [(registry.CLEAR, {})]
@@ -166,20 +170,20 @@ def _passes(context, action: str, target: ActionTarget, channels, sigma, strengt
                                "Lock Alpha on")
         return [(registry.INVERT, {
             "channels": tuple(1.0 if on else 0.0 for on in channels),
-            # A float layer holds scene linear; inverting its sRGB
-            # encoding is what makes it match a byte layer.
+            # A float layer stores scene linear. Inverting its sRGB
+            # encoding makes the result match a byte layer.
             "encode": int(target.image.is_float),
         })]
     blur = [(registry.BLUR, params) for params in registry.blur_passes(sigma)]
     if blur and _stores_srgb_bytes(target.image):
-        # Blur in linear light, as a float layer and a filter layer do,
-        # so the same blur looks the same on every kind of layer.
+        # Blur in linear light, as float layers and filter layers do, so
+        # a blur looks the same on every kind of layer.
         blur = [(registry.DECODE_SRGB, {}), *blur, (registry.ENCODE_SRGB, {})]
     if action == BLUR:
         return blur
     if action == SHARPEN:
-        # Without a blur there is no detail to tell apart from the
-        # picture, so the combine would subtract the layer from itself.
+        # With no blur there is no detail to find. The sharpen pass
+        # would only subtract the layer from itself.
         if not blur:
             return []
         return blur + [(registry.SHARPEN, {"strength": strength,
@@ -195,10 +199,10 @@ def _stores_srgb_bytes(image) -> bool:
 _COMPOSE = core.FilterSpec(
     name="compose",
     apply_source="""
-/* Become the second texture. On its own that is a copy; run with a mask
-   it is how a filter of several passes is limited to a selection, which
-   `apply_passes` explains. It lives here rather than in `registry`
-   because it is part of the masking and not a filter anyone chooses. */
+/* Output the second texture. Without a mask this is a copy. With a mask
+   it limits a filter of several passes to the selection, as
+   `apply_passes` explains. It lives here, not in `registry`, because it
+   is part of the masking and not a filter a user picks. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   return stored_to_straight(texelFetch(second, texel, 0));
@@ -209,32 +213,31 @@ vec4 apply(ivec2 texel, vec4 c)
 
 
 def apply_passes(passes, image, *, mask=None) -> bool:
-    """Run *passes* over *image* in order and write the result back, undoably.
+    """Run *passes* over *image* in order and write the result with undo.
 
     *passes* is a non-empty list of ``(spec, push constants)``. A spec
-    whose `reads_second` is set reads the image's own values, which is
-    what an unsharp mask needs: by the time the combine runs, the chain
-    holds the blur.
+    with `reads_second` set also reads the image's original values. An
+    unsharp mask needs this, because by the time its sharpen pass runs,
+    the chain holds the blur.
 
-    The mask is where this is more than a loop. A single pass takes it
-    directly, which keeps a masked Invert exactly ``255 - k`` inside the
-    selection and bit-identical outside it. Several passes cannot: a
-    masked blur would blend each pass against the half-filtered picture
-    it was drawn from rather than against the layer, so the passes run
-    unmasked and one more pass composes the result over the original
-    through the mask. The blending is the same either way -- it is
-    `core._MAIN` doing it in both -- so the edge of a selection behaves the
-    same for a blur as for a fill.
+    The mask needs care. A single pass applies the mask itself. This
+    keeps a masked Invert exactly ``255 - k`` inside the selection and
+    bit-identical outside it. Several passes cannot work that way. Each
+    masked pass would blend against the half-filtered result of the pass
+    before, not against the layer. So several passes run unmasked, and
+    one more pass (`_COMPOSE`) blends the result over the original
+    through the mask. Both cases blend in `core._MAIN`, so the edge of a
+    selection behaves the same for a blur as for a fill.
 
     The write goes through `undo.pixels.write_pixels`, so one Ctrl+Z
-    takes it back. Returns False when the pixels are written but the
-    undo step could not be pushed.
+    undoes it. Returns False when the pixels were written but the undo
+    step could not be pushed.
     """
     source = core.PixelSource.from_image(image)
     try:
         original = source.texture
         current = original
-        # One pass carries the mask itself; several compose at the end.
+        # A single pass applies the mask itself. Several compose at the end.
         inline_mask = mask if len(passes) == 1 else None
         for spec, params in passes:
             framebuffer, current = core.run_pass(
@@ -251,9 +254,9 @@ def apply_passes(passes, image, *, mask=None) -> bool:
 
 def run_action(context, action: str, *, channels=(True, True, True, False),
                sigma: float = 0.0, strength: float = 1.0) -> bool:
-    """Run *action* on the active layer, and report whether Ctrl+Z will undo it.
+    """Run *action* on the active layer. Returns True when Ctrl+Z can undo it.
 
-    Raises `Refused` when it cannot run; nothing is written then.
+    Raises `Refused` when it cannot run, and then writes nothing.
     """
     target = resolve_target(context, action)
     mask = selection_mask(target)

@@ -1,32 +1,33 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The kinds of filter a filter layer can run (PS-057).
 
-A filter layer holds one flat property per parameter of every kind, so
-that the compiler's hashes can see them: `IR._serialize` falls through to
-``repr()`` for a PropertyGroup, and ``repr()`` of one is a data path
-rather than its contents, so a parameter group would be invisible to
-every hash in the addon. A `LayerFilterSpec` says which of those flat
-properties belong to which kind, so the node draws the right ones and a
-build fingerprint hashes the right ones.
+Each kind is a `LayerFilterSpec`, listed in `LAYER_FILTERS`. Adding a
+kind means a spec here plus its properties on
+`PaintSystemFilterLayerNode`. Nothing else in the filter layer code
+changes.
 
-A kind also says which `filters.core.FilterSpec` passes it runs and with
-what push constants, so that adding one is a spec here plus its
-properties on `PaintSystemFilterLayerNode` and nothing else in the layer
-machinery moves. The two vocabularies are deliberately separate: a node
-property is what the user sets, a push constant is what the shader reads,
-and a kind is free to derive one from the other or to hold it constant.
-
-A kind runs a *list* of passes rather than one. A separable blur is two
-per iteration, and how many iterations depends on how wide it is, so the
-pass list is a function of the node like the push constants are. A kind
-that returns an empty list asks for the stack below unchanged, which is
-how a blur set to zero costs nothing.
-
-A kind that is not a list of passes builds its result itself. The
-painter is one: its stamps are geometry planned per stamp on the CPU,
-not a pass over every texel. It gives `build` instead, `settings_of` for
-what that is handed, and a `fingerprint_of` saying what the pixels
-depend on, since there are no passes to read that from.
+- A filter layer has one flat property per parameter of every kind, so
+  the compiler's hashes can see them. `compiler.ir._serialize` falls
+  back to ``repr()`` for a PropertyGroup, which gives a data path, not
+  the contents. So a parameter group would be invisible to every hash
+  in the addon. A spec says which flat properties belong to its kind,
+  so the node draws the right ones and a build fingerprint hashes the
+  right ones.
+- A kind says which `filters.core.FilterSpec` passes it runs, and with
+  what push constants. Node properties and push constants are kept
+  separate on purpose. A node property is what the user sets. A push
+  constant is what the shader reads. A kind may derive one from the
+  other, or hold a push constant fixed.
+- A kind runs a list of passes, not one. A separable blur is two passes
+  per iteration, and the number of iterations depends on its width, so
+  the list is computed from the node like the push constants. An empty
+  list leaves the stack below unchanged, which is how a blur set to
+  zero costs nothing.
+- A kind that is not a list of passes builds its result itself. The
+  painter is one: its stamps are geometry planned one by one on the CPU,
+  not a pass over every texel. It gives `build` instead, `settings_of`
+  for what `build` is handed, and `fingerprint_of` for what the pixels
+  depend on, since there are no passes to read that from.
 """
 from __future__ import annotations
 
@@ -57,26 +58,28 @@ class LayerFilterSpec:
     # Names of the node properties this kind reads, in draw order. An
     # entry may also be ``(heading, names)``, drawn as a group of its own.
     params: tuple = ()
-    # ``build(settings, texture, pool)``, a generator of ``(label,
-    # fraction)`` that takes the composited stack below and returns the
-    # result, both scene linear and straight, both the pool's. None for a
-    # kind whose passes are the whole build.
+    # ``build(settings, texture, pool)``: a generator that yields
+    # ``(label, fraction)``, takes the composited stack below, and
+    # returns the result. Both textures are scene linear with straight
+    # alpha, and both belong to the pool. None for a kind whose passes
+    # are the whole build.
     build: Callable | None = None
-    # What `build` is handed as *settings*, read off the node. Called
-    # when the build starts, with its fingerprint, rather than by the hook
-    # when it gets there: a setting moved in between must not reach
-    # pixels stamped as built without it.
+    # Reads what `build` gets as *settings* from the node. Called when
+    # the build starts, together with the fingerprint, not later by the
+    # hook. Otherwise a setting changed in between could reach pixels
+    # stamped as built without it.
     settings_of: Callable[[Any], Any] | None = None
-    # What a build fingerprint records for this kind, JSON-able. None to
-    # record the passes, which is right for any kind that has them.
+    # What a build fingerprint records for this kind, as JSON-compatible
+    # data. None records the passes, which is right for any kind that has
+    # them.
     fingerprint_of: Callable[[Any], list] | None = None
 
     def fingerprint(self, node) -> list:
         """What the pixels of a build of *node* depend on, besides the stack.
 
-        The passes as the build would run them, rather than the node
-        properties behind them: a kind is free to derive one from the
-        other, and what the pixels depend on is the derived form.
+        By default, the passes as the build would run them, not the node
+        properties behind them. A kind may derive one from the other, and
+        the pixels depend on the derived form.
         """
         if self.fingerprint_of is not None:
             return self.fingerprint_of(node)
@@ -92,10 +95,10 @@ class LayerFilterSpec:
 
 def _invert_passes(node) -> list[tuple[FilterSpec, dict]]:
     return [(registry.INVERT, {
-        # The stack below arrives scene linear, where inverting directly
-        # turns a mid grey almost white. `encode` runs the inversion on
-        # the sRGB encoding instead, which is what a paint program means
-        # by Invert.
+        # The stack below is scene linear, and inverting that directly
+        # turns a mid grey almost white. `encode` inverts the sRGB
+        # encoding instead, which is what a paint program means by
+        # Invert.
         "encode": 1,
         "channels": (1.0, 1.0, 1.0, 1.0 if node.invert_alpha else 0.0),
     })]
@@ -125,14 +128,14 @@ BLUR = LayerFilterSpec(
 def _sharpen_passes(node) -> list[tuple[FilterSpec, dict]]:
     """Blur the stack below, then add back what the blur took away.
 
-    The combine reads the unblurred stack through `second`, which
-    `filters.layer_build` binds: by the time it runs, the chain's own
-    texture holds the blur.
+    The sharpen pass reads the unblurred stack through `second`, which
+    `filters.layer_build` binds, because by the time it runs the chain's
+    own texture holds the blur.
     """
     passes = [(registry.BLUR, params)
               for params in registry.blur_passes(node.sharpen_radius)]
-    # The stack below arrives scene linear, so the difference is taken on
-    # its sRGB encoding, as Invert's is and for the same reason.
+    # The stack below is scene linear, so the difference is taken on its
+    # sRGB encoding, like Invert and for the same reason.
     passes.append((registry.SHARPEN, {"strength": node.sharpen_strength, "encode": 1}))
     return passes
 
@@ -146,10 +149,10 @@ SHARPEN = LayerFilterSpec(
 )
 
 def _painterly_fingerprint(node) -> list:
-    # The brush by name: a preset's images ship with the add-on, and a
-    # change to them comes with a `derived.FILTER_VERSION` of its own.
-    # The settings as the build reads them, so the blur is in texels and
-    # a change of resolution is a change of blur as well.
+    # The brush is recorded by name. A preset's images ship with the
+    # addon, and changing them means increasing `derived.FILTER_VERSION`.
+    # The settings are recorded as the build reads them, with the blur in
+    # texels, so a change of resolution is also a change of blur.
     return [["painterly", Settings.of(node).as_dict()]]
 
 
@@ -188,9 +191,10 @@ def layer_filter_params(filter_type: str) -> tuple:
 def layer_filter_kind(node) -> LayerFilterSpec:
     """The kind of filter *node* is set to.
 
-    Refuses rather than falling back for a kind that is not registered: a
-    file saved by a build that had one this build does not is worth
-    saying out loud, instead of quietly filtering with something else.
+    Raises `Refused` for a kind that is not registered, instead of
+    falling back to another kind. A file saved by a version with a kind
+    this version lacks should say so, not quietly filter with something
+    else.
     """
     spec = LAYER_FILTERS.get(node.filter_type)
     if spec is None:
