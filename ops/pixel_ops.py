@@ -108,10 +108,12 @@ class PAINTSYSTEM_OT_invert_pixels(PixelAction, Operator):
                       "or all of it when nothing is selected")
     action = actions.INVERT
 
-    invert_r: BoolProperty(name="Red", default=True)
-    invert_g: BoolProperty(name="Green", default=True)
-    invert_b: BoolProperty(name="Blue", default=True)
-    invert_a: BoolProperty(name="Alpha", default=False,
+    # SKIP_SAVE: otherwise a channel picked from the Invert Channels menu
+    # becomes what the plain Invert Colors button does next time.
+    invert_r: BoolProperty(name="Red", default=True, options={'SKIP_SAVE'})
+    invert_g: BoolProperty(name="Green", default=True, options={'SKIP_SAVE'})
+    invert_b: BoolProperty(name="Blue", default=True, options={'SKIP_SAVE'})
+    invert_a: BoolProperty(name="Alpha", default=False, options={'SKIP_SAVE'},
                            description="Invert transparency as well as colour")
 
     def action_params(self, context):
