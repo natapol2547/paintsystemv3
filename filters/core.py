@@ -43,14 +43,10 @@ import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
-from ..gpu_passes.core import UNIT_QUAD, offscreen_state, release_unused_sampler, unused_sampler
+from ..gpu_passes.core import (BAND_VERTEX_SOURCE, UNIT_QUAD, draw_in_bands, offscreen_state,
+                               release_unused_sampler, unused_sampler)
 
 log = logging.getLogger(__name__)
-
-# Rows per draw, as in selection/raster.py: a long pass on a busy GPU can
-# trip a driver's watchdog, and a band that ends with a one-texel read
-# keeps the queue short.
-BAND_ROWS = 512
 
 STRAIGHT, PREMULTIPLIED = 0, 1
 
@@ -74,14 +70,6 @@ def new_texture(size, image_format: str, *, data=None) -> gpu.types.GPUTexture:
         log.warning("Could not allocate a %sx%s %s texture: %s",
                     size[0], size[1], image_format, error)
         raise Refused("The GPU does not have enough memory for an image this size") from error
-
-_VERTEX = """
-void main()
-{
-  v_texel = vec2(position.x * target_size.x, mix(rows.x, rows.y, position.y));
-  gl_Position = vec4(v_texel / target_size * 2.0 - 1.0, 0.0, 1.0);
-}
-"""
 
 _PRELUDE = """
 vec3 ps_to_srgb(vec3 c)
@@ -208,7 +196,7 @@ def _shader(spec: FilterSpec):
     info.vertex_in(0, 'VEC2', "position")
     info.vertex_out(interface)
     info.fragment_out(0, 'VEC4', "out_color")
-    info.vertex_source(_VERTEX)
+    info.vertex_source(BAND_VERTEX_SOURCE)
     info.fragment_source(_PRELUDE + spec.apply_source + _MAIN)
     shader = gpu.shader.create_from_info(info)
     _shaders[spec.name] = (shader, batch_for_shader(shader, 'TRIS', UNIT_QUAD))
@@ -280,27 +268,24 @@ def run_pass(spec: FilterSpec, source: gpu.types.GPUTexture, target=None, *,
     shader, batch = _shader(spec)
     kinds = dict((name, kind) for kind, name in spec.params)
     framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
-    sync = gpu.types.Buffer('FLOAT', 4)
-    with offscreen_state(), framebuffer.bind():
-        for first in range(0, target.height, BAND_ROWS):
-            last = min(target.height, first + BAND_ROWS)
-            shader.uniform_float("target_size", (float(target.width), float(target.height)))
-            shader.uniform_float("rows", (float(first), float(last)))
-            shader.uniform_int("storage", storage)
-            shader.uniform_int("use_mask", 0 if mask is None else 1)
-            for name, value in (params or {}).items():
-                if kinds[name] == 'INT':
-                    shader.uniform_int(name, value)
-                else:
-                    shader.uniform_float(name, value)
-            shader.uniform_sampler("source", source)
-            shader.uniform_sampler("mask", unused_sampler() if mask is None else mask)
-            shader.uniform_sampler("second", unused_sampler() if second is None else second)
-            batch.draw(shader)
-            if last < target.height:
-                # Reading one texel waits for the band, so the driver
-                # sees a stream of short draws rather than one long one.
-                framebuffer.read_color(0, first, 1, 1, 4, 0, 'FLOAT', data=sync)
+
+    def draw_band(first, last):
+        shader.uniform_float("target_size", (float(target.width), float(target.height)))
+        shader.uniform_float("rows", (float(first), float(last)))
+        shader.uniform_int("storage", storage)
+        shader.uniform_int("use_mask", 0 if mask is None else 1)
+        for name, value in (params or {}).items():
+            if kinds[name] == 'INT':
+                shader.uniform_int(name, value)
+            else:
+                shader.uniform_float(name, value)
+        shader.uniform_sampler("source", source)
+        shader.uniform_sampler("mask", unused_sampler() if mask is None else mask)
+        shader.uniform_sampler("second", unused_sampler() if second is None else second)
+        batch.draw(shader)
+
+    with offscreen_state():
+        draw_in_bands(framebuffer, target.height, draw_band)
     return framebuffer, target
 
 

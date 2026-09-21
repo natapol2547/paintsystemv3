@@ -33,6 +33,21 @@ log = logging.getLogger(__name__)
 UNIT_QUAD = {"position": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
                           (0.0, 0.0), (1.0, 1.0), (0.0, 1.0))}
 
+BAND_ROWS = 512
+"""Rows `draw_in_bands` draws before it makes the GPU finish."""
+
+# The vertex shader of a pass drawn with `draw_in_bands`. The shader
+# declares `target_size` and `rows` push constants and a smooth VEC2
+# `v_texel`, which reaches the fragment in target pixels.
+BAND_VERTEX_SOURCE = """
+void main()
+{
+  /* One quad per band: x spans the target, y spans rows.x to rows.y. */
+  v_texel = vec2(position.x * target_size.x, mix(rows.x, rows.y, position.y));
+  gl_Position = vec4(v_texel / target_size * 2.0 - 1.0, 0.0, 1.0);
+}
+"""
+
 _available: bool | None = None
 _unused_texture = None
 
@@ -85,6 +100,28 @@ def offscreen_state(blend: str = 'NONE'):
         gpu.state.blend_set(saved[0])
         gpu.state.depth_test_set(saved[1])
         gpu.state.depth_mask_set(saved[2])
+
+
+def draw_in_bands(framebuffer: gpu.types.GPUFrameBuffer, height: int, draw_band) -> None:
+    """Bind *framebuffer* and call ``draw_band(first, last)`` for each band of its rows.
+
+    A band is `BAND_ROWS` rows, read at call time so a test can change
+    it. After every band but the last, one texel is read back, which
+    makes the GPU finish that band before the next is queued. That
+    bounds the GPU time of any single command, so a slow software
+    rasteriser or a heavy pass is far less likely to trip a driver
+    watchdog (i915 preempts after 640 ms, Windows after 2 s).
+    """
+    rows = BAND_ROWS
+    # Four floats whatever the target: Vulkan writes every component of
+    # the target's format, up to four, and OpenGL writes the four asked for.
+    sync = gpu.types.Buffer('FLOAT', 4)
+    with framebuffer.bind():
+        for first in range(0, height, rows):
+            last = min(height, first + rows)
+            draw_band(first, last)
+            if last < height:
+                framebuffer.read_color(0, first, 1, 1, 4, 0, 'FLOAT', data=sync)
 
 
 def gpu_available() -> bool:

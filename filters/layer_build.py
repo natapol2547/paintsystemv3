@@ -45,9 +45,9 @@ import bpy
 from ..compiler.bake import create_managed_image
 from ..compiler.core import build_ir, mark_dirty
 from ..compiler.ir import hash_payload
-from ..gpu_passes.core import read_color_bytes
+from ..gpu_passes.core import BAND_ROWS, read_color_bytes
 from . import composite, derived, freshness, layer_plan
-from .core import BAND_ROWS, FilterSpec, Refused, new_texture, run_pass
+from .core import FilterSpec, Refused, new_texture, run_pass
 from .layer_specs import layer_filter_kind
 from .png import RGBAStream
 from .registry import ENCODE_SRGB

@@ -103,15 +103,6 @@ void main()
 }
 """
 
-_TEXEL_VERTEX_SOURCE = """
-void main()
-{
-  /* One quad per band: x spans the target, y spans rows.x to rows.y. */
-  v_texel = vec2(position.x * target_size.x, mix(rows.x, rows.y, position.y));
-  gl_Position = vec4(v_texel / target_size * 2.0 - 1.0, 0.0, 1.0);
-}
-"""
-
 _TEXEL_FRAGMENT_SOURCE = """
 float edge_profile(float s)
 {
@@ -341,7 +332,7 @@ def _shaders() -> dict:
         info.vertex_in(0, 'VEC2', "position")
         info.vertex_out(interface)
         info.fragment_out(0, 'FLOAT', "out_mask")
-        info.vertex_source(_TEXEL_VERTEX_SOURCE)
+        info.vertex_source(core.BAND_VERTEX_SOURCE)
         info.fragment_source(_TEXEL_FRAGMENT_SOURCE)
         texel = gpu.shader.create_from_info(info)
         _gpu.update(depth=depth, texel=(texel, batch_for_shader(texel, 'TRIS', core.UNIT_QUAD)))
@@ -518,23 +509,18 @@ def run_view_pass(spec: "raster.OpSpec", source, target, width: int, height: int
             "flags": 1 if view.through else 0}
     samplers = {"previous": placeholder if source is None else source, "positions": surface_map.position,
                 "normals": surface_map.normal, "distance_map": targets["distance"], "depth_map": depth_map}
-    framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
-    sync = gpu.types.Buffer('FLOAT', 1)
-    with framebuffer.bind():
-        for first in range(0, height, raster.BAND_ROWS):
-            last = min(height, first + raster.BAND_ROWS)
-            shader.bind()
-            shader.uniform_block("view_block", block)
-            for name, value in ints.items():
-                shader.uniform_int(name, value)
-            for name, texture in samplers.items():
-                shader.uniform_sampler(name, texture)
-            shader.uniform_float("target_size", (float(width), float(height)))
-            shader.uniform_float("rows", (float(first), float(last)))
-            quad.draw(shader)
-            if last < height:
-                # Reading a texel waits for the band to finish.
-                framebuffer.read_color(0, first, 1, 1, 1, 0, 'FLOAT', data=sync)
+    def draw_band(first, last):
+        shader.bind()
+        shader.uniform_block("view_block", block)
+        for name, value in ints.items():
+            shader.uniform_int(name, value)
+        for name, texture in samplers.items():
+            shader.uniform_sampler(name, texture)
+        shader.uniform_float("target_size", (float(width), float(height)))
+        shader.uniform_float("rows", (float(first), float(last)))
+        quad.draw(shader)
+
+    core.draw_in_bands(gpu.types.GPUFrameBuffer(color_slots=(target,)), height, draw_band)
 
 
 # ── Self-test ────────────────────────────────────────────────────────
@@ -638,12 +624,12 @@ def self_test_chain(through: bool, perspective: bool, band_rows: int = 16) -> np
     view = ViewSpec(surface, SELF_TEST_REGION, scene["view"], scene["projection"], through)
     specs = [raster.OpSpec(kind, mode, feather, antialias, points, view=view)
              for kind, mode, feather, antialias, points in self_test_ops()]
-    saved = raster.BAND_ROWS
-    raster.BAND_ROWS = band_rows
+    saved = core.BAND_ROWS
+    core.BAND_ROWS = band_rows
     try:
         return raster.render(specs, SELF_TEST_TEXELS, SELF_TEST_TEXELS)
     finally:
-        raster.BAND_ROWS = saved
+        core.BAND_ROWS = saved
         # A raised error must not keep the textures alive (`raster._run_chain`).
         surface = view = specs = None
 

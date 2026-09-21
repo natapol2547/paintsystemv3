@@ -54,11 +54,10 @@ returned, may be evicted by the next `get_mask`. An evicted mask's
 across calls, redraws or timer ticks but call `get_mask` or `peek_mask`
 again.
 
-A build draws in bands of `BAND_ROWS` rows and reads one texel back
-between bands. That bounds the GPU time of any single command, so a
-slow software rasteriser or a dense lasso with a wide feather is far
-less likely to trip a driver watchdog (i915 preempts after 640 ms,
-Windows after 2 s).
+A build draws in bands (`gpu_passes.core.draw_in_bands`), reading one
+texel back between bands. That bounds the GPU time of any single
+command, so a slow software rasteriser or a dense lasso with a wide
+feather is far less likely to trip a driver watchdog.
 
 The passes set blend, depth test and depth write and put them back.
 They also turn face culling off and colour writes on, and leave them
@@ -82,9 +81,6 @@ CACHE_BUDGET = 512 << 20
 
 POOL_LIMIT = 2
 """Evicted textures kept for reuse by the next build of the same size."""
-
-BAND_ROWS = 512
-"""Rows drawn per band before the GPU is made to finish."""
 
 MAX_TEXELS = 1 << 26
 """Largest mask, in texels: 8192 x 8192, or 256 MB per mask."""
@@ -130,15 +126,6 @@ MESSAGES = {
 GEOMETRY_REASONS = frozenset(('SURFACE', 'VIEW', 'EDIT_MODE'))
 """Reasons that depend on the objects a selection was drawn on, not on its
 ops, so a remembered failure would outlive the cause."""
-
-_VERTEX_SOURCE = """
-void main()
-{
-  /* One quad per band: x spans the target, y spans rows.x to rows.y. */
-  v_texel = vec2(position.x * target_size.x, mix(rows.x, rows.y, position.y));
-  gl_Position = vec4(v_texel / target_size * 2.0 - 1.0, 0.0, 1.0);
-}
-"""
 
 _COMMON_SOURCE = """
 float edge_profile(float s)
@@ -397,7 +384,7 @@ def _mask_shader(name: str, fragment: str, lasso: bool) -> gpu.types.GPUShader:
     info.vertex_in(0, 'VEC2', "position")
     info.vertex_out(interface)
     info.fragment_out(0, 'FLOAT', "out_mask")
-    info.vertex_source(_VERTEX_SOURCE)
+    info.vertex_source(core.BAND_VERTEX_SOURCE)
     info.fragment_source(fragment)
     return gpu.shader.create_from_info(info)
 
@@ -671,22 +658,17 @@ def _draw_outline(spec: OpSpec, texels: np.ndarray, half_width: float, ints: dic
         floats["shape_fraction"] = tuple(float(value) for value in values - whole)
         shader, batch = res["shape" + suffix]
 
-    framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
-    sync = gpu.types.Buffer('FLOAT', 1)
-    with framebuffer.bind():
-        for first in range(0, height, BAND_ROWS):
-            last = min(height, first + BAND_ROWS)
-            for name, value in ints.items():
-                shader.uniform_int(name, value)
-            for name, value in floats.items():
-                shader.uniform_float(name, value)
-            for name, texture in samplers.items():
-                shader.uniform_sampler(name, texture)
-            shader.uniform_float("rows", (float(first), float(last)))
-            batch.draw(shader)
-            if last < height:
-                # Reading a texel waits for the band to finish.
-                framebuffer.read_color(0, first, 1, 1, 1, 0, 'FLOAT', data=sync)
+    def draw_band(first, last):
+        for name, value in ints.items():
+            shader.uniform_int(name, value)
+        for name, value in floats.items():
+            shader.uniform_float(name, value)
+        for name, texture in samplers.items():
+            shader.uniform_sampler(name, texture)
+        shader.uniform_float("rows", (float(first), float(last)))
+        batch.draw(shader)
+
+    core.draw_in_bands(gpu.types.GPUFrameBuffer(color_slots=(target,)), height, draw_band)
 
 
 def _run_chain(specs, source, targets, width: int, height: int, tile: int) -> None:
