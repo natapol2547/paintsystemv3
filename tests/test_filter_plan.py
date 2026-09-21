@@ -59,13 +59,24 @@ def mesh_with_uvs(name, uv_names, active_render=0):
     return obj
 
 
-def expect_composite(plan, label):
-    """A plan that should composite -- or, with no GPU here, bake and say so."""
+def expect_composite(context, tree, node, label):
+    """Resolve a stack that should composite, and return its plan.
+
+    With no GPU context here the same stack goes to the bake instead. The
+    bake needs an object, so without one it is refused and None comes back.
+    """
     if HAS_GPU:
+        plan = layer_plan.resolve_input(context, tree, node)
         check(plan.is_composite, f"{label}: {plan.path} {plan.reason}")
-    else:
-        check(plan.path == layer_plan.BAKE and "GPU context" in plan.reason,
-              f"{label}: no GPU context here, so {plan.path} -- {plan.reason}")
+        return plan
+    if context.object is None:
+        message = refusal(context, tree, node)
+        check("GPU context" in message, f"{label}: no GPU context here, so refused: {message}")
+        return None
+    plan = layer_plan.resolve_input(context, tree, node)
+    check(plan.path == layer_plan.BAKE and "GPU context" in plan.reason,
+          f"{label}: no GPU context here, so {plan.path} -- {plan.reason}")
+    return plan
 
 
 def refusal(context, tree, node):
@@ -86,18 +97,17 @@ try:
         node = tree.insert_layer_node(FILTER)
     core.flush_now()
 
-    plan = layer_plan.resolve_input(FakeContext(), tree, node)
-    expect_composite(plan, "solid colours with no object selected")
-    check(plan.source == bottom, "the plan names the node feeding the filter's Color input")
-    check(plan.uv_map == "", "and leaves the UV map to the active render one")
+    plan = expect_composite(FakeContext(), tree, node, "solid colours with no object selected")
+    if plan is not None:
+        check(plan.source == bottom, "the plan names the node feeding the filter's Color input")
+        check(plan.uv_map == "", "and leaves the UV map to the active render one")
 
     section("an image below")
     with core.suspend_compile(tree):
         picture = tree.insert_layer_node(IMAGE, target=bottom)
         picture.image = create_managed_image("Plan Image", 8, 8)
     core.flush_now()
-    expect_composite(layer_plan.resolve_input(FakeContext(), tree, node),
-                     "an image layer that names no UV map")
+    expect_composite(FakeContext(), tree, node, "an image layer that names no UV map")
 
     picture.uv_map = "UVMap"
     core.flush_now()
@@ -106,21 +116,23 @@ try:
           f"naming a UV map with no object is refused: {message}")
 
     plane = mesh_with_uvs("Plan Plane", ["UVMap", "UVMap.001"])
-    plan = layer_plan.resolve_input(FakeContext(plane), tree, node)
-    expect_composite(plan, "the same named map against a mesh that has it")
-    if plan.is_composite:
-        check(plan.uv_map == "UVMap", f"resolved to {plan.uv_map!r}")
+    plan = expect_composite(FakeContext(plane), tree, node,
+                            "the same named map against a mesh that has it")
+    check(plan.uv_map == "UVMap", f"resolved to {plan.uv_map!r}")
 
-    picture.uv_map = "UVMap.001"
-    core.flush_now()
-    message = refusal(FakeContext(plane), tree, node)
-    check("different UV maps" in message,
-          f"a named map that is not the active render one is refused: {message}")
+    # These two rules belong to the composite. With no GPU context the
+    # stack goes to the bake, which renders each layer through its own map.
+    if HAS_GPU:
+        picture.uv_map = "UVMap.001"
+        core.flush_now()
+        message = refusal(FakeContext(plane), tree, node)
+        check("different UV maps" in message,
+              f"a named map that is not the active render one is refused: {message}")
 
-    picture.uv_map = "Nonexistent"
-    core.flush_now()
-    message = refusal(FakeContext(plane), tree, node)
-    check("no UV map named" in message, f"a map the mesh does not have is refused: {message}")
+        picture.uv_map = "Nonexistent"
+        core.flush_now()
+        message = refusal(FakeContext(plane), tree, node)
+        check("no UV map named" in message, f"a map the mesh does not have is refused: {message}")
     picture.uv_map = ""
     core.flush_now()
 
