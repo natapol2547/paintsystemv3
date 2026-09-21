@@ -127,13 +127,17 @@ GEOMETRY_REASONS = frozenset(('SURFACE', 'VIEW', 'EDIT_MODE'))
 """Reasons that depend on the objects a selection was drawn on, not on its
 ops, so a remembered failure would outlive the cause."""
 
-_COMMON_SOURCE = """
-float edge_profile(float s)
+# GLSL shared with view_raster's texel pass: the coverage at signed
+# distance s from an edge, how an op's coverage meets the previous mask,
+# and the previous mask's value. Both shaders declare the `mode` and
+# `use_previous` push constants and the `previous` sampler these read.
+COMMON_SOURCE = """
+float edge_profile(float s, float edge_half_width)
 {
-  if (half_width <= 0.0) {
+  if (edge_half_width <= 0.0) {
     return s > 0.0 ? 1.0 : 0.0;
   }
-  float t = clamp((s + half_width) / (2.0 * half_width), 0.0, 1.0);
+  float t = clamp((s + edge_half_width) / (2.0 * edge_half_width), 0.0, 1.0);
   return t * t * (3.0 - 2.0 * t);
 }
 
@@ -157,7 +161,7 @@ float previous_at(ivec2 texel)
 }
 """
 
-_SHAPE_FRAGMENT_SOURCE = _COMMON_SOURCE + """
+_SHAPE_FRAGMENT_SOURCE = COMMON_SOURCE + """
 /* Eberly, "Distance from a Point to an Ellipse, an Ellipsoid, or a
    Hyperellipsoid". The root is bracketed in u = s + 1 rather than s, so
    the bracket never needs a value near -1 that float32 cannot hold. */
@@ -237,7 +241,7 @@ void main()
       out_mask = clamp(-outside, -half_width, half_width);
       return;
     }
-    coverage = edge_profile(-outside);
+    coverage = edge_profile(-outside, half_width);
   }
   else if (shape == 2) {
     /* Ellipse with its centre in xy and its radii in zw. */
@@ -262,7 +266,7 @@ void main()
         out_mask = clamp(z0 * z0 + z1 * z1 < 1.0 ? d : -d, -half_width, half_width);
         return;
       }
-      coverage = edge_profile(z0 * z0 + z1 * z1 < 1.0 ? d : -d);
+      coverage = edge_profile(z0 * z0 + z1 * z1 < 1.0 ? d : -d, half_width);
     }
   }
   if (SIGNED_DISTANCE) {
@@ -274,7 +278,7 @@ void main()
 }
 """
 
-_LASSO_FRAGMENT_SOURCE = _COMMON_SOURCE + """
+_LASSO_FRAGMENT_SOURCE = COMMON_SOURCE + """
 ivec2 data_texel(int index)
 {
   return ivec2(index % DATA_WIDTH, index / DATA_WIDTH);
@@ -334,7 +338,7 @@ void main()
       out_mask = inside ? d : -d;
       return;
     }
-    coverage = edge_profile(inside ? d : -d);
+    coverage = edge_profile(inside ? d : -d, half_width);
   }
   out_mask = combine(previous_value, coverage);
 }

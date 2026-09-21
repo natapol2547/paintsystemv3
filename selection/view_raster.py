@@ -104,30 +104,6 @@ void main()
 """
 
 _TEXEL_FRAGMENT_SOURCE = """
-float edge_profile(float s)
-{
-  float half_width = view_block.region.z;
-  if (half_width <= 0.0) {
-    return s > 0.0 ? 1.0 : 0.0;
-  }
-  float t = clamp((s + half_width) / (2.0 * half_width), 0.0, 1.0);
-  return t * t * (3.0 - 2.0 * t);
-}
-
-float combine(float previous_value, float coverage)
-{
-  if (mode == 0) {
-    return coverage;
-  }
-  if (mode == 1) {
-    return max(previous_value, coverage);
-  }
-  if (mode == 2) {
-    return min(previous_value, 1.0 - coverage);
-  }
-  return min(previous_value, coverage);
-}
-
 /* Bilinear read of the signed distance at region pixel s. */
 float screen_distance(vec2 s)
 {
@@ -268,7 +244,7 @@ float texel_coverage(ivec2 texel)
       || any(greaterThan(s, view_block.region.xy))) {
     return 0.0;
   }
-  float shape_coverage = edge_profile(screen_distance(s));
+  float shape_coverage = edge_profile(screen_distance(s), view_block.region.z);
   if (shape_coverage <= 0.0 || (flags & 1) != 0) {
     return shape_coverage;
   }
@@ -289,7 +265,7 @@ float texel_coverage(ivec2 texel)
 void main()
 {
   ivec2 texel = ivec2(floor(v_texel));
-  float previous_value = (mode == 0 || use_previous == 0) ? 0.0 : texelFetch(previous, texel, 0).r;
+  float previous_value = mode == 0 ? 0.0 : previous_at(texel);
   out_mask = combine(previous_value, texel_coverage(texel));
 }
 """.replace("MARGIN_ALPHA", repr(MARGIN_ALPHA))
@@ -333,7 +309,7 @@ def _shaders() -> dict:
         info.vertex_out(interface)
         info.fragment_out(0, 'FLOAT', "out_mask")
         info.vertex_source(core.BAND_VERTEX_SOURCE)
-        info.fragment_source(_TEXEL_FRAGMENT_SOURCE)
+        info.fragment_source(raster.COMMON_SOURCE + _TEXEL_FRAGMENT_SOURCE)
         texel = gpu.shader.create_from_info(info)
         _gpu.update(depth=depth, texel=(texel, batch_for_shader(texel, 'TRIS', core.UNIT_QUAD)))
     return _gpu
