@@ -171,7 +171,8 @@ def test_write_once_image_survives_undo_past_creation():
     bpy.ops.ed.undo_push(message="before the write-once images")
     packed = new_image("PS Undo Packed", BLUE)
     new_image("PS Undo Loose", BLUE)
-    check(pixels.pack_write_once(packed), "pack_write_once packed the image")
+    packed.pack()
+    check(packed.packed_file is not None, "the image is packed")
     bpy.ops.ed.undo_push(message="write-once images exist")
 
     undo()

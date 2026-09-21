@@ -133,20 +133,3 @@ def _note_filters(image: bpy.types.Image) -> None:
     """
     from ..filters.freshness import note_image_changed
     note_image_changed([image.session_uid])
-
-
-def pack_write_once(image: bpy.types.Image) -> bool:
-    """Pack an image that is written once and never registered.
-
-    Undoing past the creation of a generated image and redoing brings the
-    datablock back with black pixels unless it was packed (PS-096). Images
-    the addon fills once and then only reads - a wand result, a paste
-    source - are packed right after that fill instead of taking a step of
-    their own.
-    """
-    try:
-        image.pack()
-    except RuntimeError as error:
-        log.warning("Could not pack image %r: %s", image.name, error)
-        return False
-    return True

@@ -69,9 +69,13 @@ pixels, and the addon only registers its writes with it.
     step so the stack exists. See the Status section.
   - `forget_baselines()` after undo and redo, `forget_undo_state()` after
     a file read: both called from `handlers/node_tree_handlers.py`.
-  - `pack_write_once(image)`: packs a write-once image so it survives
-    undo past its creation and redo. Used instead of `write_pixels`, not
-    with it: such an image takes no step of its own.
+  - `pack_write_once(image)`, not built yet: packs a write-once image so
+    it survives undo past its creation and redo. Used instead of
+    `write_pixels`, not with it: such an image takes no step of its own.
+    It comes with the first write-once image tool (a wand result, a paste
+    source), and `save_image`'s pack branch shares its pack-and-warn code
+    then. `tests/test_pixel_undo.py` already checks the Blender behaviour
+    it relies on, with a plain `Image.pack()`.
 - Rules for callers:
   - An operator that writes pixels has no `UNDO` option. With it,
     Blender pushes a memfile step on top of the image step and every
