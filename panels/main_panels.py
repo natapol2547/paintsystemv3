@@ -1,5 +1,5 @@
-import bpy
 from bpy.types import Panel, UIList
+from bpy.utils import register_classes_factory
 
 from .brush_panels import draw_paint_sections
 from ..common import icon_kwargs
@@ -164,11 +164,4 @@ classes = (
 )
 
 
-def register():
-    for cls in classes:
-        bpy.utils.register_class(cls)
-
-
-def unregister():
-    for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+register, unregister = register_classes_factory(classes)

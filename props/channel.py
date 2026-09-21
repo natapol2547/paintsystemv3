@@ -3,6 +3,7 @@ import uuid
 
 import bpy
 from bpy.props import StringProperty, EnumProperty
+from bpy.utils import register_classes_factory
 
 from ..common import is_newer_than
 
@@ -124,11 +125,4 @@ classes = (
 )
 
 
-def register():
-    for cls in classes:
-        bpy.utils.register_class(cls)
-
-
-def unregister():
-    for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+register, unregister = register_classes_factory(classes)

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-import bpy
 from bpy.types import Menu, Panel, UIList
+from bpy.utils import register_classes_factory
 
 from ..common import icon_kwargs
 from ..context import get_active_tree, node_editor_tree, parse_context
@@ -208,12 +208,9 @@ classes = (
 )
 
 
-def register():
-    for cls in classes:
-        bpy.utils.register_class(cls)
+register, _unregister = register_classes_factory(classes)
 
 
 def unregister():
-    for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+    _unregister()
     _rows_by_tree.clear()
