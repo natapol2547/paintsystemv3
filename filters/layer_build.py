@@ -257,9 +257,62 @@ def commit(tree, node, plan, data, digest, size, read):
     gives: a stamp written first could end up describing pixels that are
     gone. Here the packed file is the pixels, so the order is the only
     way it could.
+
+    A build can come out with exactly the pixels the image already holds,
+    for example after a stroke below is undone before the refresh runs.
+    Nothing can tell that without building, but the commit can: it then
+    skips the pack, keeps the decoded pixels, and does not mark the
+    filter layers above as changed.
     """
     fingerprint, changes = read
+    stamps = {
+        derived.OWNER_KEY: f"{tree.uuid}:{node.uuid}",
+        derived.FINGERPRINT_KEY: fingerprint,
+        derived.UV_MAP_KEY: plan.uv_map,
+        derived.BUILD_KEY: hash_payload([fingerprint, digest]),
+    }
     image = node.derived_image
+    unchanged = _holds(image, stamps)
+    if not unchanged:
+        image = _pack(tree, node, image, data)
+        for key, value in stamps.items():
+            image[key] = value
+        derived.note_packed(image)
+        node.derived_image = image
+    # Cleared only when no stroke below has landed since the build read
+    # the pixels, so whatever moved them before is accounted for. Cleared
+    # after the write rather than before, so a build abandoned partway
+    # leaves the layer still asking for one.
+    if freshness.changes(node.uuid) == changes:
+        node.derived_stale_pixels = False
+    if not unchanged:
+        # A filter layer feeding another one is a source image that just
+        # changed, and the depsgraph does not report this write.
+        freshness.note_image_changed([image.session_uid])
+    # Reusing the datablock leaves the pointer unchanged, so the node's
+    # own update callback does not fire and the new stamps would not
+    # reach a recompile on their own. An unchanged build compiles too:
+    # the compile is what tells the auto job the layer settled.
+    mark_dirty(tree)
+    log.debug("built %s for %s at %dx%d%s", image.name, node.name, *size,
+              " (unchanged)" if unchanged else "")
+    return image
+
+
+def _holds(image, stamps) -> bool:
+    """Whether *image* already holds the build *stamps* describe.
+
+    The build stamp includes a digest of the pixels, so equal stamps mean
+    equal pixels. The image must still hold them untouched: packed, and
+    not painted on since.
+    """
+    if image is None or image.packed_file is None or image.is_dirty:
+        return False
+    return all(image.get(key) == value for key, value in stamps.items())
+
+
+def _pack(tree, node, image, data) -> bpy.types.Image:
+    """Pack the PNG *data* into *image*, making the image first if there is none."""
     if image is None:
         # One texel: the packed file brings its own size, and a generated
         # buffer the size of the result would only be thrown away.
@@ -279,28 +332,6 @@ def commit(tree, node, plan, data, digest, size, read):
     # read decodes the new file. `reload()` would do it too, but looks for
     # a file on disk first and reports the empty path as missing.
     image.buffers_free()
-
-    image[derived.OWNER_KEY] = f"{tree.uuid}:{node.uuid}"
-    image[derived.FINGERPRINT_KEY] = fingerprint
-    image[derived.UV_MAP_KEY] = plan.uv_map
-    image[derived.BUILD_KEY] = hash_payload([fingerprint, digest])
-    derived.note_packed(image)
-
-    node.derived_image = image
-    # Cleared only when no stroke below has landed since the build read
-    # the pixels, so whatever moved them before is accounted for. Cleared
-    # after the write rather than before, so a build abandoned partway
-    # leaves the layer still asking for one.
-    if freshness.changes(node.uuid) == changes:
-        node.derived_stale_pixels = False
-    # A filter layer feeding another one is a source image that just
-    # changed, and the depsgraph does not report this write.
-    freshness.note_image_changed([image.session_uid])
-    # Reusing the datablock leaves the pointer unchanged, so the node's
-    # own update callback does not fire and the new stamps would not
-    # reach a recompile on their own.
-    mark_dirty(tree)
-    log.debug("built %s for %s at %dx%d", image.name, node.name, *size)
     return image
 
 

@@ -390,6 +390,27 @@ if available():
         check(node.stale_reason == "", f"and the Update brings it up to date: {node.stale_reason!r}")
         check(pump(), "with nothing left for the job to do")
 
+        section("a stroke undone before the refresh")
+        # Nothing can tell that the pixels below went back without reading
+        # them, so the refresh still runs. It finds the pixels the layer
+        # already has, and leaves the image alone.
+        image = node.derived_image
+        was = stamp(node)
+        image.pixels[0]
+        check(image.has_data, "the result is decoded to begin with")
+        undo_pixels.write_pixels(picture.image, [0.1, 0.1, 0.1, 1.0] * 64)
+        undo_pixels.write_pixels(picture.image, [0.6, 0.6, 0.1, 1.0] * 64)
+        core.flush_now()
+        check(node.stale_reason == "the pixels below changed",
+              f"a stroke and its reverse leave the layer marked: {node.stale_reason!r}")
+        check(pump(), "the refresh runs to the end")
+        core.flush_now()
+        check(node.stale_reason == "" and stamp(node) == was,
+              f"and finds the pixels it already had: {node.stale_reason!r}")
+        check(image.has_data, "without packing them again, which would free the decoded copy")
+        check(layer_job._builds.get(node.uuid) is None,
+              "and the compile after it still counts the layer as settled")
+
     except Exception:
         traceback.print_exc()
         check(False, "unexpected exception")
