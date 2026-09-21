@@ -3,15 +3,6 @@ from bpy.utils import register_classes_factory
 
 
 _GROUP_NODE_ID = 'PaintSystemGroupLayerNode'
-_GROUP_IO_IDS = ('PaintSystemGroupInputNode', 'PaintSystemGroupOutputNode')
-
-
-def _socket_type_to_channel_type(bl_idname: str) -> str:
-    return {
-        'NodeSocketColor': 'COLOR',
-        'NodeSocketFloat': 'FLOAT',
-        'NodeSocketVector': 'VECTOR',
-    }.get(bl_idname, 'COLOR')
 
 
 def _target_node(context):
@@ -36,7 +27,6 @@ def _enter_group(context, node) -> bool:
     if not node or not getattr(node, 'node_tree', None):
         return False
     context.space_data.path.append(node.node_tree, node=node)
-    node.node_tree.group_node_name = node.name
     return True
 
 
@@ -55,23 +45,6 @@ class PAINTSYSTEM_OT_edit_node_group(Operator):
         if not _enter_group(context, node):
             self.report({'WARNING'}, "No group tree to edit")
             return {'CANCELLED'}
-        return {'FINISHED'}
-
-
-class PAINTSYSTEM_OT_exit_node_group(Operator):
-    bl_idname = "paint_system.exit_node_group"
-    bl_label = "Exit Node Group"
-    bl_description = "Step back out of the current group tree"
-    bl_options = {'REGISTER'}
-
-    @classmethod
-    def poll(cls, context):
-        space = context.space_data
-        return (space is not None and space.type == 'NODE_EDITOR'
-                and len(space.path) > 1)
-
-    def execute(self, context):
-        context.space_data.path.pop()
         return {'FINISHED'}
 
 
@@ -96,7 +69,6 @@ class PAINTSYSTEM_OT_enter_exit_node_group(Operator):
 
 classes = (
     PAINTSYSTEM_OT_edit_node_group,
-    PAINTSYSTEM_OT_exit_node_group,
     PAINTSYSTEM_OT_enter_exit_node_group
 )
 

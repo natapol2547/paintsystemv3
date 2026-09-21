@@ -113,12 +113,6 @@ class PaintSystemNodeTree(NodeTree):
         description="Shader node group compiled from this tree",
     )
 
-    group_node_name: StringProperty(
-        name="Group Node Name",
-        description="Name of the group node that opened this tree for editing",
-        options={'SKIP_SAVE'},
-    )
-
     # -- Blender callbacks ------------------------------------------------
 
     def update(self):

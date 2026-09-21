@@ -37,7 +37,8 @@ channel output to the matching Principled input.
 - `ops/templates.py`: a `Template` class per kind with `prepare_material`,
   `create_channels(tree)`, `wire(material, group_node)` and
   `dissolve(material, group_node)` (PS-042). `paint_system.new_group`
-  picks the template, creates the tree via `_new_tree`, records
+  picks the template, creates and initialises the tree as
+  `setup_material` does, records
   `tree.template`, and calls the three steps. Existing
   `link_tree_to_material` becomes the NONE/PBR wiring primitive.
 - Channel templates: `CHANNEL_TEMPLATES = {COLOR: (type, use_alpha,

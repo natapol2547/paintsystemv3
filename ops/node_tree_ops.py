@@ -1,6 +1,5 @@
 import bpy
 from bpy.types import Operator
-from bpy.props import StringProperty
 from bpy.utils import register_classes_factory
 
 from ..context import get_active_tree
@@ -14,12 +13,6 @@ RESOLUTION_ITEMS = [
     ('2048', "2048", ""),
     ('4096', "4096", ""),
 ]
-
-
-def _new_tree(name: str):
-    tree = bpy.data.node_groups.new(name, 'PaintSystemNodeTree')
-    tree.initialize()
-    return tree
 
 
 def _find_material_group_node(material, tree):
@@ -52,20 +45,6 @@ def link_tree_to_material(material, tree):
     return group
 
 
-class PAINTSYSTEM_OT_create_tree(Operator):
-    bl_idname = "paint_system.create_tree"
-    bl_label = "New Paint System Tree"
-    bl_description = "Create a new Paint System node tree"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    name: StringProperty(name="Name", default="Paint System")
-
-    def execute(self, context):
-        tree = _new_tree(self.name)
-        context.scene.paint_system.active_node_tree = tree
-        return {'FINISHED'}
-
-
 class PAINTSYSTEM_OT_setup_material(Operator):
     bl_idname = "paint_system.setup_material"
     bl_label = "Setup Paint System"
@@ -89,7 +68,8 @@ class PAINTSYSTEM_OT_setup_material(Operator):
                 obj.material_slots[obj.active_material_index].material = mat
         tree = mat.paint_system.tree
         if tree is None:
-            tree = _new_tree(mat.name)
+            tree = bpy.data.node_groups.new(mat.name, 'PaintSystemNodeTree')
+            tree.initialize()
         link_tree_to_material(mat, tree)
         context.scene.paint_system.active_node_tree = tree
         return {'FINISHED'}
@@ -114,7 +94,6 @@ class PAINTSYSTEM_OT_compile_tree(Operator):
 
 
 classes = (
-    PAINTSYSTEM_OT_create_tree,
     PAINTSYSTEM_OT_setup_material,
     PAINTSYSTEM_OT_compile_tree,
 )
