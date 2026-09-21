@@ -24,6 +24,7 @@ raster = import_from("selection.raster")
 session = import_from("selection.session")
 stencil = import_from("selection.stencil")
 selection_ops = import_from("ops.selection_ops")
+undo = import_from("undo")
 ps_context = import_from("context")
 
 reaches = []
@@ -374,9 +375,9 @@ def test_empty_mask_is_no_selection():
 def test_select_all_operator():
     section("select all, none and invert")
     expected = {'REGISTER', 'UNDO'} if since(5, 1) else {'REGISTER'}
-    check(selection_ops.UNDO_OPTIONS == expected
+    check(undo.UNDO_OPTIONS == expected
           and selection_ops.PAINTSYSTEM_OT_select_all.bl_options == expected,
-          f"the undo flag is only set from 5.1 on ({sorted(selection_ops.UNDO_OPTIONS)})")
+          f"the undo flag is only set from 5.1 on ({sorted(undo.UNDO_OPTIONS)})")
     select(BIG)
     t = tree()
     t.selection.clear()
@@ -425,17 +426,17 @@ def test_select_all_modes():
 
     pushes = []
     fake_bpy = SimpleNamespace(ops=SimpleNamespace(ed=SimpleNamespace(undo_push=lambda message: pushes.append(message))))
-    real_bpy, selection_ops.bpy = selection_ops.bpy, fake_bpy
+    real_bpy, undo.bpy = undo.bpy, fake_bpy
     try:
         for mode in ('OBJECT', 'PAINT_TEXTURE'):
-            selection_ops.push_undo(SimpleNamespace(mode=mode), mode)
+            undo.push_undo(SimpleNamespace(mode=mode), mode)
     finally:
-        selection_ops.bpy = real_bpy
+        undo.bpy = real_bpy
     expected = [] if since(5, 1) else ['OBJECT']
     check(pushes == expected,
           f"push_undo pushes only before 5.1 and never in texture paint mode, where it would be dead ({pushes})")
 
-    restores = {mode: selection_ops.undo_restores_data(SimpleNamespace(mode=mode))
+    restores = {mode: undo.undo_restores_data(SimpleNamespace(mode=mode))
                 for mode in ('OBJECT', 'PAINT_TEXTURE', 'EDIT_MESH')}
     check(restores == {'OBJECT': True, 'PAINT_TEXTURE': since(5, 1), 'EDIT_MESH': False},
           f"undo restores a data edit in Object mode, in texture paint mode from 5.1, never in Edit mode ({restores})")

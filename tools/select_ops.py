@@ -26,9 +26,9 @@ from bpy.utils import register_classes_factory
 from mathutils import Matrix
 
 from ..context import get_active_tree
-from ..ops.selection_ops import UNDO_OPTIONS, push_undo
 from ..props.selection import FEATHER_MAX, SELECTION_MODES
 from ..selection import session
+from ..undo import UNDO_OPTIONS, push_undo
 from . import preview, shapes
 
 LASSO_STEP = 2.0

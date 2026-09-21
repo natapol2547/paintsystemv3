@@ -175,7 +175,7 @@ select by face or UV island and the image editor tools are PS-097.
   Tests that repeat the last operation call
   `bpy.ops.ed.undo_redo('EXEC_DEFAULT', True)`; without the second
   argument the repeat pushes no undo step.
-- `bl_options = ops.selection_ops.UNDO_OPTIONS` plus `push_undo`, as
+- `bl_options = undo.UNDO_OPTIONS` plus `push_undo`, as
   PS-091's Undo section describes. Selection edits in texture paint mode
   are not undoable on 4.2, 4.5 and 5.0; the alternative is a Ctrl+Z
   that does nothing.

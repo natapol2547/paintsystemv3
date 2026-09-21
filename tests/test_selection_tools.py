@@ -23,7 +23,7 @@ tools = import_from("tools")
 shapes = import_from("tools.shapes")
 select_ops = import_from("tools.select_ops")
 workspace_tools = import_from("tools.workspace_tools")
-selection_ops = import_from("ops.selection_ops")
+undo = import_from("undo")
 session = import_from("selection.session")
 raster = import_from("selection.raster")
 
@@ -170,7 +170,7 @@ def test_keymap_and_tools():
     check(all(event["type"] == 'LEFTMOUSE' and not event.get("alt") for _, event, _ in items),
           "every item is the left mouse button without Alt")
     for _, cls, kind in OPERATORS:
-        check(cls.bl_options == selection_ops.UNDO_OPTIONS, f"{kind} uses the selection undo options")
+        check(cls.bl_options == undo.UNDO_OPTIONS, f"{kind} uses the selection undo options")
     check(tools.default_brush_tool() == ('builtin_brush.Draw' if before(4, 3) else 'builtin.brush'),
           f"default brush tool id ({tools.default_brush_tool()})")
 

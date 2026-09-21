@@ -445,7 +445,7 @@ material and never recompiles a shader.
   have no edge, and PS-093's tools carry feather, anti-alias and Through
   in their tool header.
 - `select_all` polls only in Object and Texture Paint mode
-  (`ops.selection_ops.undoable_mode`): an edit mode has an undo stack of
+  (`undo.undoable_mode`): an edit mode has an undo stack of
   its own, where a step for a selection edit restores nothing and costs
   a Ctrl+Z. `SELECT` does nothing when the ops are already one `ALL`, and
   `DESELECT` nothing when they are empty.
@@ -465,7 +465,7 @@ texture paint mode before 5.1:
 | 4.2, 4.5, 5.0 | Undo steps through image undo only and never restores tree data. A pushed step restores nothing and costs a Ctrl+Z that does nothing. | Undoable |
 | 5.1, 5.2, 5.3 alpha | Undoable, in order with strokes | Undoable |
 
-`ops.selection_ops.UNDO_OPTIONS` is `{'REGISTER', 'UNDO'}` from 5.1 and
+`undo.UNDO_OPTIONS` is `{'REGISTER', 'UNDO'}` from 5.1 and
 `{'REGISTER'}` before, and `push_undo(context, message)` pushes a step by
 hand only before 5.1 and outside texture paint mode. Every selection
 operator uses both, and PS-093's tool drags follow the same rules as

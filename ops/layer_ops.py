@@ -3,7 +3,6 @@ from bpy.types import Operator
 from bpy.props import EnumProperty, IntProperty, StringProperty
 from bpy.utils import register_classes_factory
 
-from .selection_ops import undo_restores_data
 from ..common import icon_kwargs
 from ..context import button_layer, get_active_tree, parse_context, update_active_image
 from ..compiler.bake import bake_node_cache
@@ -12,6 +11,7 @@ from ..filters.layer_specs import layer_filter_items
 from ..nodes.layers.base_layer_node import RESOLUTION_ITEMS
 from ..nodes.layers.registry import layer_type, layer_type_items
 from ..nodetree.stack_ops import descendants, is_layer, movement_options
+from ..undo import undo_restores_data
 
 
 class PAINTSYSTEM_OT_add_layer(Operator):
