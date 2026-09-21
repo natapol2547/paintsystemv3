@@ -171,12 +171,14 @@ def test_the_menu_draws():
         operator=lambda *args, **kwargs: drawn.append(args[0]) or SimpleNamespace(action=''),
         separator=lambda **kwargs: None,
         prop=lambda *args, **kwargs: drawn.append(args[1]),
+        menu=lambda idname, **kwargs: drawn.append(idname),
     )
     menu.draw(SimpleNamespace(layout=layout), bpy.context)
     # Blur and Sharpen live here rather than on the bar because both open
     # a dialog, and a gizmo that opens one is not the one-click thing the
     # bar is for.
     check(drawn == ["paint_system.select_all",
+                    "PAINTSYSTEM_MT_invert_channels",
                     "paint_system.blur_pixels",
                     "paint_system.sharpen_pixels"], f"it drew {drawn}")
 

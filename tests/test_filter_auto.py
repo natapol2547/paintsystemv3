@@ -406,9 +406,15 @@ if available():
         run = layer_build.steps(bpy.context, tree, node)
         next(run)
         layer_job._deadline = 0.0
-        layer_job._tick()
-        check(not layer_job.running_on(node),
-              "the job leaves alone a layer another build is running on")
+        # One unit per tick, so a job that did start cannot also finish
+        # inside this tick and look as if it never ran.
+        budget, layer_job.BUDGET = layer_job.BUDGET, 0.0
+        try:
+            layer_job._tick()
+            check(not layer_job.running_on(node),
+                  "the job leaves alone a layer another build is running on")
+        finally:
+            layer_job.BUDGET = budget
         for _ in run:
             pass
         core.flush_now()
