@@ -14,6 +14,7 @@ These need a GPU context, as `test_filter_build.py` does.
 """
 import os
 import sys
+import tempfile
 import traceback
 
 import bpy
@@ -410,6 +411,71 @@ if available():
         check(image.has_data, "without packing them again, which would free the decoded copy")
         check(layer_job._builds.get(node.uuid) is None,
               "and the compile after it still counts the layer as settled")
+
+        section("undo after an automatic refresh")
+        # The refresh writes after the stroke's undo step was pushed, so no
+        # step holds its pixels. Whatever an undo or a redo restores, the
+        # stamp and the pixels must agree, and the next refresh must bring
+        # the layer back in line with the stack below.
+        names = (tree.name, node.name, picture.name)
+
+        def refetch():
+            tree = bpy.data.node_groups[names[0]]
+            return tree, tree.nodes[names[1]], tree.nodes[names[2]]
+
+        def result(node):
+            return stamp(node), tuple(node.derived_image.pixels[:4])
+
+        before = result(node)
+        bpy.ops.ed.undo_push(message="before the stroke")
+        undo_pixels.write_pixels(picture.image, [0.8, 0.2, 0.1, 1.0] * 64)
+        core.flush_now()
+        check(pump(), "a stroke below is refreshed")
+        core.flush_now()
+        after = result(node)
+        check(after[0] != before[0], "with new pixels")
+
+        for label, step, want in (("undo", bpy.ops.ed.undo, before),
+                                  ("redo", bpy.ops.ed.redo, after)):
+            step()
+            # What the window's depsgraph evaluation does after an undo.
+            bpy.context.view_layer.update()
+            tree, node, picture = refetch()
+            check(result(node) in (before, after),
+                  f"after {label} the stamp and the pixels agree: {result(node)[0][:8]}")
+            check(pump(), f"the refresh after {label} runs to the end")
+            core.flush_now()
+            check(result(node) == want and node.stale_reason == "",
+                  f"and matches the stack below again: {node.stale_reason!r}")
+
+        section("saved and reopened")
+        folder = tempfile.mkdtemp(prefix="ps_filter_auto_")
+        tree.use_fake_user = True
+
+        def reopen(name):
+            # Packed, so the pixels below come back as they were saved.
+            picture.image.pack()
+            path = os.path.join(folder, name)
+            check(bpy.ops.wm.save_as_mainfile(filepath=path) == {'FINISHED'}, f"{name} saves")
+            check(bpy.ops.wm.open_mainfile(filepath=path) == {'FINISHED'}, "and reopens")
+            bpy.context.view_layer.update()
+            return refetch()
+
+        was = stamp(node)
+        tree, node, picture = reopen("fresh.blend")
+        check(node.stale_reason == "", f"a layer saved up to date reopens up to date: "
+                                       f"{node.stale_reason!r}")
+        check(pump() and stamp(node) == was, "and the job has nothing to build")
+
+        bpy.ops.ed.undo_push(message="reopened")
+        undo_pixels.write_pixels(picture.image, [0.2, 0.7, 0.3, 1.0] * 64)
+        core.flush_now()
+        layer_job.cancel_all()
+        tree, node, picture = reopen("stale.blend")
+        check(node.stale_reason == "the pixels below changed",
+              f"a layer saved out of date reopens out of date: {node.stale_reason!r}")
+        check(pump() and stamp(node) != was and node.stale_reason == "",
+              f"and the job brings it up to date: {node.stale_reason!r}")
 
     except Exception:
         traceback.print_exc()
