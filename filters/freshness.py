@@ -83,13 +83,10 @@ def fingerprint_parts(ctx, node, below) -> dict:
     parts = {
         "version": derived.FILTER_VERSION,
         "filter": node.filter_type,
-        # The passes as the build would run them, rather than the node
-        # properties behind them: a kind is free to derive one from the
-        # other, and what the pixels depend on is the derived form. An
-        # unregistered kind has no passes to read -- the build refuses
-        # such a layer outright, so here it only has to not raise.
-        "params": [[spec.name, params] for spec, params in kind.passes_of(node)]
-                  if kind is not None else [],
+        # See `LayerFilterSpec.fingerprint`. An unregistered kind has
+        # nothing to read -- the build refuses such a layer outright, so
+        # here it only has to not raise.
+        "params": kind.fingerprint(node) if kind is not None else [],
         "size": [size, size],
         # The map as authored, not as resolved. Resolving needs a mesh,
         # and a compile serves every object the tree is on.

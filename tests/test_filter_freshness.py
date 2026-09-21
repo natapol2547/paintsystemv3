@@ -112,6 +112,21 @@ try:
     node.invert_alpha = False
     restamp(tree, node)
 
+    # The painter has no passes to read its settings from, so it says
+    # what its pixels depend on for itself.
+    node.filter_type = 'PAINTERLY'
+    restamp(tree, node)
+    for name, value in (("painter_seed", 7), ("painter_brush", 'CIRCLE'),
+                        ("painter_density", 0.3), ("painter_hue", 0.2)):
+        previous = getattr(node, name)
+        setattr(node, name, value)
+        check(reason(tree, node) == "the filter settings changed",
+              f"a Painterly setting, {name}: {reason(tree, node)!r}")
+        setattr(node, name, previous)
+        check(reason(tree, node) == "", f"and putting {name} back settles it")
+    node.filter_type = 'INVERT'
+    restamp(tree, node)
+
     node.resolution = '4096'
     check(reason(tree, node) == "the resolution changed",
           f"the resolution: {reason(tree, node)!r}")

@@ -6,7 +6,8 @@
 1. `filters.layer_plan.resolve_input` says how the stack below can be
    turned into pixels, and refuses before any video memory is spent;
 2. `filters.composite` draws that stack into one texture;
-3. the layer's kind runs over it, followed by the encode below;
+3. the layer's kind runs over it -- its passes, or its own build where
+   it has one -- followed by the encode below;
 4. the result is read back a band of rows at a time;
 5. `commit` writes it into the layer's image, packs it and stamps it.
 
@@ -41,6 +42,7 @@ from ..gpu_passes.core import read_color
 from . import composite, derived, freshness, layer_plan
 from .core import BAND_ROWS, FilterSpec, PixelSource, Refused, ResultImage, run_pass
 from .layer_specs import layer_filter_kind
+from .registry import ENCODE_SRGB
 
 log = logging.getLogger(__name__)
 
@@ -48,20 +50,6 @@ log = logging.getLogger(__name__)
 # the probe machine, which is far too long to hold between modal events;
 # a band of this many is the same order as `run_pass` draws in.
 READ_ROWS = BAND_ROWS
-
-
-ENCODE_SRGB = FilterSpec(
-    name="layer_encode_srgb",
-    apply_source="""
-/* Scene linear in, the derived image's own storage out. Values outside 0
-   to 1 have no sRGB encoding and are clamped into one; eight bits could
-   not have carried them anyway. */
-vec4 apply(ivec2 texel, vec4 c)
-{
-  return vec4(ps_to_srgb(clamp(c.rgb, 0.0, 1.0)), clamp(c.a, 0.0, 1.0));
-}
-""",
-)
 
 
 def build_layer(context, tree, node, *, plan=None) -> bpy.types.Image:
@@ -94,7 +82,9 @@ def steps(context, tree, node, *, plan=None):
     Three textures are in flight at the widest point -- the composite,
     the filter's output and the encode's -- and the pool hands the first
     one back for the encode to draw into, so a filter costs one target
-    more than the composite it reads.
+    more than the composite it reads. A kind with a build of its own
+    decides for itself; the painter holds four while it analyses the
+    picture, as `filters.painter.build` explains.
     """
     if plan is None:
         plan = layer_plan.resolve_input(context, tree, node)
@@ -105,31 +95,18 @@ def steps(context, tree, node, *, plan=None):
     width, height = size = (int(node.resolution), int(node.resolution))
     yield f"{kind.label}: compositing the layers below", 0.0
 
+    # Where the filtering ends on the progress bar. A list of passes is
+    # over in a moment and the readback is the long part; a kind that
+    # builds for itself, such as the painter, is the other way round.
+    filtered = 0.3 if kind.build is None else 0.8
     pool = composite.Pool(size)
     try:
         current = composite.composite_below(plan.chain, size, pool=pool)
-        # A kind runs as many passes as its parameters call for -- a
-        # separable blur is two per iteration -- so each one is a unit of
-        # its own, and a wide blur is cancellable partway through rather
-        # than one long stall.
-        # Empty for a kind whose parameters ask for nothing, such as a
-        # blur set to zero; the stack below is then the result.
-        passes = kind.passes_of(node)
-        # An unsharp mask reads the stack below alongside the blur of it,
-        # so the composite is held out of the pool for the whole chain
-        # rather than reused by the second pass. One texture more, and
-        # only for a kind that asks.
-        original = current if any(spec.reads_second for spec, _ in passes) else None
-        for index, (spec, params) in enumerate(passes):
-            yield f"{kind.label}: filtering", 0.2 + 0.1 * index / len(passes)
-            framebuffer, result = _draw(spec, current, params, pool,
-                                        second=original if spec.reads_second else None)
-            if current is not original:
-                pool.release(current)
-            current = result
-        if original is not None and current is not original:
-            pool.release(original)
-        yield f"{kind.label}: filtering", 0.3
+        if kind.build is not None:
+            current = yield from _built(kind, node, current, pool, 0.2, filtered)
+        else:
+            current = yield from _filtered(kind, node, current, pool, 0.2, filtered)
+        yield f"{kind.label}: filtering", filtered
         framebuffer, encoded = _draw(ENCODE_SRGB, current, {}, pool)
         pool.release(current)
 
@@ -137,13 +114,60 @@ def steps(context, tree, node, *, plan=None):
         for first in range(0, height, READ_ROWS):
             last = min(height, first + READ_ROWS)
             bands.append(read_color(framebuffer, width, height, rows=(first, last)))
-            yield f"{kind.label}: reading the result back", 0.3 + 0.6 * last / height
+            yield (f"{kind.label}: reading the result back",
+                   filtered + (0.9 - filtered) * last / height)
         values = bands[0] if len(bands) == 1 else np.concatenate(bands)
     finally:
         pool.close()
 
     yield f"{kind.label}: writing the result", 0.9
     return commit(tree, node, plan, values, size)
+
+
+def _filtered(kind, node, current, pool, start, end):
+    """Run *kind*'s passes over *current*, and return what they leave.
+
+    A kind runs as many passes as its parameters call for -- a separable
+    blur is two per iteration -- so each one is a unit of its own, and a
+    wide blur is cancellable partway through rather than one long stall.
+    The list is empty for a kind whose parameters ask for nothing, such
+    as a blur set to zero, and the stack below is then the result.
+    """
+    passes = kind.passes_of(node)
+    # An unsharp mask reads the stack below alongside the blur of it, so
+    # the composite is held out of the pool for the whole chain rather
+    # than reused by the second pass. One texture more, and only for a
+    # kind that asks.
+    original = current if any(spec.reads_second for spec, _ in passes) else None
+    for index, (spec, params) in enumerate(passes):
+        yield f"{kind.label}: filtering", start + (end - start) * index / len(passes)
+        _framebuffer, result = _draw(spec, current, params, pool,
+                                     second=original if spec.reads_second else None)
+        if current is not original:
+            pool.release(current)
+        current = result
+    if original is not None and current is not original:
+        pool.release(original)
+    return current
+
+
+def _built(kind, node, current, pool, start, end):
+    """Run *kind*'s own build over *current*, placing its progress on the bar.
+
+    The hook owns *current* from here on and returns a texture of the
+    pool's. It is closed explicitly when the build is abandoned, so that
+    its textures go back to the pool before the pool itself is closed.
+    """
+    run = kind.build(node, current, pool)
+    try:
+        while True:
+            try:
+                label, fraction = next(run)
+            except StopIteration as done:
+                return done.value
+            yield f"{kind.label}: {label}", start + (end - start) * fraction
+    finally:
+        run.close()
 
 
 def _draw(spec: FilterSpec, texture, params: dict, pool, *, second=None):

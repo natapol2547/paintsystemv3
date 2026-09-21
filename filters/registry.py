@@ -6,6 +6,10 @@ in the image's storage space; `core` handles storage, the mask and the
 write back. A spec that needs a second texture as well as the one it is
 drawing over, such as the unsharp mask, sets ``reads_second`` and the
 caller binds it.
+
+`ENCODE_SRGB` is here too, though nobody chooses it. The filter layer
+build and the painter both need it, and the painter cannot import it
+from `layer_build`, which reaches the painter through `layer_specs`.
 """
 from math import ceil
 
@@ -148,6 +152,20 @@ vec4 apply(ivec2 texel, vec4 c)
 """,
     params=(('FLOAT', "strength"), ('INT', "encode")),
     reads_second=True,
+)
+
+ENCODE_SRGB = FilterSpec(
+    name="encode_srgb",
+    apply_source="""
+/* Scene linear in, sRGB out: what a filter layer's derived image stores,
+   and what the painter works on because v2 painted stored bytes. Values
+   outside 0 to 1 have no sRGB encoding and are clamped into one; eight
+   bits could not have carried them anyway. */
+vec4 apply(ivec2 texel, vec4 c)
+{
+  return vec4(ps_to_srgb(clamp(c.rgb, 0.0, 1.0)), clamp(c.a, 0.0, 1.0));
+}
+""",
 )
 
 FILTERS = {spec.name: spec for spec in (CLEAR, FILL, INVERT, BLUR, SHARPEN)}

@@ -282,6 +282,12 @@ def run_pass(spec: FilterSpec, source: PixelSource, target=None, *, mask=None,
              params: dict | None = None) -> tuple[gpu.types.GPUFrameBuffer, gpu.types.GPUTexture]:
     """Draw *spec* from *source* into *target*, a new texture by default.
 
+    The pass covers *target*. That is the size of the source for a
+    filter; a pass that reads the source at coordinates of its own, such
+    as a reduction or a gather, can draw into a smaller one, whose texels
+    `apply` still sees as its own and `_MAIN` still reads the source at
+    -- inside it, so long as the target is no larger.
+
     *mask* is an `R32F` texture the size of the source, or None to cover
     the whole image. *second* is a texture the size of the source for a
     spec whose `reads_second` is set, such as the unsharp mask reading
@@ -306,9 +312,9 @@ def run_pass(spec: FilterSpec, source: PixelSource, target=None, *, mask=None,
     gpu.state.face_culling_set('NONE')
     try:
         with framebuffer.bind():
-            for first in range(0, source.height, BAND_ROWS):
-                last = min(source.height, first + BAND_ROWS)
-                shader.uniform_float("target_size", (float(source.width), float(source.height)))
+            for first in range(0, target.height, BAND_ROWS):
+                last = min(target.height, first + BAND_ROWS)
+                shader.uniform_float("target_size", (float(target.width), float(target.height)))
                 shader.uniform_float("rows", (float(first), float(last)))
                 shader.uniform_int("storage", source.storage)
                 shader.uniform_int("use_mask", 0 if mask is None else 1)
@@ -322,7 +328,7 @@ def run_pass(spec: FilterSpec, source: PixelSource, target=None, *, mask=None,
                 shader.uniform_sampler("second",
                                        _unused_sampler() if second is None else second)
                 batch.draw(shader)
-                if last < source.height:
+                if last < target.height:
                     # Reading one texel waits for the band, so the driver
                     # sees a stream of short draws rather than one long one.
                     framebuffer.read_color(0, first, 1, 1, 4, 0, 'FLOAT', data=sync)

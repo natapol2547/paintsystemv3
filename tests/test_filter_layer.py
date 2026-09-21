@@ -19,6 +19,7 @@ from harness import (bake_group, check, close, finish, fmt, import_from,  # noqa
 register_addon()
 core = import_from("compiler.core")
 derived = import_from("filters.derived")
+layer_specs = import_from("filters.layer_specs")
 create_managed_image = import_from("compiler.bake").create_managed_image
 
 SOLID = 'PaintSystemSolidColorLayerNode'
@@ -124,6 +125,24 @@ try:
     check(core.build_ir(tree).ctx.subtree_hash(node) != before,
           "a rebuild of the same image invalidates it too")
     image[derived.BUILD_KEY] = "build-of-Filter Result"
+
+    # Every kind's settings, not only the ones changed above: a property
+    # added for a new kind and left out of the list would make its
+    # sliders invalidate every cache above the layer.
+    unhashed = set(type(node).ps_unhashed_props)
+    properties = set(node.bl_rna.properties.keys())
+    for kind in layer_specs.LAYER_FILTERS.values():
+        names = set(kind.param_names())
+        check(names <= properties and names <= unhashed,
+              f"{kind.label}'s settings exist and are outside the hash "
+              f"(missing {sorted(names - unhashed)})")
+    node.filter_type = 'PAINTERLY'
+    node.painter_seed = 7
+    node.painter_density = 0.3
+    check(core.build_ir(tree).ctx.subtree_hash(node) == before,
+          "so changing Painterly's changes no hash before the rebuild either")
+    node.painter_seed, node.painter_density = 42, 0.7
+    node.filter_type = 'INVERT'
 
     section("the blend mode is not offered")
     check(not node.ps_shows_blend_mode and node.ps_opacity_label == "Amount",

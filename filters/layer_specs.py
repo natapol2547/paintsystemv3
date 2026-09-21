@@ -21,6 +21,12 @@ per iteration, and how many iterations depends on how wide it is, so the
 pass list is a function of the node like the push constants are. A kind
 that returns an empty list asks for the stack below unchanged, which is
 how a blur set to zero costs nothing.
+
+A kind that is not a list of passes builds its result itself. The
+painter is one: its stamps are geometry planned per stamp on the CPU,
+not a pass over every texel. It gives `build` instead, and a
+`fingerprint_of` saying what the pixels depend on, since there are no
+passes to read that from.
 """
 from __future__ import annotations
 
@@ -29,6 +35,12 @@ from typing import Any, Callable
 
 from . import registry
 from .core import FilterSpec, Refused
+from .painter import build as painter_build
+from .painter.plan import Settings
+
+
+def _no_passes(node) -> list[tuple[FilterSpec, dict]]:
+    return []
 
 
 @dataclass(frozen=True)
@@ -41,9 +53,36 @@ class LayerFilterSpec:
     description: str
     # The passes this kind runs over the stack below, in order, as
     # ``(spec, push constants)`` read off the node.
-    passes_of: Callable[[Any], list[tuple[FilterSpec, dict]]]
-    # Names of the node properties this kind reads, in draw order.
-    params: tuple[str, ...] = ()
+    passes_of: Callable[[Any], list[tuple[FilterSpec, dict]]] = _no_passes
+    # Names of the node properties this kind reads, in draw order. An
+    # entry may also be ``(heading, names)``, drawn as a group of its own.
+    params: tuple = ()
+    # ``build(node, texture, pool)``, a generator of ``(label, fraction)``
+    # that takes the composited stack below and returns the result, both
+    # scene linear and straight, both the pool's. None for a kind whose
+    # passes are the whole build.
+    build: Callable | None = None
+    # What a build fingerprint records for this kind, JSON-able. None to
+    # record the passes, which is right for any kind that has them.
+    fingerprint_of: Callable[[Any], list] | None = None
+
+    def fingerprint(self, node) -> list:
+        """What the pixels of a build of *node* depend on, besides the stack.
+
+        The passes as the build would run them, rather than the node
+        properties behind them: a kind is free to derive one from the
+        other, and what the pixels depend on is the derived form.
+        """
+        if self.fingerprint_of is not None:
+            return self.fingerprint_of(node)
+        return [[spec.name, params] for spec, params in self.passes_of(node)]
+
+    def param_names(self) -> tuple[str, ...]:
+        """Every node property this kind reads, groups flattened."""
+        names = []
+        for entry in self.params:
+            names.extend((entry,) if isinstance(entry, str) else entry[1])
+        return tuple(names)
 
 
 def _invert_passes(node) -> list[tuple[FilterSpec, dict]]:
@@ -101,7 +140,30 @@ SHARPEN = LayerFilterSpec(
     params=('sharpen_radius', 'sharpen_strength'),
 )
 
-LAYER_FILTERS = {spec.name: spec for spec in (INVERT, BLUR, SHARPEN)}
+def _painterly_fingerprint(node) -> list:
+    # The brush by name: a preset's images ship with the add-on, and a
+    # change to them comes with a `derived.FILTER_VERSION` of its own.
+    return [["painterly", {**Settings.of(node).as_dict(), "brush": node.painter_brush}]]
+
+
+PAINTERLY = LayerFilterSpec(
+    name='PAINTERLY',
+    label="Painterly",
+    description="Repaint everything below this layer in brush strokes that follow its edges",
+    params=(
+        'painter_brush',
+        ("Strokes", ('painter_steps', 'painter_density', 'painter_max_scale',
+                     'painter_min_scale', 'painter_start_opacity', 'painter_end_opacity')),
+        ("Direction", ('painter_sigma', 'painter_threshold', 'painter_rotation',
+                       'painter_random_rotation', 'painter_rotation_range')),
+        ("Colour Variation", ('painter_hue', 'painter_saturation', 'painter_value')),
+        'painter_seed',
+    ),
+    build=painter_build.build,
+    fingerprint_of=_painterly_fingerprint,
+)
+
+LAYER_FILTERS = {spec.name: spec for spec in (INVERT, BLUR, SHARPEN, PAINTERLY)}
 
 
 def layer_filter_items() -> list[tuple[str, str, str]]:
@@ -109,7 +171,8 @@ def layer_filter_items() -> list[tuple[str, str, str]]:
     return [(spec.name, spec.label, spec.description) for spec in LAYER_FILTERS.values()]
 
 
-def layer_filter_params(filter_type: str) -> tuple[str, ...]:
+def layer_filter_params(filter_type: str) -> tuple:
+    """What a filter layer of *filter_type* draws, as `LayerFilterSpec.params` holds it."""
     spec = LAYER_FILTERS.get(filter_type)
     return spec.params if spec is not None else ()
 

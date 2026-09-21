@@ -42,10 +42,10 @@ Inside the hook, in order:
    stack is encoded to sRGB first and decoded again at the end, as
    Invert and Sharpen already do with `encode`.
 2. **Analysis.** The existing gaussian passes blur the colour the
-   stamps sample. A Sobel pass over the luma of that blur writes the
-   gradient field (`gx`, `gy`, magnitude), and a short chain of
-   max-reduction passes finds the field's peak, which v2 normalises the
-   magnitude by and the Gradient Threshold is relative to.
+   stamps sample. A Sobel pass over a blur of the picture's luma, as in
+   v2, writes the gradient field (`gx`, `gy`, magnitude), and a short
+   chain of max-reduction passes finds the field's peak, which v2
+   normalises the magnitude by and the Edge Threshold is relative to.
 3. **Gather.** The stamp centres are uploaded as a small data texture,
    and one pass reads the blurred colour and the gradient at each of
    them into a target of the same small size. That readback is the only
@@ -59,13 +59,16 @@ Inside the hook, in order:
    jitter and, in the seam slice, the mirrored duplicates. Everything
    here is per stamp rather than per texel, so it is small, and it is
    testable without a GPU.
-5. **Stamping.** One draw per step of every stamp in that step, as
-   rotated quads with premultiplied "over" blending
-   (`gpu.state.blend_set('ALPHA_PREMULT')`), in the order they were
-   planned. The brushes are packed into one atlas per step, resized on
-   the CPU to that step's stamp size as v2 did: sampling a 1024-texel
-   brush for a 60-texel stamp without mipmaps aliases, and the Python
-   `gpu` module cannot build a mip chain. One atlas rather than one
+5. **Stamping.** Each step's stamps are drawn in the order they were
+   planned, as rotated quads with premultiplied "over" blending
+   (`gpu.state.blend_set('ALPHA_PREMULT')`), up to 32768 to a draw so
+   that no single draw stalls the driver. The brushes are packed into
+   one atlas per step, resized on the CPU to that step's stamp size as
+   v2 did: sampling a 1024-texel brush for a 60-texel stamp without
+   mipmaps aliases, and the Python `gpu` module cannot build a mip
+   chain. A stamp larger than its brush keeps the brush at its own size
+   and magnifies it, as does one whose atlas would not fit the GPU's
+   largest texture. One atlas rather than one
    texture per brush, so the draw keeps the planned order -- grouping
    stamps by brush would stack every stamp of one brush under every
    stamp of the next.
@@ -91,11 +94,11 @@ angle of the stamps it reaches and never where any stamp lands.
   which mirrors the brush against the gradient on diagonal edges: a 45°
   edge gets its stroke at 135°, while horizontal and vertical edges come
   out right. v3 aligns the brush with the gradient on every edge. The
-  Rotation Offset still turns every stroke by a fixed amount.
+  Rotation setting still turns every stroke by a fixed amount.
 - **Colour jitter** is drawn per stamp from the seeded stream rather
   than from NumPy's global generator, so it repeats with the seed too.
 - **Brush resize** box-filters before the bilinear step when a brush
-  shrinks by more than half, where v2's bilinear alone skips texels.
+  shrinks by a factor of two or more, where v2's bilinear alone skips texels.
   The stamp count is still computed from the resized brushes' covered
   area, v2's formula.
 
