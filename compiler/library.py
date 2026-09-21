@@ -37,7 +37,7 @@ def get_library_group(key: str, build: Callable[[bpy.types.NodeTree], None]) -> 
     return tree
 
 
-# -- layer blend ------------------------------------------------------
+# -- parts shared by the mix groups -----------------------------------
 
 # ShaderNodeMix socket indices (name lookup is ambiguous: "A"/"B" repeat per data type).
 MIX_IN_FACTOR = 0
@@ -65,6 +65,59 @@ def _math(b, identifier, operation, lhs, rhs, *, clamp=False):
     b.add_node(identifier, 'ShaderNodeMath', inputs=inputs,
                properties={'operation': operation, 'use_clamp': clamp})
     return (identifier, 0)
+
+
+def _mix_interface(b, amount_name: str, color_default, alpha_default) -> None:
+    """Declare the sockets of a mix group and add its Group Input and Output.
+
+    Inputs: Prev Color, Prev Alpha, Color, Alpha, *amount_name*, Mask, Clip.
+    Outputs: Color, Alpha. The groups differ only in the amount's name and
+    the defaults of the source Color and Alpha.
+    """
+    b.add_socket('INPUT', 'NodeSocketColor', 'Prev Color', default_value=(0.0, 0.0, 0.0, 0.0))
+    b.add_socket('INPUT', 'NodeSocketFloat', 'Prev Alpha', default_value=0.0,
+                 min_value=0.0, max_value=1.0)
+    b.add_socket('INPUT', 'NodeSocketColor', 'Color', default_value=color_default)
+    b.add_socket('INPUT', 'NodeSocketFloat', 'Alpha', default_value=alpha_default,
+                 min_value=0.0, max_value=1.0)
+    b.add_socket('INPUT', 'NodeSocketFloat', amount_name, default_value=1.0,
+                 min_value=0.0, max_value=1.0, subtype='FACTOR')
+    b.add_socket('INPUT', 'NodeSocketFloat', 'Mask', default_value=1.0,
+                 min_value=0.0, max_value=1.0)
+    b.add_socket('INPUT', 'NodeSocketFloat', 'Clip', default_value=0.0,
+                 min_value=0.0, max_value=1.0, subtype='FACTOR')
+    b.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
+    b.add_socket('OUTPUT', 'NodeSocketFloat', 'Alpha')
+
+    b.add_node('in', 'NodeGroupInput')
+    b.add_node('out', 'NodeGroupOutput')
+
+
+def _kept(b):
+    """Share of the source that survives: 1 unclipped, the backdrop's alpha clipped."""
+    b.add_node('kept', 'ShaderNodeMix', properties={
+        'data_type': 'FLOAT', 'clamp_factor': True,
+    }, inputs={MIX_IN_A_FLOAT: {'default_value': 1.0}})
+    b.link_nodes('in', 'kept', 'Clip', MIX_IN_FACTOR)
+    b.link_nodes('in', 'kept', 'Prev Alpha', MIX_IN_B_FLOAT)
+    return ('kept', MIX_OUT_FLOAT)
+
+
+def _composite(b, source_share, source_color, alpha) -> None:
+    """Output the backdrop colour mixed toward *source_color* by *source_share*, with *alpha*."""
+    b.add_node('composite', 'ShaderNodeMix', properties={
+        'data_type': 'RGBA', 'blend_type': 'MIX',
+        'clamp_factor': True, 'clamp_result': False,
+    })
+    _link(b, source_share, 'composite', MIX_IN_FACTOR)
+    b.link_nodes('in', 'composite', 'Prev Color', MIX_IN_A_COLOR)
+    _link(b, source_color, 'composite', MIX_IN_B_COLOR)
+
+    b.link_nodes('composite', 'out', MIX_OUT_COLOR, 'Color')
+    _link(b, alpha, 'out', 'Alpha')
+
+
+# -- layer blend ------------------------------------------------------
 
 
 def layer_blend_group(blend_type: str) -> bpy.types.NodeTree:
@@ -96,23 +149,7 @@ def _build_layer_blend(tree: bpy.types.NodeTree, blend_type: str) -> None:
     MIX has ``B = cs`` and skips the blend nodes.
     """
     b = NodeTreeBuilder(tree)
-    b.add_socket('INPUT', 'NodeSocketColor', 'Prev Color', default_value=(0.0, 0.0, 0.0, 0.0))
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Prev Alpha', default_value=0.0,
-                 min_value=0.0, max_value=1.0)
-    b.add_socket('INPUT', 'NodeSocketColor', 'Color', default_value=(0.0, 0.0, 0.0, 1.0))
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Alpha', default_value=1.0,
-                 min_value=0.0, max_value=1.0)
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Opacity', default_value=1.0,
-                 min_value=0.0, max_value=1.0, subtype='FACTOR')
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Mask', default_value=1.0,
-                 min_value=0.0, max_value=1.0)
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Clip', default_value=0.0,
-                 min_value=0.0, max_value=1.0, subtype='FACTOR')
-    b.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
-    b.add_socket('OUTPUT', 'NodeSocketFloat', 'Alpha')
-
-    b.add_node('in', 'NodeGroupInput')
-    b.add_node('out', 'NodeGroupOutput')
+    _mix_interface(b, 'Opacity', (0.0, 0.0, 0.0, 1.0), 1.0)
 
     link = functools.partial(_link, b)
     math = functools.partial(_math, b)
@@ -121,14 +158,7 @@ def _build_layer_blend(tree: bpy.types.NodeTree, blend_type: str) -> None:
     es = math('source_alpha', 'MULTIPLY',
               math('opacity', 'MULTIPLY', ('in', 'Alpha'), ('in', 'Opacity')),
               ('in', 'Mask'), clamp=True)
-
-    # kept: share of the source that survives, 1 unclipped, ab clipped
-    b.add_node('kept', 'ShaderNodeMix', properties={
-        'data_type': 'FLOAT', 'clamp_factor': True,
-    }, inputs={MIX_IN_A_FLOAT: {'default_value': 1.0}})
-    b.link_nodes('in', 'kept', 'Clip', MIX_IN_FACTOR)
-    b.link_nodes('in', 'kept', 'Prev Alpha', MIX_IN_B_FLOAT)
-    kept = ('kept', MIX_OUT_FLOAT)
+    kept = _kept(b)
 
     source_weight = math('source_weight', 'MULTIPLY', es, kept)
     backdrop_weight = math('backdrop_weight', 'MULTIPLY', ('in', 'Prev Alpha'),
@@ -158,17 +188,7 @@ def _build_layer_blend(tree: bpy.types.NodeTree, blend_type: str) -> None:
         b.link_nodes('blend', 'source', MIX_OUT_COLOR, MIX_IN_B_COLOR)
         source_color = ('source', MIX_OUT_COLOR)
 
-    b.add_node('composite', 'ShaderNodeMix', properties={
-        'data_type': 'RGBA', 'blend_type': 'MIX',
-        'clamp_factor': True, 'clamp_result': False,
-    })
-    link(source_share, 'composite', MIX_IN_FACTOR)
-    b.link_nodes('in', 'composite', 'Prev Color', MIX_IN_A_COLOR)
-    link(source_color, 'composite', MIX_IN_B_COLOR)
-
-    b.link_nodes('composite', 'out', MIX_OUT_COLOR, 'Color')
-    link(alpha, 'out', 'Alpha')
-
+    _composite(b, source_share, source_color, alpha)
     b.build()
 
 
@@ -210,50 +230,17 @@ def _build_filter_mix(tree: bpy.types.NodeTree) -> None:
     coverage outside the layer it is clipped to.
     """
     b = NodeTreeBuilder(tree)
-    b.add_socket('INPUT', 'NodeSocketColor', 'Prev Color', default_value=(0.0, 0.0, 0.0, 0.0))
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Prev Alpha', default_value=0.0,
-                 min_value=0.0, max_value=1.0)
-    b.add_socket('INPUT', 'NodeSocketColor', 'Color', default_value=(0.0, 0.0, 0.0, 0.0))
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Alpha', default_value=0.0,
-                 min_value=0.0, max_value=1.0)
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Amount', default_value=1.0,
-                 min_value=0.0, max_value=1.0, subtype='FACTOR')
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Mask', default_value=1.0,
-                 min_value=0.0, max_value=1.0)
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Clip', default_value=0.0,
-                 min_value=0.0, max_value=1.0, subtype='FACTOR')
-    b.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
-    b.add_socket('OUTPUT', 'NodeSocketFloat', 'Alpha')
-
-    b.add_node('in', 'NodeGroupInput')
-    b.add_node('out', 'NodeGroupOutput')
-    link = functools.partial(_link, b)
+    _mix_interface(b, 'Amount', (0.0, 0.0, 0.0, 0.0), 0.0)
     math = functools.partial(_math, b)
 
-    # kept: share of the filter that survives, 1 unclipped, ab clipped
-    b.add_node('kept', 'ShaderNodeMix', properties={
-        'data_type': 'FLOAT', 'clamp_factor': True,
-    }, inputs={MIX_IN_A_FLOAT: {'default_value': 1.0}})
-    b.link_nodes('in', 'kept', 'Clip', MIX_IN_FACTOR)
-    b.link_nodes('in', 'kept', 'Prev Alpha', MIX_IN_B_FLOAT)
-
+    kept = _kept(b)
     strength = math('strength', 'MULTIPLY', ('in', 'Amount'), ('in', 'Mask'), clamp=True)
-    applied = math('applied', 'MULTIPLY', strength, ('kept', MIX_OUT_FLOAT))
+    applied = math('applied', 'MULTIPLY', strength, kept)
     source_weight = math('source_weight', 'MULTIPLY', ('in', 'Alpha'), applied)
     backdrop_weight = math('backdrop_weight', 'MULTIPLY', ('in', 'Prev Alpha'),
                            math('backdrop_keep', 'SUBTRACT', 1.0, strength))
     alpha = math('alpha', 'ADD', source_weight, backdrop_weight)
     source_share = math('source_share', 'DIVIDE', source_weight, alpha)
 
-    b.add_node('composite', 'ShaderNodeMix', properties={
-        'data_type': 'RGBA', 'blend_type': 'MIX',
-        'clamp_factor': True, 'clamp_result': False,
-    })
-    link(source_share, 'composite', MIX_IN_FACTOR)
-    b.link_nodes('in', 'composite', 'Prev Color', MIX_IN_A_COLOR)
-    b.link_nodes('in', 'composite', 'Color', MIX_IN_B_COLOR)
-
-    b.link_nodes('composite', 'out', MIX_OUT_COLOR, 'Color')
-    link(alpha, 'out', 'Alpha')
-
+    _composite(b, source_share, ('in', 'Color'), alpha)
     b.build()
