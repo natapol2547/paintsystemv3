@@ -169,8 +169,9 @@ def running_on(node) -> bool:
 def cancel_all() -> None:
     """Abandon whatever is in flight, leaving its layer's pixels untouched.
 
-    Called from `undo_post`, `redo_post` and `load_post`. The build has
-    written nothing unless it reached its last unit, so there is no
+    Called before an undo, a redo or a file load, when the Update button
+    starts its own build, from the Cancel button, and on unregister. The
+    build writes nothing before its last unit, so there is no
     half-written image to clean up.
     """
     global _job
@@ -291,6 +292,11 @@ def _candidates():
     date, and switching it back on is what asks for the refresh -- see
     `PaintSystemFilterLayerNode._enabled_changed`, which cannot leave
     that to the compile it schedules.
+
+    A layer the Update button is already building is skipped too. Its
+    build's first unit compiles, which calls `notify`, so a long Update
+    would otherwise start a second build of the same layer. The commit
+    compiles again, and that asks for a refresh if one is still needed.
     """
     for tree in ps_trees():
         # The stack walks below are the expensive part, and most trees
@@ -302,8 +308,8 @@ def _candidates():
                 node = item.node
                 if getattr(node, 'ps_type', "") != 'FILTER':
                     continue
-                if (node.enabled and node.auto_refresh
-                        and not node.lock_layer and node.stale_reason):
+                if (node.enabled and node.auto_refresh and not node.lock_layer
+                        and node.stale_reason and not freshness.building(node.uuid)):
                     yield tree, node
 
 

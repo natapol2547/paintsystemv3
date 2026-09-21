@@ -50,6 +50,19 @@ def filter_layer(context, tree):
     return node
 
 
+def _resume_auto_refresh(node):
+    """After a successful Update, undo an automatic refresh that gave up.
+
+    When the auto job gives up on a layer it turns Auto Refresh off and
+    leaves a message telling the user to press Update. Nothing else sets
+    that message, so a message here means the job switched Auto Refresh
+    off, not the user, and a build that just worked should switch it back.
+    """
+    if node.derived_error:
+        node.derived_error = ""
+        node.auto_refresh = True
+
+
 class FilterLayerAction:
     """Shared poll of the two buttons, answering from flags only."""
 
@@ -92,7 +105,7 @@ class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
         except Refused as refusal:
             self.report({'WARNING'}, str(refusal))
             return {'CANCELLED'}
-        node.derived_error = ""
+        _resume_auto_refresh(node)
         self.report({'INFO'}, f"Built {image.name}")
         return {'FINISHED'}
 
@@ -133,7 +146,7 @@ class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
                 label, fraction = next(self._steps)
             except StopIteration as done:
                 self._stop(context)
-                self._node.derived_error = ""
+                _resume_auto_refresh(self._node)
                 self.report({'INFO'}, f"Built {done.value.name}")
                 return {'FINISHED'}
             except Refused as refusal:

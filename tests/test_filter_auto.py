@@ -353,6 +353,43 @@ if available():
         check("did not settle" in node.derived_error,
               f"and says so: {node.derived_error!r}")
 
+        section("Update after the job gave up")
+        # The message says to press Update, so an Update that works turns
+        # Auto Refresh back on as well as clearing the message.
+        bpy.context.scene.paint_system.active_node_tree = tree
+        tree.nodes.active = node
+        check(bpy.ops.paint_system.rebuild_filter_layer('EXEC_DEFAULT') == {'FINISHED'},
+              "Update builds the layer")
+        check(node.auto_refresh and node.derived_error == "",
+              f"and turns Auto Refresh back on: {node.auto_refresh}, {node.derived_error!r}")
+
+        # A user who switched Auto Refresh off keeps it off.
+        node.auto_refresh = False
+        check(bpy.ops.paint_system.rebuild_filter_layer('EXEC_DEFAULT') == {'FINISHED'},
+              "Update builds the layer again")
+        check(not node.auto_refresh, "and leaves an Auto Refresh the user turned off alone")
+        node.auto_refresh = True
+        core.flush_now()
+
+        section("an Update that takes a while")
+        # Update's first unit compiles, and the compile calls `notify`.
+        # The job must not start a second build of the layer Update is
+        # building while it is still running.
+        pump()
+        undo_pixels.write_pixels(picture.image, [0.6, 0.6, 0.1, 1.0] * 64)
+        core.flush_now()
+        run = layer_build.steps(bpy.context, tree, node)
+        next(run)
+        layer_job._deadline = 0.0
+        layer_job._tick()
+        check(not layer_job.running_on(node),
+              "the job leaves alone a layer another build is running on")
+        for _ in run:
+            pass
+        core.flush_now()
+        check(node.stale_reason == "", f"and the Update brings it up to date: {node.stale_reason!r}")
+        check(pump(), "with nothing left for the job to do")
+
     except Exception:
         traceback.print_exc()
         check(False, "unexpected exception")

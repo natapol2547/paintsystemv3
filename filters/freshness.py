@@ -148,9 +148,8 @@ def structure_reason(stored: str, parts: dict) -> str:
 
 # ── The pixel half ───────────────────────────────────────────────────
 
-# Node uuid to the builds of that layer in flight. More than one is
-# possible only in principle: the Update operator cancels the auto job
-# before it starts.
+# Node uuid to the number of builds of that layer in flight. The auto job
+# skips a layer listed here, so in practice the count is 0 or 1.
 _reading: dict[str, int] = {}
 # Node uuid to the strokes below that layer noticed so far. Only ever
 # compared with an earlier value of itself, so it is never reset.
@@ -174,6 +173,11 @@ def reading(uuid: str):
             _reading[uuid] = left
         else:
             del _reading[uuid]
+
+
+def building(uuid: str) -> bool:
+    """True while a build of the layer *uuid* is running."""
+    return uuid in _reading
 
 
 def changes(uuid: str) -> int:
@@ -200,7 +204,7 @@ def note_image_changed(uids) -> None:
         for node in tree.nodes:
             if getattr(node, 'ps_type', "") != 'FILTER':
                 continue
-            read = node.uuid in _reading
+            read = building(node.uuid)
             # A marked layer has nothing more to learn, unless a build of
             # it is running: that build may have read the pixels already.
             if node.derived_stale_pixels and not read:
