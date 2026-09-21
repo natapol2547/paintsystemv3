@@ -368,16 +368,6 @@ vec4 apply(ivec2 texel, vec4 c)
 )
 
 
-def apply_filter(spec: FilterSpec, image: bpy.types.Image, output, *, mask=None,
-                 params: dict | None = None) -> bool:
-    """Run *spec* over *image* and give the result to *output*.
-
-    Returns what the output reports: for `LayerImage`, whether the write
-    reached Blender's undo stack.
-    """
-    return apply_passes([(spec, params or {})], image, output, mask=mask)
-
-
 def apply_passes(passes, image: bpy.types.Image, output, *, mask=None) -> bool:
     """Run *passes* over *image* in order and give the result to *output*.
 

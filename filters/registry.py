@@ -168,8 +168,6 @@ vec4 apply(ivec2 texel, vec4 c)
 """,
 )
 
-FILTERS = {spec.name: spec for spec in (CLEAR, FILL, INVERT, BLUR, SHARPEN)}
-
 
 def blur_passes(sigma: float) -> list[dict]:
     """Push constants for the passes a gaussian blur of *sigma* texels needs.
