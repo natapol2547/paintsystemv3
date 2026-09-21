@@ -112,10 +112,14 @@ try:
     node.invert_alpha = False
     restamp(tree, node)
 
+    # Switching the kind changes its settings as well; the reason names
+    # the switch.
+    node.filter_type = 'PAINTERLY'
+    check(reason(tree, node) == "the filter changed",
+          f"another kind of filter: {reason(tree, node)!r}")
+    restamp(tree, node)
     # The painter has no passes to read its settings from, so it says
     # what its pixels depend on for itself.
-    node.filter_type = 'PAINTERLY'
-    restamp(tree, node)
     for name, value in (("painter_seed", 7), ("painter_brush", 'CIRCLE'),
                         ("painter_coverage", 30.0), ("painter_hue", 0.2)):
         previous = getattr(node, name)
