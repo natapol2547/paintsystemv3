@@ -230,14 +230,14 @@ def test_self_test():
     section("the view self-test chains match the reference")
     if not available():
         return
-    check(raster.view_self_test() is True, "view_self_test() passes")
+    check(view_raster.view_self_test() is True, "view_self_test() passes")
     for perspective_view in (False, True):
         scene = view_raster.self_test_scene(perspective_view)
         for through in (False, True):
             label = f"{'perspective' if perspective_view else 'orthographic'}, through {through}"
             want = reference.view_chain(scene, view_raster.self_test_ops(), through, view_raster.SELF_TEST_REGION)
             expected = {(x, y): value for (in_perspective, with_through, x, y), value
-                        in raster.SELF_TEST_VIEW_EXPECTED.items() if (in_perspective, with_through)
+                        in view_raster.SELF_TEST_VIEW_EXPECTED.items() if (in_perspective, with_through)
                         == (perspective_view, through)}
             stored = max(abs(want[y, x] - value) for (x, y), value in expected.items())
             check(len(expected) >= 5 and stored < 1e-12,
@@ -259,16 +259,16 @@ def test_self_test_failure():
     section("a GPU that fails the view self-test builds no VIEW masks, and UV masks still")
     if not available():
         return
-    expected = raster.SELF_TEST_VIEW_EXPECTED
+    expected = view_raster.SELF_TEST_VIEW_EXPECTED
     saved = dict(expected)
     view = look_at(EYE)
     view_selection = fresh_selection()
     add_view_op(view_selection, cube(), 'BOX', full_box(), view, perspective())
     try:
         expected[(True, False, 17, 15)] = 0.5
-        raster._view_self_test_result = None
+        view_raster._view_self_test_result = None
         raster.invalidate()
-        check(raster.view_self_test() is False, "with one expected value wrong, view_self_test() fails")
+        check(view_raster.view_self_test() is False, "with one expected value wrong, view_self_test() fails")
         check(failure(view_selection) == ('SELF_TEST', -1)
               and raster.availability(view_selection, (SIZE, SIZE)) == raster.MESSAGES['SELF_TEST'],
               f"a VIEW selection raises SELF_TEST and availability says so ({failure(view_selection)})")
@@ -281,9 +281,9 @@ def test_self_test_failure():
     finally:
         expected.clear()
         expected.update(saved)
-        raster._view_self_test_result = None
+        view_raster._view_self_test_result = None
         raster.invalidate()
-    check(raster.view_self_test() is True, "restored, it passes again")
+    check(view_raster.view_self_test() is True, "restored, it passes again")
 
 
 def test_cube_through():
@@ -798,7 +798,7 @@ def test_release():
     if not available():
         return
     raster.release()
-    check(not view_raster._targets and not view_raster._gpu and raster._view_self_test_result is None,
+    check(not view_raster._targets and not view_raster._gpu and view_raster._view_self_test_result is None,
           "no region targets, shaders or self-test result are held")
 
 

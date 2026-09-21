@@ -246,7 +246,8 @@ GPU passes build the mask at the image's size, or at a UDIM tile's.
   instead of wrong masks. A hard ellipse, cells wider than 32 texels,
   distance tables past one data texture row and tiles other than 1001
   are not checked. `VIEW` ops have a self-test of their own
-  (`view_self_test`, PS-093), run before the first build that holds one;
+  (`view_raster.view_self_test`, PS-093), run before the first build
+  that holds one;
   its failure gives only `VIEW` selections `SELF_TEST`.
 - The stencil file is named by the same digest the session uses,
   surface keys included, so a `VIEW` selection gets a new file after its

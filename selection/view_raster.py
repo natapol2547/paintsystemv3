@@ -27,7 +27,7 @@ multiplies it by the inverse of the object's world matrix now, so the
 selection stays on the texels it was drawn over when the object moves.
 The eye comes from `view_eye`.
 
-`raster.view_self_test` renders `self_test_chain` for the orthographic
+`view_self_test` renders `self_test_chain` for the orthographic
 and perspective scenes with and without Through against float64 values
 from `tests/selection_reference.py`. It cannot catch dropping only one of
 the two depth slope terms, `REACH_PAD`, or a smooth normal used for facing
@@ -601,7 +601,77 @@ def self_test_chain(through: bool, perspective: bool, band_rows: int = 16) -> np
         surface = view = specs = None
 
 
+SELF_TEST_VIEW_EXPECTED = {
+    (False, False, 10, 0): 0.25,
+    (False, False, 21, 0): 0.75,
+    (False, False, 25, 6): 0.9466509384707502,
+    (False, False, 24, 9): 0.32307476618676945,
+    (False, False, 25, 17): 0.5319478811371541,
+    (False, False, 3, 22): 0.0,
+    (False, False, 4, 22): 0.0,
+    (False, False, 27, 29): 0.47188818359375023,
+    (False, True, 19, 3): 0.7749872597643838,
+    (False, True, 19, 8): 0.13065546209896384,
+    (False, True, 25, 17): 0.5319478811371541,
+    (False, True, 27, 22): 0.47188818359375023,
+    (False, True, 27, 29): 0.47188818359375023,
+    (True, False, 7, 0): 0.4816929503255505,
+    (True, False, 24, 0): 0.6957518555167337,
+    (True, False, 7, 8): 0.8943933631298719,
+    (True, False, 17, 15): 0.9041868346355607,
+    (True, False, 0, 22): 0.0,
+    (True, False, 1, 22): 0.0,
+    (True, False, 8, 29): 1.0,
+    (True, False, 9, 29): 1.0,
+    (True, False, 29, 31): 0.4280356519898755,
+    (True, True, 24, 0): 0.6957518555167337,
+    (True, True, 17, 15): 0.9041868346355607,
+    (True, True, 0, 22): 0.32114357833544815,
+    (True, True, 1, 22): 0.907121219365551,
+    (True, True, 29, 31): 0.4280356519898755,
+}
+"""(perspective, through, x, y) to the value of `self_test_chain` at texel
+(x, y), computed in float64 by `tests/selection_reference.py`. Rows 0 to
+13 are the floor, 15 to 20 the occluder, 22 to 27 the back quad and 29
+to 31 the margin. Each chain has at least two texels that a wrong
+bilinear read, smoothstep, mode, projection flip or distance sign
+changes by more than 1e-3; with Through off also a wrong facing, margin
+rule, depth tap, depth bias or slope, in perspective also `d` used for
+`-1/d` in either pass and a missing perspective divide, and with Through
+on the Through flag ignored."""
+
+_view_self_test_result: bool | None = None
+
+
+def view_self_test() -> bool | None:
+    """Whether this GPU draws `VIEW` ops correctly. Run once per session, on the first `VIEW` build.
+
+    Renders `self_test_chain` for the orthographic and the perspective
+    scene, each with Through off and on, and compares them with
+    `SELF_TEST_VIEW_EXPECTED` within `raster.SELF_TEST_TOLERANCE`. A
+    failure blocks `VIEW` ops only, with `SELF_TEST`: the view passes use
+    a uniform buffer, a depth target and a depth pass that selections
+    drawn in UV space never touch. The module docstring says what it
+    cannot catch. None and exceptions as in `raster.self_test`.
+    """
+    global _view_self_test_result
+    if _view_self_test_result is None:
+        chains = []
+        for perspective in (False, True):
+            for through in (False, True):
+                expected = {(x, y): value for (in_perspective, with_through, x, y), value
+                            in SELF_TEST_VIEW_EXPECTED.items()
+                            if (in_perspective, with_through) == (perspective, through)}
+                label = f"the {'perspective' if perspective else 'orthographic'} view, through {through}"
+                chains.append((label, lambda through=through, perspective=perspective:
+                               self_test_chain(through, perspective), expected))
+        _view_self_test_result = raster._run_self_test("view selection", chains)
+    return _view_self_test_result
+
+
 def release() -> None:
-    """Free the shaders and region targets; `raster.release` calls it."""
+    """Free the shaders and region targets and forget the self-test result; `raster.release` calls it."""
+    global _view_self_test_result
     _gpu.clear()
     _targets.clear()
+    _view_self_test_result = None

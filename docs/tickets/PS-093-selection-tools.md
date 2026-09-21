@@ -545,10 +545,11 @@ rename keeps working and undoing the delete brings the selection back.
 
 ### Self-test
 
-`raster.view_self_test()` runs `view_raster.self_test_chain` for an
-orthographic and a perspective scene (view depth 1.50–2.27), each with
-and without Through, and compares 32 x 32 results with float64 values
-from `tests/selection_reference.py` within `SELF_TEST_TOLERANCE` (1e-4).
+`view_raster.view_self_test()` runs `view_raster.self_test_chain` for
+an orthographic and a perspective scene (view depth 1.50–2.27), each
+with and without Through, and compares 32 x 32 results with float64
+values from `tests/selection_reference.py` within
+`raster.SELF_TEST_TOLERANCE` (1e-4).
 It is memoised apart from PS-091's self-test: a failure gives `VIEW` ops
 `SELF_TEST` for the session and leaves `UV` selections working. The
 worst error measured is 2.5e-6 orthographic and 4.0e-6 perspective.
