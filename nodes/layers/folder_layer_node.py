@@ -2,7 +2,7 @@ from bpy.types import Node
 from bpy.props import BoolProperty
 from bpy.utils import register_classes_factory
 
-from .base_layer_node import PaintSystemLayerNode
+from .base_layer_node import PaintSystemLayerNode, new_hidden_input
 from ...common import blender_icon, icon_kwargs
 
 
@@ -31,12 +31,8 @@ class PaintSystemFolderLayerNode(PaintSystemLayerNode, Node):
 
     def init(self, context):
         super().init(context)
-        color_in = self.inputs.new('NodeSocketColor', "Content Color")
-        color_in.default_value = (0, 0, 0, 0)
-        color_in.hide_value = True
-        alpha_in = self.inputs.new('NodeSocketFloat', "Content Alpha")
-        alpha_in.default_value = 0.0
-        alpha_in.hide_value = True
+        new_hidden_input(self, 'NodeSocketColor', "Content Color", (0, 0, 0, 0))
+        new_hidden_input(self, 'NodeSocketFloat', "Content Alpha", 0.0)
 
     def draw_row_icon(self, layout):
         icon = 'folder_open' if self.is_expanded else 'folder'

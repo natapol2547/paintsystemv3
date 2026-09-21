@@ -6,8 +6,8 @@ from bpy.props import (BoolProperty, EnumProperty, FloatProperty, IntProperty,
                        PointerProperty, StringProperty)
 from bpy.utils import register_classes_factory
 
-from .base_layer_node import (PaintSystemLayerNode, draw_uv_map, emit_image_texture, emit_mix_group,
-                              update_painting)
+from .base_layer_node import (EMPTY_SOURCE, PaintSystemLayerNode, draw_uv_map, emit_image_texture,
+                              emit_mix_group, update_painting)
 from ..base_node import mark_tree_dirty
 from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
@@ -388,7 +388,7 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         image = self.derived_image
         self._note_stale(ctx, image)
         if not is_built(image):
-            return (0.0, 0.0, 0.0, 1.0), 0.0
+            return EMPTY_SOURCE
         # The UV map stamped on the image, not the authored one: changing
         # the setting relocates nothing until the rebuild runs.
         return emit_image_texture(ctx, self, 'result', image, stamped_uv_map(image))

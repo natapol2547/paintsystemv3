@@ -4,7 +4,8 @@ from bpy.types import Node
 from bpy.props import PointerProperty, StringProperty
 from bpy.utils import register_classes_factory
 
-from .base_layer_node import PaintSystemLayerNode, draw_uv_map, emit_image_texture, update_tree_and_painting
+from .base_layer_node import (EMPTY_SOURCE, PaintSystemLayerNode, draw_uv_map, emit_image_texture,
+                              update_tree_and_painting)
 from ...common import blender_icon
 from ...compiler.bake import create_managed_image
 
@@ -58,7 +59,7 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
 
     def emit_source(self, ctx):
         if self.image is None:
-            return (0.0, 0.0, 0.0, 1.0), 0.0
+            return EMPTY_SOURCE
         return emit_image_texture(ctx, self, 'tex', self.image, self.uv_map)
 
 

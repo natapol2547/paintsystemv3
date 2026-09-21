@@ -26,6 +26,18 @@ for blend_mode in bpy.types.ShaderNodeMix.bl_rna.properties['blend_type'].enum_i
         BLEND_MODE_ITEMS.append(None)
 
 
+# What a layer with no content emits: fully transparent, so the stack below shows through.
+EMPTY_SOURCE = ((0.0, 0.0, 0.0, 1.0), 0.0)
+
+
+def new_hidden_input(node, socket_type: str, name: str, default):
+    """Add an input to *node* that is linked, never edited, so it shows no value field."""
+    socket = node.inputs.new(socket_type, name)
+    socket.default_value = default
+    socket.hide_value = True
+    return socket
+
+
 def draw_uv_map(context, layout, node):
     """Draw *node*'s ``uv_map`` field, as a search of the active mesh's UV maps when there is one."""
     obj = getattr(context, 'object', None)
@@ -151,15 +163,9 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
 
     def init(self, context):
         super().init(context)
-        color_in = self.inputs.new('NodeSocketColor', "Color")
-        color_in.default_value = (0, 0, 0, 0)
-        color_in.hide_value = True
-        alpha_in = self.inputs.new('NodeSocketFloat', "Alpha")
-        alpha_in.default_value = 0.0
-        alpha_in.hide_value = True
-        mask_in = self.inputs.new('NodeSocketFloat', "Mask")
-        mask_in.default_value = 1.0
-        mask_in.hide_value = True
+        new_hidden_input(self, 'NodeSocketColor', "Color", (0, 0, 0, 0))
+        new_hidden_input(self, 'NodeSocketFloat', "Alpha", 0.0)
+        new_hidden_input(self, 'NodeSocketFloat', "Mask", 1.0)
         self.outputs.new('NodeSocketColor', "Color")
         self.outputs.new('NodeSocketFloat', "Alpha")
 
@@ -224,7 +230,7 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
 
     def emit_source(self, ctx):
         """Return (color, alpha): IR refs or constants for this layer's own content."""
-        return (0.0, 0.0, 0.0, 1.0), 0.0
+        return EMPTY_SOURCE
 
     def emit(self, ctx):
         if ctx.is_cached(self):
