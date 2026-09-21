@@ -204,6 +204,23 @@ def square(mask: np.ndarray) -> np.ndarray:
     return padded
 
 
+def _sample_axes(src_h: int, src_w: int, side: int):
+    """Where a bilinear resize from *src_h* by *src_w* to *side* samples.
+
+    Returns ``(y, x, y0, x0, y1, x1)``: the float32 sample positions on
+    each axis, and the int32 texels either side of them, clamped to the
+    edge. `resize_bilinear`, `covered_area` and `resize` all read these,
+    so the count and the drawn stamp land on the same texels.
+    """
+    y = np.linspace(0, src_h - 1, side, dtype=np.float32)
+    x = np.linspace(0, src_w - 1, side, dtype=np.float32)
+    y0 = np.floor(y).astype(np.int32)
+    x0 = np.floor(x).astype(np.int32)
+    y1 = np.minimum(y0 + 1, src_h - 1)
+    x1 = np.minimum(x0 + 1, src_w - 1)
+    return y, x, y0, x0, y1, x1
+
+
 def resize_bilinear(mask: np.ndarray, side: int) -> np.ndarray:
     """v2's `_resize_mask_bilinear` to *side* by *side*, which the count is taken on.
 
@@ -218,12 +235,7 @@ def resize_bilinear(mask: np.ndarray, side: int) -> np.ndarray:
         return mask.astype(np.float32, copy=True)
     if side <= 1:
         return np.full((1, 1), float(mask.mean()), dtype=np.float32)
-    y = np.linspace(0, src_h - 1, side, dtype=np.float32)
-    x = np.linspace(0, src_w - 1, side, dtype=np.float32)
-    y0 = np.floor(y).astype(np.int32)
-    x0 = np.floor(x).astype(np.int32)
-    y1 = np.minimum(y0 + 1, src_h - 1)
-    x1 = np.minimum(x0 + 1, src_w - 1)
+    y, x, y0, x0, y1, x1 = _sample_axes(src_h, src_w, side)
     wy = (y - y0)[:, None]
     wx = (x - x0)[None, :]
     top = mask[y0[:, None], x0[None, :]] * (1.0 - wx) + mask[y0[:, None], x1[None, :]] * wx
@@ -264,13 +276,7 @@ def covered_area(mask: np.ndarray, side: int, inside: np.ndarray | None) -> int:
         return int(np.count_nonzero(inside))
     if side <= 1:
         return int(np.float32(mask.mean()) > 0)
-    # The positions `resize_bilinear` samples, computed the same way.
-    y = np.linspace(0, src_h - 1, side, dtype=np.float32)
-    x = np.linspace(0, src_w - 1, side, dtype=np.float32)
-    y0 = np.floor(y).astype(np.int32)
-    x0 = np.floor(x).astype(np.int32)
-    y1 = np.minimum(y0 + 1, src_h - 1)
-    x1 = np.minimum(x0 + 1, src_w - 1)
+    y, x, y0, x0, y1, x1 = _sample_axes(src_h, src_w, side)
     rows = inside.take(y0, axis=0)
     rows |= inside.take(y1, axis=0) & (y != y0)[:, None]
     hit = rows.take(x0, axis=1)
@@ -334,12 +340,7 @@ def resize(mask: np.ndarray, side: int) -> np.ndarray:
     if side <= 1:
         return np.full((1, 1), float(mask.mean()), dtype=np.float32)
     src_h, src_w = mask.shape
-    y = np.linspace(0, src_h - 1, side, dtype=np.float32)
-    x = np.linspace(0, src_w - 1, side, dtype=np.float32)
-    y0 = np.floor(y).astype(np.int32)
-    x0 = np.floor(x).astype(np.int32)
-    y1 = np.minimum(y0 + 1, src_h - 1)
-    x1 = np.minimum(x0 + 1, src_w - 1)
+    y, x, y0, x0, y1, x1 = _sample_axes(src_h, src_w, side)
     wy = (y - y0.astype(np.float32))[:, None]
     wx = (x - x0.astype(np.float32))[None, :]
     rows = mask[y0] * (np.float32(1.0) - wy) + mask[y1] * wy
