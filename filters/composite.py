@@ -40,7 +40,7 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
-from ..gpu_passes.core import offscreen_state, read_color
+from ..gpu_passes.core import offscreen_state
 from ..nodetree.stack_ops import (clip_base, feeding_link, feeds_clip_run,
                                   layers_down_from, link_index)
 from . import blend_glsl, derived
@@ -323,24 +323,14 @@ class Pool:
         self._free.clear()
 
 
-def composite_below(plan: ChainPlan, size: tuple[int, int], *, pool: Pool | None = None):
-    """Draw *plan* into one `RGBA16F` texture of *size* and return it.
+def composite_below(plan: ChainPlan, pool: Pool):
+    """Draw *plan* into one of *pool*'s `RGBA16F` textures, and return it.
 
     The result holds straight alpha and scene-linear colour, the same as
     the shader graph carries, so a filter pass over it and the render
     engines are looking at the same picture.
-
-    Pass a `Pool` to reuse the targets across several composites, or to
-    see how many the GPU actually had to allocate.
     """
-    own = pool is None
-    if pool is None:
-        pool = Pool(size)
-    try:
-        return _draw_chain(plan, pool)
-    finally:
-        if own:
-            pool.close()
+    return _draw_chain(plan, pool)
 
 
 def _draw_chain(plan: ChainPlan, pool: Pool):
@@ -417,12 +407,6 @@ def _draw_blend(pool: Pool, backdrop, source, step: LayerStep, *, clip: bool):
                           mode=step.blend_mode, opacity=step.strength * step.mask,
                           clip=clip)
     return target
-
-
-def read_texture(texture, size: tuple[int, int]):
-    """*texture* as a ``(height, width, 4)`` float array, row 0 at the bottom."""
-    framebuffer = gpu.types.GPUFrameBuffer(color_slots=(texture,))
-    return read_color(framebuffer, size[0], size[1])
 
 
 def release() -> None:

@@ -20,6 +20,7 @@ import sys
 import traceback
 
 import bpy
+import gpu
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -55,10 +56,16 @@ def available():
     return False
 
 
-def composited(node, pool=None):
+def composited(node):
+    """The stack below *node*, composited, as a ``(SIZE, SIZE, 4)`` float array."""
     plan = composite.plan_below(node)
-    texture = composite.composite_below(plan, (SIZE, SIZE), pool=pool)
-    return composite.read_texture(texture, (SIZE, SIZE))
+    pool = composite.Pool((SIZE, SIZE))
+    try:
+        texture = composite.composite_below(plan, pool)
+        framebuffer = gpu.types.GPUFrameBuffer(color_slots=(texture,))
+        return gpu_core.read_color(framebuffer, SIZE, SIZE)
+    finally:
+        pool.close()
 
 
 def compare(tree, node, label):
@@ -221,12 +228,12 @@ if available():
         core.flush_now()
         pool = composite.Pool((SIZE, SIZE))
         plan = composite.plan_below(top)
-        result = composite.composite_below(plan, (SIZE, SIZE), pool=pool)
+        result = composite.composite_below(plan, pool)
         check(pool.made <= 6, f"{len(plan.layers)} layers deep, "
                               f"{len(plan.images)} images, {pool.made} targets allocated")
         pool.release(result)
         before = pool.made
-        composite.composite_below(plan, (SIZE, SIZE), pool=pool)
+        composite.composite_below(plan, pool)
         check(pool.made == before, "a second composite through the same pool allocates none")
         pool.close()
         result = None

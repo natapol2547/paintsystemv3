@@ -60,13 +60,13 @@ log = logging.getLogger(__name__)
 READ_ROWS = BAND_ROWS
 
 
-def build_layer(context, tree, node, *, plan=None) -> bpy.types.Image:
+def build_layer(context, tree, node) -> bpy.types.Image:
     """Build *node*'s derived image, running `steps` to the end.
 
     For a script and for a test. An operator drives `steps` itself, so
     that it can show progress and be cancelled.
     """
-    run = steps(context, tree, node, plan=plan)
+    run = steps(context, tree, node)
     while True:
         try:
             next(run)
@@ -121,7 +121,7 @@ def steps(context, tree, node, *, plan=None):
         filtered = 0.3 if kind.build is None else 0.8
         pool = composite.Pool(size)
         try:
-            current = composite.composite_below(plan.chain, size, pool=pool)
+            current = composite.composite_below(plan.chain, pool)
             if kind.build is not None:
                 current = yield from _built(kind, settings, current, pool, 0.2, filtered)
             else:

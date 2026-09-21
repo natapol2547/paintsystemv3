@@ -61,7 +61,6 @@ class InputPlan:
     source: bpy.types.Node
     chain: composite.ChainPlan | None
     uv_map: str
-    obj: bpy.types.Object | None
     reason: str
 
     @property
@@ -130,7 +129,7 @@ def resolve_input(context, tree, node) -> InputPlan:
     if authored == {""}:
         # Every layer renders through the active render UV map, so they
         # agree whatever it is and no mesh has to be asked.
-        return InputPlan(COMPOSITE, source, chain, "", obj, "")
+        return InputPlan(COMPOSITE, source, chain, "", "")
     if obj is None:
         raise Refused(f"The layers below '{node.name}' name a UV map, so filtering them "
                       "needs an active mesh object to resolve it against")
@@ -142,7 +141,7 @@ def resolve_input(context, tree, node) -> InputPlan:
         names = sorted(resolved)
         raise Refused(f"Layers below use different UV maps ({names[0]!r} and {names[1]!r}), "
                       "so filtering them needs a Cycles bake")
-    return InputPlan(COMPOSITE, source, chain, resolved.pop(), obj, "")
+    return InputPlan(COMPOSITE, source, chain, resolved.pop(), "")
 
 
 def _bake_plan(node, source, obj, reason: str) -> InputPlan:
@@ -154,4 +153,4 @@ def _bake_plan(node, source, obj, reason: str) -> InputPlan:
     if resolved is None:
         raise Refused(f"Filtering the layers below '{node.name}' needs a Cycles bake, "
                       f"and '{obj.name}' has no UV map named {node.uv_map!r}")
-    return InputPlan(BAKE, source, None, resolved, obj, reason)
+    return InputPlan(BAKE, source, None, resolved, reason)

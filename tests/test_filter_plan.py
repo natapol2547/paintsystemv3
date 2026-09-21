@@ -133,8 +133,8 @@ try:
     plan = layer_plan.resolve_input(FakeContext(plane), tree, node)
     check(plan.path == layer_plan.BAKE and group.name in plan.reason,
           f"a group layer below: {plan.path} -- {plan.reason}")
-    check(plan.obj == plane and plan.uv_map == "UVMap",
-          f"the bake plan carries the object and its resolved UV map ({plan.uv_map!r})")
+    check(plan.uv_map == "UVMap",
+          f"the bake plan carries the UV map resolved on the active object ({plan.uv_map!r})")
 
     message = refusal(FakeContext(), tree, node)
     check("active mesh object" in message,
