@@ -169,6 +169,10 @@ def _passes(context, action: str, target: ActionTarget, channels, sigma, strengt
             "encode": int(target.image.is_float),
         })]
     blur = [(registry.BLUR, params) for params in registry.blur_passes(sigma)]
+    if blur and _stores_srgb_bytes(target.image):
+        # Blur in linear light, as a float layer and a filter layer do,
+        # so the same blur looks the same on every kind of layer.
+        blur = [(registry.DECODE_SRGB, {}), *blur, (registry.ENCODE_SRGB, {})]
     if action == BLUR:
         return blur
     if action == SHARPEN:
@@ -179,6 +183,11 @@ def _passes(context, action: str, target: ActionTarget, channels, sigma, strengt
         return blur + [(registry.SHARPEN, {"strength": strength,
                                            "encode": int(target.image.is_float)})]
     raise ValueError(f"Unknown action {action!r}")
+
+
+def _stores_srgb_bytes(image) -> bool:
+    """Whether *image* holds sRGB-encoded bytes rather than linear or data values."""
+    return not image.is_float and image.colorspace_settings.name == 'sRGB'
 
 
 def run_action(context, action: str, *, channels=(True, True, True, False),

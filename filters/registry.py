@@ -7,9 +7,10 @@ write back. A spec that needs a second texture as well as the one it is
 drawing over, such as the unsharp mask, sets ``reads_second`` and the
 caller binds it.
 
-`ENCODE_SRGB` is here too, though nobody chooses it. The filter layer
-build and the painter both need it, and the painter cannot import it
-from `layer_build`, which reaches the painter through `layer_specs`.
+`ENCODE_SRGB` and `DECODE_SRGB` are here too, though nobody chooses
+them. The filter layer build and the painter need the encode, the Blur
+and Sharpen actions need both, and the painter cannot import them from
+`layer_build`, which reaches the painter through `layer_specs`.
 """
 from math import ceil
 
@@ -164,6 +165,19 @@ ENCODE_SRGB = FilterSpec(
 vec4 apply(ivec2 texel, vec4 c)
 {
   return vec4(ps_to_srgb(clamp(c.rgb, 0.0, 1.0)), clamp(c.a, 0.0, 1.0));
+}
+""",
+)
+
+DECODE_SRGB = FilterSpec(
+    name="decode_srgb",
+    apply_source="""
+/* sRGB in, scene linear out: the reverse of `encode_srgb`. The Blur and
+   Sharpen actions put a byte layer's blur between the two, so that it
+   blurs in linear light like a float layer and a filter layer do. */
+vec4 apply(ivec2 texel, vec4 c)
+{
+  return vec4(ps_to_linear(c.rgb), c.a);
 }
 """,
 )

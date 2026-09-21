@@ -366,6 +366,31 @@ def test_blur_is_limited_to_the_selection():
     t.selection.clear()
 
 
+def test_blur_runs_in_linear_light():
+    section("a blur on a byte layer mixes light, as on a float or a filter layer")
+    if not available():
+        return
+    # Black and white stripes one texel wide blur to half the light,
+    # which sRGB stores as byte 188. A blur of the stored bytes would
+    # give their average, 128.
+    stripes = np.zeros((SIZE, SIZE, 4), dtype=np.float32)
+    stripes[:, ::2, :3] = 1.0
+    stripes[..., 3] = 1.0
+    reset()
+    paint_pixels(stripes)
+    check(bpy.ops.paint_system.blur_pixels(radius=3.0) == {'FINISHED'}, "Blur reports finished")
+    middle = as_bytes(read().reshape(SIZE, SIZE, 4)[8:-8, 8:-8, :3])
+    check(abs(middle.mean() - 188) < 2 and middle.max() - middle.min() <= 4,
+          f"the stripes blur to byte 188: {middle.min()} to {middle.max()}, mean {middle.mean():.1f}")
+
+    # The trip into linear and back must not move a byte where there is
+    # nothing to blur.
+    flat = np.tile(np.array([23, 97, 201, 255], dtype=np.float32) / 255.0, SIZE * SIZE)
+    paint_pixels(flat)
+    bpy.ops.paint_system.blur_pixels(radius=3.0)
+    check(np.array_equal(as_bytes(read()), as_bytes(flat)), "and a flat colour keeps its bytes")
+
+
 def test_sharpen_runs_and_a_zero_radius_refuses():
     section("sharpen, and the radius that would do nothing")
     if not available():
@@ -392,6 +417,7 @@ for test in (test_clear_covers_the_whole_layer,
              test_a_selection_that_misses_the_layer_does_nothing,
              test_undo_takes_one_step,
              test_blur_is_limited_to_the_selection,
+             test_blur_runs_in_linear_light,
              test_sharpen_runs_and_a_zero_radius_refuses,
              test_refusals,
              test_a_live_cache_refuses):
