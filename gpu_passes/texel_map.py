@@ -255,8 +255,8 @@ class _PositionBatch:
 
 # ('map', session_uid, uv_map, width, height, tile, margin, matrix, surface key) -> TexelMap
 # ('batch', session_uid, uv_map, matrix, surface key) -> _PositionBatch
+# Kept in use order, least recently used first.
 _cache: dict[tuple, TexelMap | _PositionBatch] = {}
-_recent: list[tuple] = []
 # One extraction a map miss and a batch miss for the same surface share
 # within a build: (session_uid, uv_map, matrix, surface key) and the
 # arrays, dropped on the next timer tick.
@@ -292,16 +292,15 @@ def _forget_pending_arrays() -> None:
 
 
 def _lookup(key: tuple):
-    cached = _cache.get(key)
+    # Re-inserting moves the entry to the end, the most recently used.
+    cached = _cache.pop(key, None)
     if cached is not None:
-        _recent.remove(key)
-        _recent.append(key)
+        _cache[key] = cached
     return cached
 
 
 def _store(key: tuple, item) -> None:
     _cache[key] = item
-    _recent.append(key)
     _evict()
 
 
@@ -371,9 +370,8 @@ def _evict() -> None:
     whole budget is still usable.
     """
     total = sum(item.video_memory for item in _cache.values())
-    while total > CACHE_BUDGET and len(_recent) > 1:
-        key = _recent.pop(0)
-        total -= _cache.pop(key).video_memory
+    while total > CACHE_BUDGET and len(_cache) > 1:
+        total -= _cache.pop(next(iter(_cache))).video_memory
 
 
 def invalidate(session_uid: int | None = None) -> None:
@@ -382,11 +380,9 @@ def invalidate(session_uid: int | None = None) -> None:
     _pending_arrays = None
     if session_uid is None:
         _cache.clear()
-        _recent.clear()
         return
     for key in [key for key in _cache if key[1] == session_uid]:
         del _cache[key]
-        _recent.remove(key)
 
 
 def release() -> None:

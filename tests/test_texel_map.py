@@ -367,6 +367,19 @@ def test_cache_budget():
               f"the older map was evicted, {cached()} cached")
         check(texel_map.get_texel_map(obj, "", (64, 64)) is not first,
               "the evicted map is rebuilt on the next request")
+
+        # Room for two maps: a lookup makes a map the most recently used,
+        # so the map built between is the one a third map evicts.
+        texel_map.invalidate()
+        texel_map.CACHE_BUDGET = 2 * 64 * 64 * 24 + 1
+        first = texel_map.get_texel_map(obj, "", (64, 64))
+        second = texel_map.get_texel_map(obj, "", (64, 64), tile=1002)
+        texel_map.get_texel_map(obj, "", (64, 64))
+        texel_map.get_texel_map(obj, "", (64, 64), tile=1003)
+        check(texel_map.get_texel_map(obj, "", (64, 64)) is first,
+              "the map looked up last survives the eviction")
+        check(texel_map.get_texel_map(obj, "", (64, 64), tile=1002) is not second,
+              "the least recently used map is the one evicted")
     finally:
         texel_map.CACHE_BUDGET = budget
         texel_map.invalidate()
