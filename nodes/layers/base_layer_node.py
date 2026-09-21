@@ -26,6 +26,15 @@ for blend_mode in bpy.types.ShaderNodeMix.bl_rna.properties['blend_type'].enum_i
         BLEND_MODE_ITEMS.append(None)
 
 
+def draw_uv_map(context, layout, node):
+    """Draw *node*'s ``uv_map`` field, as a search of the active mesh's UV maps when there is one."""
+    obj = getattr(context, 'object', None)
+    if obj is not None and obj.type == 'MESH':
+        layout.prop_search(node, "uv_map", obj.data, "uv_layers", text="UV")
+    else:
+        layout.prop(node, "uv_map")
+
+
 def emit_image_texture(ctx, node, role: str, image, uv_map: str = ""):
     """Emit an Image Texture (plus UV Map when set). Returns (color_ref, alpha_ref)."""
     tid = ctx.emit_node(node, role, 'ShaderNodeTexImage', properties={

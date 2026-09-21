@@ -6,7 +6,8 @@ from bpy.props import (BoolProperty, EnumProperty, FloatProperty, IntProperty,
                        PointerProperty, StringProperty)
 from bpy.utils import register_classes_factory
 
-from .base_layer_node import PaintSystemLayerNode, emit_image_texture, emit_mix_group, update_painting
+from .base_layer_node import (PaintSystemLayerNode, draw_uv_map, emit_image_texture, emit_mix_group,
+                              update_painting)
 from ..base_node import mark_tree_dirty
 from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
@@ -313,11 +314,7 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             for name in names:
                 column.prop(self, name)
         layout.prop(self, "resolution")
-        obj = getattr(context, 'object', None)
-        if obj is not None and obj.type == 'MESH':
-            layout.prop_search(self, "uv_map", obj.data, "uv_layers", text="UV")
-        else:
-            layout.prop(self, "uv_map")
+        draw_uv_map(context, layout, self)
         self.draw_result_settings(context, layout)
 
     def draw_result_settings(self, context, layout):

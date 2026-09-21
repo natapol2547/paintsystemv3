@@ -4,7 +4,7 @@ from bpy.types import Node
 from bpy.props import PointerProperty, StringProperty
 from bpy.utils import register_classes_factory
 
-from .base_layer_node import PaintSystemLayerNode, emit_image_texture, update_tree_and_painting
+from .base_layer_node import PaintSystemLayerNode, draw_uv_map, emit_image_texture, update_tree_and_painting
 from ...common import blender_icon
 from ...compiler.bake import create_managed_image
 
@@ -48,11 +48,7 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
 
     def draw_source_settings(self, context, layout):
         layout.template_ID(self, "image", new="image.new", open="image.open")
-        obj = getattr(context, 'object', None)
-        if obj is not None and obj.type == 'MESH':
-            layout.prop_search(self, "uv_map", obj.data, "uv_layers", text="UV")
-        else:
-            layout.prop(self, "uv_map")
+        draw_uv_map(context, layout, self)
 
     def draw_label(self):
         super().draw_label()
