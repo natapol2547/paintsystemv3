@@ -4,7 +4,7 @@ import bpy
 from bpy.types import Menu, Panel, UIList
 
 from ..common import icon_kwargs
-from ..context import parse_context
+from ..context import get_active_tree, node_editor_tree, parse_context
 from ..nodes.layers.registry import layer_types
 from ..nodetree.stack_ops import is_layer
 
@@ -186,8 +186,8 @@ class PAINTSYSTEM_PT_layers_3dview(LayersPanel, Panel):
 
     @classmethod
     def poll(cls, context):
-        ps = parse_context(context)
-        return ps.tree is not None and ps.channel is not None
+        tree = get_active_tree(context)
+        return tree is not None and tree.active_channel is not None
 
 
 class PAINTSYSTEM_PT_layers_node_editor(LayersPanel, Panel):
@@ -196,10 +196,8 @@ class PAINTSYSTEM_PT_layers_node_editor(LayersPanel, Panel):
 
     @classmethod
     def poll(cls, context):
-        space = context.space_data
-        tree = getattr(space, 'edit_tree', None)
-        return (space.tree_type == 'PaintSystemNodeTree' and tree is not None
-                and tree.active_channel is not None)
+        tree = node_editor_tree(context)
+        return tree is not None and tree.active_channel is not None
 
 
 classes = (

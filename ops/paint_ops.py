@@ -2,7 +2,7 @@ import bpy
 from bpy.types import Operator
 from bpy.utils import register_classes_factory
 
-from ..context import parse_context, update_active_image
+from ..context import get_ps_object, update_active_image
 
 
 class PAINTSYSTEM_OT_toggle_paint_mode(Operator):
@@ -13,10 +13,10 @@ class PAINTSYSTEM_OT_toggle_paint_mode(Operator):
 
     @classmethod
     def poll(cls, context):
-        return parse_context(context).ps_object is not None
+        return get_ps_object(getattr(context, 'object', None)) is not None
 
     def execute(self, context):
-        obj = parse_context(context).ps_object
+        obj = get_ps_object(context.object)
         context.view_layer.objects.active = obj
         obj.select_set(True)
         if obj.mode != 'OBJECT':

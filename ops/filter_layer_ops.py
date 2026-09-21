@@ -28,7 +28,7 @@ import bpy
 from bpy.types import Operator
 from bpy.utils import register_classes_factory
 
-from ..context import get_active_tree
+from ..context import button_layer, get_active_tree
 from ..filters import layer_build, layer_job
 from ..filters.core import Refused
 from ..gpu_passes.core import gpu_known
@@ -42,12 +42,8 @@ BUDGET = 0.05
 
 def filter_layer(context, tree):
     """The filter layer the buttons act on: the node editor's, or the active one."""
-    node = getattr(context, 'node', None)
-    if node is None and tree is not None:
-        node = tree.nodes.active
-    if node is None or getattr(node, 'ps_type', None) != 'FILTER':
-        return None
-    return node
+    node = button_layer(context, tree)
+    return node if node is not None and node.ps_type == 'FILTER' else None
 
 
 def _resume_auto_refresh(node):

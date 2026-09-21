@@ -2,18 +2,9 @@ from bpy.types import Operator
 from bpy.props import EnumProperty, IntProperty, StringProperty
 from bpy.utils import register_classes_factory
 
-from ..context import get_active_tree
+from ..context import button_layer, get_active_tree
 from ..compiler.bake import bake_node_cache
 from .node_tree_ops import RESOLUTION_ITEMS
-
-
-def _target_node(context, tree):
-    node = getattr(context, 'node', None)
-    if node is None and tree is not None:
-        node = tree.nodes.active
-    if node is None or not getattr(node, 'is_layer_node', False):
-        return None
-    return node
 
 
 class PAINTSYSTEM_OT_bake_cache(Operator):
@@ -29,11 +20,11 @@ class PAINTSYSTEM_OT_bake_cache(Operator):
     @classmethod
     def poll(cls, context):
         tree = get_active_tree(context)
-        return _target_node(context, tree) is not None and context.object is not None
+        return button_layer(context, tree) is not None and context.object is not None
 
     def execute(self, context):
         tree = get_active_tree(context)
-        node = _target_node(context, tree)
+        node = button_layer(context, tree)
         size = int(self.resolution)
         try:
             image = bake_node_cache(context, tree, node, context.object,
@@ -48,7 +39,7 @@ class PAINTSYSTEM_OT_bake_cache(Operator):
 
     def invoke(self, context, event):
         tree = get_active_tree(context)
-        node = _target_node(context, tree)
+        node = button_layer(context, tree)
         if node is not None and node.cache_image is not None:
             self.resolution = str(node.cache_image.size[0]) if str(node.cache_image.size[0]) in {
                 i[0] for i in RESOLUTION_ITEMS} else self.resolution

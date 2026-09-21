@@ -13,6 +13,7 @@ register_addon()
 core = import_from("compiler.core")
 stack_ops = import_from("nodetree.stack_ops")
 parse_context = import_from("context").parse_context
+button_layer = import_from("context").button_layer
 link_tree_to_material = import_from("ops.node_tree_ops").link_tree_to_material
 
 SOLID = 'PaintSystemSolidColorLayerNode'
@@ -189,6 +190,17 @@ try:
     check(ps.channel == nested.channels[0], "active channel")
     check(ps.layer == inner and ps.stack_item is not None and ps.stack_item.parent.node == box,
           "active layer and its stack item")
+
+    check(button_layer(bpy.context, nested) == inner, "a layer button acts on the active layer")
+    with bpy.context.temp_override(node=box):
+        check(button_layer(bpy.context, nested) == box, "or on the node that drew the button")
+    with bpy.context.temp_override(node=nested.get_input_node()):
+        check(button_layer(bpy.context, nested) is None, "and on nothing when that is not a layer")
+    check(bpy.ops.paint_system.bake_cache.poll(), "Bake Layer Cache polls on the active layer")
+    nested.nodes.active = nested.get_input_node()
+    check(button_layer(bpy.context, nested) is None and not bpy.ops.paint_system.bake_cache.poll(),
+          "and not with a Group Input node active")
+    nested.nodes.active = inner
 
     section("operators")
     nested.nodes.active = box

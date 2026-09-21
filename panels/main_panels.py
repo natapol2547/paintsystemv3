@@ -4,7 +4,7 @@ from bpy.types import Panel, UIList
 from .brush_panels import draw_paint_sections
 from ..common import icon_kwargs
 from ..compiler.core import artifact_fingerprint
-from ..context import get_active_tree, get_ps_object
+from ..context import get_active_tree, get_ps_object, node_editor_tree
 from ..selection import session as selection_session
 
 
@@ -146,9 +146,7 @@ class PAINTSYSTEM_PT_main_node_editor(Panel):
 
     @classmethod
     def poll(cls, context):
-        space = context.space_data
-        return (space and space.tree_type == 'PaintSystemNodeTree'
-                and space.edit_tree is not None)
+        return node_editor_tree(context) is not None
 
     def draw(self, context):
         layout = self.layout

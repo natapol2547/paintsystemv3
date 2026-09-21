@@ -1,6 +1,8 @@
 from bpy.types import Operator
 from bpy.utils import register_classes_factory
 
+from ..context import node_editor_tree
+
 
 _GROUP_NODE_ID = 'PaintSystemGroupLayerNode'
 
@@ -11,16 +13,6 @@ def _target_node(context):
     if node is None:
         node = getattr(context, 'active_node', None)
     return node
-
-
-def _in_node_editor(context) -> bool:
-    space = context.space_data
-    return (
-        space is not None
-        and space.type == 'NODE_EDITOR'
-        and getattr(space, 'edit_tree', None) is not None
-        and space.edit_tree.bl_idname == 'PaintSystemNodeTree'
-    )
 
 
 def _enter_group(context, node) -> bool:
@@ -38,7 +30,7 @@ class PAINTSYSTEM_OT_edit_node_group(Operator):
 
     @classmethod
     def poll(cls, context):
-        return _in_node_editor(context)
+        return node_editor_tree(context) is not None
 
     def execute(self, context):
         node = _target_node(context)
@@ -56,7 +48,7 @@ class PAINTSYSTEM_OT_enter_exit_node_group(Operator):
 
     @classmethod
     def poll(cls, context):
-        return _in_node_editor(context)
+        return node_editor_tree(context) is not None
 
     def execute(self, context):
         node = getattr(context, 'active_node', None)

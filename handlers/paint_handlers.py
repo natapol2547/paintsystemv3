@@ -11,7 +11,7 @@ session hears about them here (PS-091).
 """
 import bpy
 
-from ..context import get_ps_object, update_active_image
+from ..context import get_ps_object, node_editor_tree, update_active_image
 from ..selection import session as selection_session
 
 
@@ -97,8 +97,8 @@ def on_undo_post(*args):
 
 
 def on_node_editor_draw():
-    tree = getattr(bpy.context.space_data, 'edit_tree', None)
-    if tree is None or tree.bl_idname != 'PaintSystemNodeTree':
+    tree = node_editor_tree(bpy.context)
+    if tree is None:
         return
     active = _pointer(tree.nodes.active)
     key = tree.as_pointer()

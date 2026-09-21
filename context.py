@@ -84,17 +84,26 @@ def get_ps_object(obj) -> bpy.types.Object | None:
     return obj if obj.type == 'MESH' else None
 
 
+def node_editor_tree(context) -> bpy.types.NodeTree | None:
+    """The Paint System tree the context's node editor is editing, or None."""
+    space = getattr(context, 'space_data', None)
+    if space is None or space.type != 'NODE_EDITOR':
+        return None
+    tree = getattr(space, 'edit_tree', None)
+    if tree is not None and tree.bl_idname == 'PaintSystemNodeTree':
+        return tree
+    return None
+
+
 def get_active_tree(context) -> bpy.types.NodeTree | None:
     """Resolve the tree the UI should act on.
 
     Node editor: the edited tree. Elsewhere: the active object's active
     material tree, falling back to the scene-level selection.
     """
-    space = getattr(context, 'space_data', None)
-    if space is not None and space.type == 'NODE_EDITOR':
-        tree = getattr(space, 'edit_tree', None)
-        if tree is not None and tree.bl_idname == 'PaintSystemNodeTree':
-            return tree
+    tree = node_editor_tree(context)
+    if tree is not None:
+        return tree
     obj = get_ps_object(getattr(context, 'object', None))
     mat = obj.active_material if obj is not None else None
     if mat is not None and mat.paint_system.tree is not None:
@@ -103,6 +112,18 @@ def get_active_tree(context) -> bpy.types.NodeTree | None:
     if tree is not None and tree.bl_idname == 'PaintSystemNodeTree':
         return tree
     return None
+
+
+def button_layer(context, tree) -> bpy.types.Node | None:
+    """The layer a button acts on, or None when that node is not a layer.
+
+    A button a node draws in the node editor gets that node as
+    ``context.node``. Anywhere else it acts on *tree*'s active node.
+    """
+    node = getattr(context, 'node', None)
+    if node is None and tree is not None:
+        node = tree.nodes.active
+    return node if getattr(node, 'is_layer_node', False) else None
 
 
 @dataclass
