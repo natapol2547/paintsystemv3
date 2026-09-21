@@ -171,7 +171,10 @@ select by face or UV island and the image editor tools are PS-097.
   region size, view and window matrix, all `HIDDEN` and `SKIP_SAVE`), so
   Adjust Last Operation and the tests run it without a region. It
   cancels with a warning when `session.resolve_target` gives a reason,
-  when there is no object, and when the object is scaled to zero.
+  when there is no object, and when the object's world matrix fails
+  `raster.invertible`, as for an object scaled to zero. The tools and
+  the raster share that test, so a tool refuses exactly the objects the
+  raster could not draw on.
   Tests that repeat the last operation call
   `bpy.ops.ed.undo_redo('EXEC_DEFAULT', True)`; without the second
   argument the repeat pushes no undo step.

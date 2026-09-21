@@ -256,6 +256,14 @@ def test_execute():
         result = bpy.ops.paint_system.select_box('EXEC_DEFAULT', **view_props(points))
         check(result == {'CANCELLED'} and len(selection.ops) == count,
               f"an object scaled to zero is cancelled, as its view could not be inverted ({result})")
+        # The determinant is 1e39: past the float32 range but inside the
+        # float64 one the raster inverts in, so the raster can draw the op.
+        cube().scale = (1e13, 1e13, 1e13)
+        bpy.context.view_layer.update()
+        check(raster.invertible(cube().matrix_world), "the raster can invert a very large object")
+        result = bpy.ops.paint_system.select_box('EXEC_DEFAULT', mode='ADD', **view_props(points))
+        check(result == {'FINISHED'} and len(selection.ops) == count + 1,
+              f"a very large object is selected on, as the raster can invert it ({result})")
     finally:
         cube().scale = scale
         bpy.context.view_layer.update()
