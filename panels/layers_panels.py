@@ -20,10 +20,10 @@ class LayerRow:
     parent_enabled: bool
 
 
-def layer_rows(tree, channel_name: str | None = None) -> dict[str, LayerRow]:
-    """Rows of the channel's stack (default: the active channel) by node name, top first."""
+def layer_rows(tree) -> dict[str, LayerRow]:
+    """Rows of the active channel's stack by node name, top first."""
     rows: dict[str, LayerRow] = {}
-    for order, item in enumerate(tree.stack(channel_name)):
+    for order, item in enumerate(tree.stack()):
         visible = parent_enabled = True
         if item.parent is not None:
             folder = item.parent.node

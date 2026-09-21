@@ -58,7 +58,7 @@ class PixelAction:
             return False
         return True
 
-    def action_params(self, context) -> dict:
+    def action_params(self) -> dict:
         """Keyword arguments for `run_action`, from this operator's properties.
 
         Not called `options`: `Operator.options` is Blender's own.
@@ -71,7 +71,7 @@ class PixelAction:
         # with no redraw in between, so the cursor carries the progress.
         window_manager.progress_begin(0.0, 1.0)
         try:
-            registered = actions.run_action(context, self.action, **self.action_params(context))
+            registered = actions.run_action(context, self.action, **self.action_params())
         except Refused as refusal:
             self.report({'WARNING'}, str(refusal))
             return {'CANCELLED'}
@@ -116,7 +116,7 @@ class PAINTSYSTEM_OT_invert_pixels(PixelAction, Operator):
     invert_a: BoolProperty(name="Alpha", default=False, options={'SKIP_SAVE'},
                            description="Invert transparency as well as colour")
 
-    def action_params(self, context):
+    def action_params(self):
         return {"channels": (self.invert_r, self.invert_g, self.invert_b, self.invert_a)}
 
 
@@ -134,7 +134,7 @@ class PAINTSYSTEM_OT_blur_pixels(PixelAction, Operator):
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
 
-    def action_params(self, context):
+    def action_params(self):
         return {"sigma": self.radius}
 
 
@@ -156,7 +156,7 @@ class PAINTSYSTEM_OT_sharpen_pixels(PixelAction, Operator):
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
 
-    def action_params(self, context):
+    def action_params(self):
         return {"sigma": self.radius, "strength": self.strength}
 
 

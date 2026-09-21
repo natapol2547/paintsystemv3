@@ -117,7 +117,8 @@ def test_the_row_is_centred_at_the_bottom():
           "above the asset shelf, not behind it")
 
     scaled = action_bar.bar_layout((0, 0, WIDTH, HEIGHT), 5, 2.0)
-    check(scaled["rect"][2] - scaled["rect"][0] == 2 * width and scaled["radius"] == size,
+    check(scaled["rect"][2] - scaled["rect"][0] == 2 * width
+          and scaled["rect"][3] - scaled["rect"][1] == 2 * (size + 2 * pad),
           "a UI scale of 2 doubles the bar")
 
     narrow = action_bar.bar_layout((0, 0, 40, HEIGHT), 5, 1.0)

@@ -133,8 +133,7 @@ def bar_layout(visible, count: int, scale: float) -> dict:
     y0 = round(vy0 + margin)
     centers = [(x0 + pad + size / 2 + index * (size + gap), y0 + pad + size / 2)
                for index in range(count)]
-    return {"visible": visible, "rect": (x0, y0, x0 + width, y0 + height),
-            "centers": centers, "radius": size / 2, "scale": scale}
+    return {"rect": (x0, y0, x0 + width, y0 + height), "centers": centers, "scale": scale}
 
 
 # Label and (red, green, blue, alpha) for each entry of the Invert menu.
