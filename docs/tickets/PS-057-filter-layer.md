@@ -606,8 +606,7 @@ job would interrupt whatever the user was doing.
   filtering them needs a Cycles bake"
 - "Filtering the layers below 'X' needs a Cycles bake, because …" — any
   plan on the bake path, until Path B is built
-- "The GPU could not allocate the textures for this filter; try a lower
-  resolution"
+- "The GPU does not have enough memory for an image this size"
 - "'X' asks for a filter this build does not have (KIND)" — a file from a
   newer build
 

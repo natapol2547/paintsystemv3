@@ -233,7 +233,7 @@ def test_failed_allocation_refuses():
         message = str(error)
     finally:
         core.gpu = real
-    check(message is not None and "could not allocate" in message,
+    check(message is not None and "enough memory" in message,
           f"apply_passes raises Refused, which the operators report ({message})")
     check(np.array_equal(read(image), before), "and the image is left as it was")
 

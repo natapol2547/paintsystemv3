@@ -66,13 +66,14 @@ def new_texture(size, image_format: str, *, data=None) -> gpu.types.GPUTexture:
     operators only catch `Refused`, so this turns a large image on a small
     GPU into a message rather than a traceback.
     """
+    # Blender 4.2 to 5.0 reject `data=None`, so pass it only when there is some.
+    extra = {} if data is None else {"data": data}
     try:
-        return gpu.types.GPUTexture(size, format=image_format, data=data)
+        return gpu.types.GPUTexture(size, format=image_format, **extra)
     except RuntimeError as error:
         log.warning("Could not allocate a %sx%s %s texture: %s",
                     size[0], size[1], image_format, error)
-        raise Refused("The GPU could not allocate the textures for this filter; "
-                      "try a lower resolution") from error
+        raise Refused("The GPU does not have enough memory for an image this size") from error
 
 _QUAD = {"position": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
                       (0.0, 0.0), (1.0, 1.0), (0.0, 1.0))}
