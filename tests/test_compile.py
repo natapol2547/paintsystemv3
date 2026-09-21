@@ -332,6 +332,28 @@ try:
     check(len(no_channels.channels) == 0 and iface == [],
           f"removing the last channel removes its sockets from the artifact ({iface})")
 
+    section("artifact node copied by hand")
+    copied = bpy.data.node_groups.new("Copied", 'PaintSystemNodeTree')
+    copied.initialize()
+    copied_layer = copied.insert_layer_node('PaintSystemSolidColorLayerNode')
+    compile_tree(copied)
+    copied_art = copied.compiled
+    node_count = len(copied_art.nodes)
+    original = compiled_nodes(copied, 'NodeGroupOutput')[0]
+    original_pointer = original.as_pointer()
+    feeds_before = output_feeds(copied)
+    # What Shift+D does: the copy keeps the custom properties.
+    copy = copied_art.nodes.new('NodeGroupOutput')
+    copy["ps_identifier"] = original["ps_identifier"]
+    compile_tree(copied, force=True)
+    outputs = compiled_nodes(copied, 'NodeGroupOutput')
+    check(len(copied_art.nodes) == node_count and len(outputs) == 1,
+          f"the copy is removed ({len(copied_art.nodes)} nodes, {node_count} before)")
+    check(outputs and outputs[0].as_pointer() == original_pointer and outputs[0].is_active_output,
+          "the original Group Output is the one kept")
+    check(feeds_before and output_feeds(copied) == feeds_before,
+          f"the kept Group Output is still linked ({output_feeds(copied)})")
+
     section("cleanup")
     orphan_name = tree.compiled.name
     bpy.data.node_groups.remove(tree)

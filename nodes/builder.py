@@ -139,6 +139,8 @@ class NodeTreeBuilder:
                                            int | str, str, int | str]] = set()
         self._socket_instructions: list[SocketInstruction] = []
         self._existing_nodes: dict[str, bpy.types.Node] = {}
+        # Nodes whose identifier an earlier node already has. See _hydrate_existing_nodes.
+        self._duplicate_nodes: list[bpy.types.Node] = []
         self._newly_created: set[str] = set()
         # (node pointer, is_input) -> (sockets, name -> socket), filled during
         # the link phase only. See _socket_by_id.
@@ -227,11 +229,14 @@ class NodeTreeBuilder:
 
             desired_ids = set(self._node_instructions.keys())
 
-            # Remove excess nodes (auto-removes their links)
+            # Remove excess nodes and duplicates (auto-removes their links)
             for identifier in list(self._existing_nodes.keys()):
                 if identifier not in desired_ids:
                     self.node_tree.nodes.remove(
                         self._existing_nodes.pop(identifier))
+            for node in self._duplicate_nodes:
+                self.node_tree.nodes.remove(node)
+            self._duplicate_nodes.clear()
 
             # Upsert nodes and apply properties / socket values
             for identifier, instr in self._node_instructions.items():
@@ -379,9 +384,18 @@ class NodeTreeBuilder:
     # ── Hydration ────────────────────────────────────────────────────
 
     def _hydrate_existing_nodes(self) -> None:
+        """Map the tree's nodes by identifier.
+
+        A node copied by hand carries the original's ``ps_identifier``. The
+        first node with an identifier keeps it, since the copy is added after
+        the original, and later ones are left for the build to remove.
+        """
         for node in self.node_tree.nodes:
             identifier = node_identifier(node)
-            self._existing_nodes[identifier] = node
+            if identifier in self._existing_nodes:
+                self._duplicate_nodes.append(node)
+            else:
+                self._existing_nodes[identifier] = node
 
     # ── Helpers ──────────────────────────────────────────────────────
 
