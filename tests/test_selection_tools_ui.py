@@ -77,7 +77,7 @@ _preview_tick = preview.Preview.tick
 
 
 def _counting_preview_tick(self):
-    preview_ticks.append(self.kind)
+    preview_ticks.append(None)
     return _preview_tick(self)
 
 

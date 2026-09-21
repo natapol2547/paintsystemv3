@@ -63,8 +63,7 @@ def line_width(context) -> int:
 class Preview:
     """A drag's outline drawn in the region of *context*, until `remove`."""
 
-    def __init__(self, context, kind: str):
-        self.kind = kind
+    def __init__(self, context):
         self._region = context.region
         self._outline: list[tuple[float, float]] = []
         self._window_manager = context.window_manager
@@ -95,7 +94,7 @@ class Preview:
         region = context.region
         if region is None or region.as_pointer() != self._region.as_pointer() or len(self._outline) < 2:
             return
-        positions, tangents = shapes.quad_strip(self._outline, True, line_width(context))
+        positions, tangents = shapes.quad_strip(self._outline, line_width(context))
         if not positions:
             return
         shader = _get_shader()

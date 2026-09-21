@@ -89,7 +89,7 @@ class _ShapeSelect:
         self._shift_armed = not event.shift
         self._alt_armed = not event.alt
         self._square = self._centre = False
-        self._preview = preview.Preview(context, self.kind)
+        self._preview = preview.Preview(context)
         self._preview.update(self._outline())
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}

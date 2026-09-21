@@ -131,17 +131,18 @@ def test_clockwise_and_quads():
     check(shapes.clockwise(ccw) == list(reversed(ccw)), "clockwise reverses a counter-clockwise outline")
     cw = list(reversed(ccw))
     check(shapes.clockwise(cw) == cw, "and keeps a clockwise one")
-    positions, tangents = shapes.quad_strip(ccw, True, 2.0)
+    positions, tangents = shapes.quad_strip(ccw, 2.0)
     check(len(positions) == 24 and len(tangents) == 24, f"a closed square is four quads ({len(positions)})")
-    positions, _ = shapes.quad_strip(ccw, False, 2.0)
-    check(len(positions) == 18, f"an open outline has one segment fewer ({len(positions)})")
-    positions, tangents = shapes.quad_strip([(0.0, 0.0), (10.0, 0.0)], False, 2.0)
+    # Two points close into a segment there and one back.
+    positions, tangents = shapes.quad_strip([(0.0, 0.0), (10.0, 0.0)], 2.0)
     xs, ys = [p[0] for p in positions], [p[1] for p in positions]
     check((min(xs), max(xs), min(ys), max(ys)) == (-1.0, 11.0, -1.0, 1.0),
           f"a segment is as wide as asked and extends half the width at each end ({min(xs)}..{max(xs)})")
-    check(all(t == (1.0, 0.0) for t in tangents), "every vertex carries the segment's unit tangent")
-    positions, _ = shapes.quad_strip([(0.0, 0.0), (0.0, 0.0), (5.0, 0.0)], False, 2.0)
-    check(len(positions) == 6, "a zero-length segment is skipped")
+    check(len(tangents) == 12 and all(t == (1.0, 0.0) for t in tangents[:6])
+          and all(t == (-1.0, 0.0) for t in tangents[6:]),
+          "every vertex carries its segment's unit tangent, the closing segment too")
+    positions, _ = shapes.quad_strip([(0.0, 0.0), (0.0, 0.0), (5.0, 0.0)], 2.0)
+    check(len(positions) == 12, f"a zero-length segment is skipped ({len(positions)})")
 
 
 def test_keymap_and_tools():

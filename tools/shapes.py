@@ -100,18 +100,17 @@ def clockwise(points) -> list[tuple[float, float]]:
     return points
 
 
-def quad_strip(points, closed: bool, width: float) -> tuple[list, list]:
-    """TRIS vertices for an outline drawn *width* pixels wide: positions and per-vertex tangents.
+def quad_strip(points, width: float) -> tuple[list, list]:
+    """TRIS vertices for a closed outline drawn *width* pixels wide: positions and per-vertex tangents.
 
-    Each segment is a quad along its unit tangent, extended by half the
-    width at both ends so corners are filled. Zero-length segments are
-    skipped.
+    The last point joins back to the first. Each segment is a quad along
+    its unit tangent, extended by half the width at both ends so corners
+    are filled. Zero-length segments are skipped.
     """
     half = width / 2.0
     points = list(points)
-    pairs = zip(points, points[1:] + points[:1]) if closed else zip(points, points[1:])
     positions, tangents = [], []
-    for (ax, ay), (bx, by) in pairs:
+    for (ax, ay), (bx, by) in zip(points, points[1:] + points[:1]):
         length = math.hypot(bx - ax, by - ay)
         if length == 0.0:
             continue
