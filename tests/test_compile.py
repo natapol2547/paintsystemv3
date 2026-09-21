@@ -37,6 +37,23 @@ def is_library_group(ng):
     return ng.name.startswith(library.LIBRARY_PREFIX)
 
 
+def force_compile_ok(tree):
+    """Force a compile of *tree* and say whether it went through."""
+    try:
+        compile_tree(tree, force=True)
+    except Exception:
+        traceback.print_exc()
+        return False
+    return True
+
+
+def output_feeds(tree):
+    """(input, identifier, output) for each link into the artifact's Group Output."""
+    out = compiled_nodes(tree, 'NodeGroupOutput')[0]
+    return [(sock.name, link.from_node.get("ps_identifier"), link.from_socket.name)
+            for sock in out.inputs for link in sock.links]
+
+
 try:
     section("tree init")
     tree = bpy.data.node_groups.new("Main", 'PaintSystemNodeTree')
@@ -276,6 +293,33 @@ try:
     check(img_layer.cache_stale, "upstream edit invalidates cache")
     check(any(n.get("ps_identifier") == f"{img_layer.uuid}:blend" for n in art.nodes),
           "stale cache falls back to live graph")
+
+    section("reroutes and other nodes")
+    rerouted = bpy.data.node_groups.new("Rerouted", 'PaintSystemNodeTree')
+    rerouted.initialize()
+    routed_layer = rerouted.insert_layer_node('PaintSystemSolidColorLayerNode')
+    routed_out = rerouted.get_output_node()
+    near, far = rerouted.nodes.new('NodeReroute'), rerouted.nodes.new('NodeReroute')
+    rerouted.links.new(routed_layer.outputs['Color'], near.inputs[0])
+    rerouted.links.new(near.outputs[0], far.inputs[0])
+    rerouted.links.new(far.outputs[0], routed_out.inputs['Color'])
+    # With only the colour routed, the alpha has to come from behind the reroutes.
+    rerouted.links.remove(routed_out.inputs['Color Alpha'].links[0])
+    check(force_compile_ok(rerouted), "a tree with reroutes compiles")
+    blend_id = f"{routed_layer.uuid}:blend"
+    feeds = output_feeds(rerouted)
+    check(feeds == [('Color', blend_id, 'Color'), ('Color Alpha', blend_id, 'Alpha')],
+          f"reroutes compile as a direct link, and alpha follows the colour through them ({feeds})")
+
+    foreign = rerouted.nodes.new('NodeGroupInput')
+    rerouted.links.new(foreign.outputs[0], routed_layer.inputs['Color'])
+    check(force_compile_ok(rerouted), "a tree linked from a node Paint System does not make compiles")
+    blend = next(n for n in rerouted.compiled.nodes if n.get("ps_identifier") == blend_id)
+    check(not blend.inputs['Prev Color'].is_linked, "a link from such a node reads as unlinked")
+
+    rerouted.links.remove(near.inputs[0].links[0])
+    check(force_compile_ok(rerouted) and output_feeds(rerouted) == [],
+          "a reroute with nothing feeding it reads as unlinked")
 
     section("cleanup")
     orphan_name = tree.compiled.name

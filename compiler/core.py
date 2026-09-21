@@ -20,7 +20,7 @@ from .ir import IR, Ref, SocketId, hash_payload, _serialize
 from .profile import phase
 from ..nodes.builder import BuildStats
 from ..nodetree.stack_ops import (alpha_partner, feeding_link, feeds_clip_run, link_index,
-                                  paired_color_input)
+                                  paired_color_input, producing_link)
 from ..props.channel import channel_socket_specs
 
 log = logging.getLogger(__name__)
@@ -162,27 +162,36 @@ class CompileContext:
         colour, so it reads the alpha partner of whatever feeds the paired
         colour input, and nothing when that is unlinked. A hand edit that
         relinks only the colour therefore still composites correctly.
+
+        Reroutes are skipped: the node returned is the one behind them.
         """
         color_in = paired_color_input(socket)
         if color_in is not None:
-            link = feeding_link(color_in)
+            link = producing_link(color_in)
             if link is None:
                 return None
             partner = alpha_partner(link.from_node, link.from_socket.name)
             if partner is not None and partner in link.from_node.outputs:
                 return link.from_node, partner
-        link = feeding_link(socket)
+        link = producing_link(socket)
         if link is None:
             return None
         return link.from_node, link.from_socket.name
 
     def upstream(self, socket) -> Ref | None:
-        """IR reference feeding *socket* on a custom node, or None if unlinked."""
+        """IR reference feeding *socket* on a custom node, or None if unlinked.
+
+        Only Paint System nodes emit IR, so a link from any other kind of
+        node reads as unlinked.
+        """
         source = self.source(socket)
         if source is None:
             return None
         node, output_name = source
-        return self._outputs.get((node.uuid, output_name))
+        node_uuid = getattr(node, 'uuid', None)
+        if node_uuid is None:
+            return None
+        return self._outputs.get((node_uuid, output_name))
 
     def input_source(self, socket) -> Ref | Any:
         """Ref when linked, else the socket's default value."""

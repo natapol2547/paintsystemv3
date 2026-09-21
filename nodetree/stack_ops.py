@@ -166,6 +166,25 @@ def feeding_link(socket) -> bpy.types.NodeLink | None:
     return None
 
 
+def producing_link(socket) -> bpy.types.NodeLink | None:
+    """``feeding_link`` followed back through any reroutes in front of *socket*.
+
+    The link returned comes from the node that makes the value, so a reroute
+    placed by hand in the node editor changes nothing. None when *socket*,
+    or a reroute on the way, is unlinked. Reroutes that loop back on
+    themselves also read as unlinked.
+    """
+    link = feeding_link(socket)
+    seen = set()
+    while link is not None and link.from_node.bl_idname == 'NodeReroute':
+        reroute = link.from_node
+        if reroute.name in seen:
+            return None
+        seen.add(reroute.name)
+        link = feeding_link(reroute.inputs[0])
+    return link
+
+
 # ── Walking ──────────────────────────────────────────────────────────
 
 
