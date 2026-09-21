@@ -17,9 +17,10 @@ import contextlib
 import bpy
 import numpy as np
 
-from .core import build_ir, mark_dirty, BAKE_TREE_NAME
+from .core import build_ir, mark_dirty
 
 
+BAKE_TREE_NAME = ".PS Bake Target"
 BAKE_MATERIAL_NAME = ".PS Bake Material"
 BAKE_ALPHA_IMAGE_NAME = ".PS Bake Alpha"
 PS_IMAGE_KEY = "ps_managed"

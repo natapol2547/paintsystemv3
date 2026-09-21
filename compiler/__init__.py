@@ -1,35 +1,16 @@
-from .core import (
-    compile_tree,
-    build_ir,
-    mark_dirty,
-    flush_now,
-    suspend_compile,
-    ps_trees,
-    cleanup_orphan_artifacts,
-    normalize_tree,
-    CompileContext,
-)
-from .ir import IR, Ref
-from . import core as _core
+"""The compiler package. It re-exports nothing: callers import the module they
+need (compiler.core, compiler.ir, ...) directly.
 
-__all__ = (
-    "compile_tree",
-    "build_ir",
-    "mark_dirty",
-    "flush_now",
-    "suspend_compile",
-    "ps_trees",
-    "cleanup_orphan_artifacts",
-    "normalize_tree",
-    "CompileContext",
-    "IR",
-    "Ref",
-)
+``core`` is imported inside the hooks rather than at the top, so importing
+any one compiler module does not also load ``core`` and everything it imports.
+"""
 
 
 def register():
-    _core.reset_state()
+    from . import core
+    core.reset_state()
 
 
 def unregister():
-    _core.reset_state()
+    from . import core
+    core.reset_state()

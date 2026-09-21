@@ -30,7 +30,6 @@ ARTIFACT_OWNER_KEY = "ps_owner"
 # The fingerprint lives on the artifact, not on the tree, so it always
 # describes the nodes it sits next to whichever copy undo restores.
 ARTIFACT_FINGERPRINT_KEY = "ps_fingerprint"
-BAKE_TREE_NAME = ".PS Bake Target"
 
 # What the last ``compile_tree`` wrote into an artifact, ``None`` when it hit
 # the fingerprint and wrote nothing. Tests and profiling read it to tell a
