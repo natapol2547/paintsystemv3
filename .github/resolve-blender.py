@@ -6,16 +6,12 @@ patch release from download.blender.org. Add the daily alpha/beta builds
 of unreleased series from builder.blender.org as experimental entries.
 
 Usage:
-    python .github/resolve-blender.py            # GitHub Actions outputs
-    python .github/resolve-blender.py --pretty   # human readable
-    python .github/resolve-blender.py --min      # only the minimum series
+    python .github/resolve-blender.py            # GitHub Actions output
+    python .github/resolve-blender.py --pretty   # human readable table only
 
-Outputs (GITHUB_OUTPUT format):
+The default mode prints the GITHUB_OUTPUT line to stdout and the same
+table as ``--pretty`` to stderr, so CI shows it without a second run:
     matrix       {"include": [{series, version, url, experimental}, ...]}
-    min_version  e.g. 4.2.23
-    min_url      download URL of the minimum supported build
-    max_version  newest stable patch release
-    max_url      its download URL
 """
 import json
 import re
@@ -125,26 +121,25 @@ def resolve():
 
     if not entries:
         sys.exit("no Blender builds resolved")
-    stable = [e for e in entries if not e["experimental"]]
-    if not stable:
+    if all(e["experimental"] for e in entries):
         sys.exit(f"no stable release found for {lo[0]}.{lo[1]}+")
-    return entries, stable[0], stable[-1]
+    return entries
+
+
+def print_table(entries, file=None):
+    """One line per build; *file* None is stdout, as for ``print``."""
+    for e in entries:
+        flag = " (experimental)" if e["experimental"] else ""
+        print(f"{e['series']:>5}  {e['version']:<14} {e['url']}{flag}", file=file)
 
 
 def main(argv):
-    entries, lo, hi = resolve()
-    if "--min" in argv:
-        entries = [lo]
+    entries = resolve()
     if "--pretty" in argv:
-        for e in entries:
-            flag = " (experimental)" if e["experimental"] else ""
-            print(f"{e['series']:>5}  {e['version']:<14} {e['url']}{flag}")
+        print_table(entries)
         return
+    print_table(entries, file=sys.stderr)
     print(f"matrix={json.dumps({'include': entries})}")
-    print(f"min_version={lo['version']}")
-    print(f"min_url={lo['url']}")
-    print(f"max_version={hi['version']}")
-    print(f"max_url={hi['url']}")
 
 
 if __name__ == "__main__":

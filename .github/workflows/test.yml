@@ -49,8 +49,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.resolve.outputs.matrix }}
-      min_version: ${{ steps.resolve.outputs.min_version }}
-      max_version: ${{ steps.resolve.outputs.max_version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -58,9 +56,9 @@ jobs:
           python-version: '3.12'
       - name: Resolve latest patch of each series
         id: resolve
-        run: |
-          python .github/resolve-blender.py --pretty
-          python .github/resolve-blender.py >> "$GITHUB_OUTPUT"
+        # The table goes to stderr, so it shows in the log while stdout
+        # carries only the matrix output.
+        run: python .github/resolve-blender.py >> "$GITHUB_OUTPUT"
 
   test:
     name: Blender ${{ matrix.version }}
