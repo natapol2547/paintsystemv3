@@ -367,9 +367,6 @@ void main()
 }
 """
 
-# Two counter-clockwise triangles over the unit square.
-_QUAD = {"position": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0), (1.0, 1.0), (0.0, 1.0))}
-
 _gpu: dict = {}
 
 
@@ -417,7 +414,7 @@ def _quantise_shader() -> gpu.types.GPUShader:
 
 
 def _resources() -> dict:
-    """Shaders, batches and the placeholder texture, built once per session."""
+    """Shaders and their batches, built once per session."""
     if not _gpu:
         # The distance variants write the signed distance clamped to
         # +-half_width instead of combining coverage with the previous mask.
@@ -429,14 +426,11 @@ def _resources() -> dict:
         lasso_distance = _mask_shader("lasso_distance", distance + _LASSO_FRAGMENT_SOURCE, True)
         quantise = _quantise_shader()
         _gpu.update(
-            shape=(shape, batch_for_shader(shape, 'TRIS', _QUAD)),
-            lasso=(lasso, batch_for_shader(lasso, 'TRIS', _QUAD)),
-            shape_distance=(shape_distance, batch_for_shader(shape_distance, 'TRIS', _QUAD)),
-            lasso_distance=(lasso_distance, batch_for_shader(lasso_distance, 'TRIS', _QUAD)),
-            quantise=(quantise, batch_for_shader(quantise, 'TRIS', _QUAD)),
-            # Bound to every sampler a pass does not read: an unbound
-            # sampler is an error on Vulkan.
-            placeholder=gpu.types.GPUTexture((1, 1), format='R32F', data=gpu.types.Buffer('FLOAT', 1, [0.0])),
+            shape=(shape, batch_for_shader(shape, 'TRIS', core.UNIT_QUAD)),
+            lasso=(lasso, batch_for_shader(lasso, 'TRIS', core.UNIT_QUAD)),
+            shape_distance=(shape_distance, batch_for_shader(shape_distance, 'TRIS', core.UNIT_QUAD)),
+            lasso_distance=(lasso_distance, batch_for_shader(lasso_distance, 'TRIS', core.UNIT_QUAD)),
+            quantise=(quantise, batch_for_shader(quantise, 'TRIS', core.UNIT_QUAD)),
         )
     return _gpu
 
@@ -623,7 +617,9 @@ def _draw_outline(spec: OpSpec, texels: np.ndarray, half_width: float, ints: dic
                   width: int, height: int, distance: bool) -> None:
     """The draw shared by `_run_pass` and `_run_distance_pass`, *texels* in target pixels."""
     res = _resources()
-    placeholder = res["placeholder"]
+    # Bound to every sampler the pass does not read: an unbound sampler
+    # is an error on Vulkan.
+    placeholder = core.unused_sampler()
     suffix = "_distance" if distance else ""
     floats = {"target_size": (float(width), float(height)), "half_width": half_width}
     samplers = {"previous": placeholder if source is None else source}
@@ -1301,6 +1297,7 @@ def release() -> None:
     invalidate()
     _gpu.clear()
     view_raster.release()
+    core.release_unused_sampler()
     _self_test_result = None
     _view_self_test_result = None
 

@@ -26,7 +26,7 @@ from __future__ import annotations
 import gpu
 from gpu_extras.batch import batch_for_shader
 
-from ..gpu_passes.core import offscreen_state
+from ..gpu_passes.core import UNIT_QUAD, offscreen_state
 
 
 # The identifiers of ShaderNodeMix.blend_type, numbered for the shader.
@@ -281,9 +281,6 @@ vec4 ps_filter_mix(vec4 prev, vec4 src, float amount, float mask, float clip)
 BLEND_GLSL = _COLOR_UTILS + _BLEND + _COMPOSITE
 
 
-_QUAD = {"position": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
-                      (0.0, 0.0), (1.0, 1.0), (0.0, 1.0))}
-
 _VERTEX = """
 void main()
 {
@@ -327,7 +324,7 @@ def blend_shader():
         info.vertex_source(_VERTEX)
         info.fragment_source(BLEND_GLSL + _FRAGMENT)
         _shader = gpu.shader.create_from_info(info)
-        _batch = batch_for_shader(_shader, 'TRIS', _QUAD)
+        _batch = batch_for_shader(_shader, 'TRIS', UNIT_QUAD)
     return _shader, _batch
 
 

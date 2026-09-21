@@ -28,7 +28,39 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
+# Two counter-clockwise triangles over the unit square, the geometry of
+# every pass that covers its whole target.
+UNIT_QUAD = {"position": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
+                          (0.0, 0.0), (1.0, 1.0), (0.0, 1.0))}
+
 _available: bool | None = None
+_unused_texture = None
+
+
+def unused_sampler() -> gpu.types.GPUTexture:
+    """A 1x1 zero texture to bind to a sampler the pass does not read.
+
+    A sampler a create-info declares has to be bound even where the
+    shader never reads it: an unbound one is an error on Vulkan. A GLSL
+    sampler does not care what format is behind it, so one `R32F`
+    texture serves every pass.
+    """
+    global _unused_texture
+    if _unused_texture is None:
+        _unused_texture = gpu.types.GPUTexture(
+            (1, 1), format='R32F', data=gpu.types.Buffer('FLOAT', 1, [0.0]))
+    return _unused_texture
+
+
+def release_unused_sampler() -> None:
+    """Drop the texture `unused_sampler` keeps; the next call makes it again.
+
+    Every module that binds it calls this from its own `release`, so a
+    caller that releases only the modules it used still frees it before
+    the GPU context goes.
+    """
+    global _unused_texture
+    _unused_texture = None
 
 
 @contextlib.contextmanager

@@ -42,7 +42,7 @@ import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
-from ..gpu_passes import texel_map
+from ..gpu_passes import core, texel_map
 from . import raster
 
 REACH_PAD = 1.5
@@ -344,7 +344,7 @@ def _shaders() -> dict:
         info.vertex_source(_TEXEL_VERTEX_SOURCE)
         info.fragment_source(_TEXEL_FRAGMENT_SOURCE)
         texel = gpu.shader.create_from_info(info)
-        _gpu.update(depth=depth, texel=(texel, batch_for_shader(texel, 'TRIS', raster._QUAD)))
+        _gpu.update(depth=depth, texel=(texel, batch_for_shader(texel, 'TRIS', core.UNIT_QUAD)))
     return _gpu
 
 
@@ -492,7 +492,7 @@ def run_view_pass(spec: "raster.OpSpec", source, target, width: int, height: int
     raster._run_distance_pass(spec, targets["distance"], region_width, region_height, reach)
     block = view_block(view, half_width, reach)
     shaders = _shaders()
-    placeholder = raster._resources()["placeholder"]
+    placeholder = core.unused_sampler()
 
     depth_map = placeholder
     if batch is not None:

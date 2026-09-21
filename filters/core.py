@@ -43,7 +43,7 @@ import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
-from ..gpu_passes.core import offscreen_state
+from ..gpu_passes.core import UNIT_QUAD, offscreen_state, release_unused_sampler, unused_sampler
 
 log = logging.getLogger(__name__)
 
@@ -74,9 +74,6 @@ def new_texture(size, image_format: str, *, data=None) -> gpu.types.GPUTexture:
         log.warning("Could not allocate a %sx%s %s texture: %s",
                     size[0], size[1], image_format, error)
         raise Refused("The GPU does not have enough memory for an image this size") from error
-
-_QUAD = {"position": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
-                      (0.0, 0.0), (1.0, 1.0), (0.0, 1.0))}
 
 _VERTEX = """
 void main()
@@ -190,7 +187,6 @@ def texture_format(image: bpy.types.Image) -> str:
 
 
 _shaders: dict[str, tuple] = {}
-_placeholder = None
 
 
 def _shader(spec: FilterSpec):
@@ -215,23 +211,8 @@ def _shader(spec: FilterSpec):
     info.vertex_source(_VERTEX)
     info.fragment_source(_PRELUDE + spec.apply_source + _MAIN)
     shader = gpu.shader.create_from_info(info)
-    _shaders[spec.name] = (shader, batch_for_shader(shader, 'TRIS', _QUAD))
+    _shaders[spec.name] = (shader, batch_for_shader(shader, 'TRIS', UNIT_QUAD))
     return _shaders[spec.name]
-
-
-def _unused_sampler():
-    """A 1x1 zero texture for a sampler the pass does not use.
-
-    A sampler an info declares must be bound even where the shader never
-    reads it. One texture serves both the mask and the second source: a
-    GLSL sampler does not care what format is behind it, and neither
-    shader reads this one.
-    """
-    global _placeholder
-    if _placeholder is None:
-        _placeholder = gpu.types.GPUTexture(
-            (1, 1), format='R32F', data=gpu.types.Buffer('FLOAT', 1, [0.0]))
-    return _placeholder
 
 
 class PixelSource:
@@ -313,8 +294,8 @@ def run_pass(spec: FilterSpec, source: gpu.types.GPUTexture, target=None, *,
                 else:
                     shader.uniform_float(name, value)
             shader.uniform_sampler("source", source)
-            shader.uniform_sampler("mask", _unused_sampler() if mask is None else mask)
-            shader.uniform_sampler("second", _unused_sampler() if second is None else second)
+            shader.uniform_sampler("mask", unused_sampler() if mask is None else mask)
+            shader.uniform_sampler("second", unused_sampler() if second is None else second)
             batch.draw(shader)
             if last < target.height:
                 # Reading one texel waits for the band, so the driver
@@ -324,7 +305,6 @@ def run_pass(spec: FilterSpec, source: gpu.types.GPUTexture, target=None, *,
 
 
 def release() -> None:
-    """Give the cached shaders and the placeholder back to the GPU context."""
-    global _placeholder
+    """Give the cached shaders and the unused sampler back to the GPU context."""
     _shaders.clear()
-    _placeholder = None
+    release_unused_sampler()

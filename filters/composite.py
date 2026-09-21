@@ -40,7 +40,7 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
-from ..gpu_passes.core import offscreen_state
+from ..gpu_passes.core import UNIT_QUAD, offscreen_state, release_unused_sampler, unused_sampler
 from ..nodetree.stack_ops import (clip_base, feeding_link, feeds_clip_run,
                                   layers_down_from, link_index)
 from . import blend_glsl, derived
@@ -234,9 +234,6 @@ def _source_image(image):
 
 # ── The draw ─────────────────────────────────────────────────────────
 
-_QUAD = {"position": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
-                      (0.0, 0.0), (1.0, 1.0), (0.0, 1.0))}
-
 _VERTEX = """
 void main()
 {
@@ -260,7 +257,6 @@ void main()
 
 _shader = None
 _batch = None
-_placeholder = None
 
 
 def source_shader():
@@ -280,21 +276,8 @@ def source_shader():
         info.vertex_source(_VERTEX)
         info.fragment_source(_FRAGMENT)
         _shader = gpu.shader.create_from_info(info)
-        _batch = batch_for_shader(_shader, 'TRIS', _QUAD)
+        _batch = batch_for_shader(_shader, 'TRIS', UNIT_QUAD)
     return _shader, _batch
-
-
-def _no_source():
-    """A 1x1 texture for the source sampler of a fill.
-
-    A sampler the create-info declares has to be bound even where the
-    shader never reads it.
-    """
-    global _placeholder
-    if _placeholder is None:
-        _placeholder = gpu.types.GPUTexture(
-            (1, 1), format='RGBA16F', data=gpu.types.Buffer('FLOAT', 4, [0.0] * 4))
-    return _placeholder
 
 
 class Pool:
@@ -394,7 +377,7 @@ def _draw_into(target, *, fill=TRANSPARENT, texture=None, premultiplied=False):
         shader.uniform_float("fill", fill)
         shader.uniform_int("use_texture", 0 if texture is None else 1)
         shader.uniform_int("premultiplied", 1 if premultiplied else 0)
-        shader.uniform_sampler("source", _no_source() if texture is None else texture)
+        shader.uniform_sampler("source", unused_sampler() if texture is None else texture)
         batch.draw(shader)
     return target
 
@@ -410,8 +393,8 @@ def _draw_blend(pool: Pool, backdrop, source, step: LayerStep, *, clip: bool):
 
 
 def release() -> None:
-    """Drop the shader and its placeholder before the GPU context goes."""
-    global _shader, _batch, _placeholder
+    """Drop the shader and the unused sampler before the GPU context goes."""
+    global _shader, _batch
     _shader = None
     _batch = None
-    _placeholder = None
+    release_unused_sampler()

@@ -242,7 +242,7 @@ def test_release():
     run(IDENTITY, new_image("PS Filter Byte", 8, 8))
     check(len(core._shaders) > 0, f"the shader cache holds {len(core._shaders)}")
     core.release()
-    check(not core._shaders and core._placeholder is None, "release empties the cache")
+    check(not core._shaders and gpu_core._unused_texture is None, "release empties the cache")
 
 
 for test in (test_identity_is_exact,
