@@ -103,7 +103,7 @@ def draw_image(mask, wash=(0.2, 0.5, 1.0, 0.25), target_format='RGBA8'):
     target = gpu.types.GPUTexture((SIZE, SIZE), format=target_format)
     framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
     batch = batch_for_shader(shader, 'TRIS', {"position": QUAD, "uv": QUAD_UV})
-    with overlay._DrawState():
+    with core.saved_state():
         with framebuffer.bind():
             framebuffer.clear(color=(GREY, GREY, GREY, 1.0))
             gpu.state.blend_set('ALPHA')
@@ -281,7 +281,7 @@ def test_two_passes_draw_no_seam():
     offscreen = gpu.types.GPUOffScreen(SIZE, SIZE, format='RGBA16F')
     target = gpu.types.GPUTexture((SIZE, SIZE), format='RGBA8')
     framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
-    with overlay._DrawState():
+    with core.saved_state():
         with offscreen.bind():
             gpu.state.active_framebuffer_get().clear(color=(0.0, 0.0, 0.0, 0.0), depth=1.0)
             gpu.state.blend_set('NONE')

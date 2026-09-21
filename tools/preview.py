@@ -14,6 +14,7 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
+from ..gpu_passes.core import saved_state
 from ..selection import overlay, overlay_shader
 from . import shapes
 
@@ -100,16 +101,13 @@ class Preview:
         shader = _get_shader()
         batch = batch_for_shader(shader, 'TRIS', {"pos": positions, "tangent": tangents})
         ant_a, ant_b = overlay.ant_style(context)
-        blend = gpu.state.blend_get()
         shader.bind()
         shader.uniform_float("ant_a", ant_a)
         shader.uniform_float("ant_b", ant_b)
         shader.uniform_float("region", (float(region.width), float(region.height), 0.0, 0.0))
-        gpu.state.blend_set('NONE')
-        try:
+        with saved_state():
+            gpu.state.blend_set('NONE')
             batch.draw(shader)
-        finally:
-            gpu.state.blend_set(blend)
 
 
 def release() -> None:

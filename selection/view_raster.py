@@ -489,19 +489,13 @@ def run_view_pass(spec: "raster.OpSpec", source, target, width: int, height: int
     if batch is not None:
         shader = shaders["depth"]
         framebuffer = gpu.types.GPUFrameBuffer(depth_slot=targets["depth"], color_slots=(targets["colour"],))
-        depth_test = gpu.state.depth_test_get()
-        depth_mask = gpu.state.depth_mask_get()
-        try:
-            with framebuffer.bind():
-                framebuffer.clear(color=(3.0e38, 0.0, 0.0, 0.0), depth=1.0)
-                gpu.state.depth_test_set('LESS')
-                gpu.state.depth_mask_set(True)
-                shader.bind()
-                shader.uniform_block("view_block", block)
-                batch.draw(shader)
-        finally:
-            gpu.state.depth_test_set(depth_test)
-            gpu.state.depth_mask_set(depth_mask)
+        with core.saved_state(), framebuffer.bind():
+            framebuffer.clear(color=(3.0e38, 0.0, 0.0, 0.0), depth=1.0)
+            gpu.state.depth_test_set('LESS')
+            gpu.state.depth_mask_set(True)
+            shader.bind()
+            shader.uniform_block("view_block", block)
+            batch.draw(shader)
         depth_map = targets["colour"]
 
     shader, quad = shaders["texel"]

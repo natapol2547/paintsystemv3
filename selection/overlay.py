@@ -298,22 +298,6 @@ def _prune_offscreens(pointers: set[int]) -> None:
 
 # ── Drawing ──────────────────────────────────────────────────────────
 
-class _DrawState:
-    """Blend, depth test and depth write, restored on exit."""
-
-    def __enter__(self):
-        self.blend = gpu.state.blend_get()
-        self.depth_test = gpu.state.depth_test_get()
-        self.depth_mask = gpu.state.depth_mask_get()
-        return self
-
-    def __exit__(self, *exc):
-        gpu.state.blend_set(self.blend)
-        gpu.state.depth_test_set(self.depth_test)
-        gpu.state.depth_mask_set(self.depth_mask)
-        return False
-
-
 def _uniforms(shader, context, prefs: dict, view_projection, tile: int, offset: float) -> None:
     """Set the `overlay_shader.PUSH_CONSTANTS` of *shader*."""
     scale = context.preferences.system.ui_scale
@@ -351,7 +335,7 @@ def _draw_view3d() -> None:
     rv3d = context.region_data
     view_projection = rv3d.perspective_matrix @ obj.matrix_world
     coverage, screen = _shader("coverage"), _shader("screen")
-    with _DrawState():
+    with core.saved_state():
         with offscreen.bind():
             gpu.state.active_framebuffer_get().clear(color=(0.0, 0.0, 0.0, 0.0), depth=1.0)
             gpu.state.blend_set('NONE')
@@ -402,7 +386,7 @@ def _draw_image_editor() -> None:
                (ox, oy), (ox + 1.0, oy + 1.0), (ox, oy + 1.0)),
     })
     view_projection = gpu.matrix.get_projection_matrix() @ gpu.matrix.get_model_view_matrix()
-    with _DrawState():
+    with core.saved_state():
         gpu.state.blend_set('ALPHA')
         gpu.state.depth_test_set('NONE')
         gpu.state.depth_mask_set(False)
