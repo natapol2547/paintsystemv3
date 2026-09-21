@@ -13,7 +13,7 @@
 
 from bpy.utils import register_submodule_factory
 
-from .custom_icons import load_icons, unload_icons
+from .common import load_icons, unload_icons
 
 submodules = (
     "props",

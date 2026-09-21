@@ -1,9 +1,9 @@
 import logging
 import math
-import bpy
 import os
 
-from .custom_icons import get_icon
+import bpy
+import bpy.utils.previews
 
 
 # The add-on's module name, which keys its preferences entry: "paint_system"
@@ -31,6 +31,33 @@ def is_newer_than(major, minor=0, patch=0):
     return bpy.app.version >= (major, minor, patch)
 
 # UI
+
+
+# The add-on icons in icons/, keyed by file name without the extension,
+# while the add-on is registered.
+_icon_previews = None
+
+
+def load_icons() -> None:
+    global _icon_previews
+    _icon_previews = bpy.utils.previews.new()
+    folder = os.path.join(os.path.dirname(__file__), 'icons')
+    for file_name in os.listdir(folder):
+        name = os.path.splitext(file_name)[0]
+        _icon_previews.load(name, os.path.join(folder, file_name), 'IMAGE')
+
+
+def unload_icons() -> None:
+    global _icon_previews
+    bpy.utils.previews.remove(_icon_previews)
+    _icon_previews = None
+
+
+def get_icon(name: str) -> int | None:
+    """Icon id of the add-on icon *name*, or None when there is no such icon."""
+    if _icon_previews is None or name not in _icon_previews:
+        return None
+    return _icon_previews[name].icon_id
 
 
 _blender_icons: set[str] | None = None
@@ -90,11 +117,6 @@ def rounded_rect(x0, y0, x1, y1, radius, segments=6):
             angle = math.pi * (start + 0.5 * step / segments)
             points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
     return points
-
-
-# Path
-def get_project_root_path() -> str:
-    return os.path.dirname(os.path.abspath(__file__))
 
 
 # Images
