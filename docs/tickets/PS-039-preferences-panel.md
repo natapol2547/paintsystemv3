@@ -32,12 +32,14 @@ asserts that the preferences attach to the installed package.
 
 ## v3 design
 
-`preferences.py` in v3 already declares these properties, with the four
-`*_rmb` ones renamed `*_popover` (PS-036 replaced the right-click
-popover with a button and a floating HUD). Remaining work:
+`preferences.py` in v3 declares only the preferences something reads:
+the Selection box above. Each v2 preference comes back with the feature
+that reads it, the four `*_rmb` ones renamed `*_popover` (PS-036
+replaced the right-click popover with a button and a floating HUD).
+Remaining work:
 
 - Port the draw layout from v2, dropping `use_legacy_ui`.
-- `panels/common.py::scale_content` helper honouring `use_compact_design`.
+- A `scale_content` panel helper honouring `use_compact_design`.
 - `hide_painting_tips` operator (`utils_operators.py:261`) for the tip
   boxes.
 - `developer_mode` gates the compiled-info blocks and a "Recompile All"
