@@ -51,21 +51,13 @@ ROW_HEIGHT = 320
 
 _link_indexes: dict[int, dict[int, tuple]] = {}
 
-# Reads that found no index and scanned the tree instead. The compile walks
-# are meant to be fully indexed, so a test can assert this stays at zero
-# across them. The increment sits on a path that already costs O(links), so
-# there is nothing to gain from making it conditional.
-unindexed_reads = 0
-
 
 def socket_links(socket) -> tuple:
     """The links touching *socket*, from the installed index when there is one."""
-    global unindexed_reads
     if _link_indexes:
         index = _link_indexes.get(socket.id_data.as_pointer())
         if index is not None:
             return index.get(socket.as_pointer(), ())
-    unindexed_reads += 1
     return socket.links
 
 

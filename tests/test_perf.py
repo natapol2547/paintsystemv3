@@ -247,6 +247,29 @@ def plain_middle_layer(tree):
 # ── Link index ───────────────────────────────────────────────────────
 
 
+def unindexed_reads(walk):
+    """How many ``socket_links`` reads *walk* makes with no index installed.
+
+    Every read in stack_ops goes through the module's ``socket_links``, so
+    wrapping it for the length of the walk sees all of them.
+    """
+    original = stack_ops.socket_links
+    count = 0
+
+    def counted(socket):
+        nonlocal count
+        if stack_ops._link_indexes.get(socket.id_data.as_pointer()) is None:
+            count += 1
+        return original(socket)
+
+    stack_ops.socket_links = counted
+    try:
+        walk()
+    finally:
+        stack_ops.socket_links = original
+    return count
+
+
 def index_mismatches(tree, *, indexed):
     """Sockets where ``socket_links`` disagrees with ``NodeSocket.links``.
 
@@ -386,18 +409,14 @@ try:
     section("link index")
     # The compile walks are meant to be fully indexed. A fallback here is a
     # walk that went back to scanning every link of the tree per socket.
-    before = stack_ops.unindexed_reads
-    core.build_ir(tree)
-    check(stack_ops.unindexed_reads == before,
-          f"build_ir reads no links unindexed ({stack_ops.unindexed_reads - before})")
-    before = stack_ops.unindexed_reads
-    tree.stack()
-    check(stack_ops.unindexed_reads == before,
-          f"stack() reads no links unindexed ({stack_ops.unindexed_reads - before})")
-    before = stack_ops.unindexed_reads
-    layer_rows(tree)
-    check(stack_ops.unindexed_reads == before,
-          f"layer_rows() reads no links unindexed ({stack_ops.unindexed_reads - before})")
+    output_color = tree.get_output_node().inputs['Color']
+    check(unindexed_reads(lambda: stack_ops.feeding_link(output_color)) == 1,
+          "a read outside any index is counted")
+    for label, walk in (("build_ir", lambda: core.build_ir(tree)),
+                        ("stack()", tree.stack),
+                        ("layer_rows()", lambda: layer_rows(tree))):
+        count = unindexed_reads(walk)
+        check(count == 0, f"{label} reads no links unindexed ({count})")
 
     for indexed in (True, False):
         state = "with an index" if indexed else "without an index"
