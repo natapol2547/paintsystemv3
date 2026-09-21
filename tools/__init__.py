@@ -21,6 +21,7 @@ import logging
 
 import bpy
 
+from ..common import is_newer_than
 from . import preview, select_ops, workspace_tools
 
 log = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ TOOL_PREFIX = "paint_system."
 
 def default_brush_tool() -> str:
     """Id of the Texture Paint brush tool, the one the toolbar starts with."""
-    return 'builtin.brush' if bpy.app.version >= (4, 3, 0) else 'builtin_brush.Draw'
+    return 'builtin.brush' if is_newer_than(4, 3) else 'builtin_brush.Draw'
 
 
 def _ours(ref) -> bool:

@@ -8,8 +8,10 @@ directly.
 """
 import bpy
 
+from ..common import is_newer_than
 
-UNDO_OPTIONS = {'REGISTER', 'UNDO'} if bpy.app.version >= (5, 1, 0) else {'REGISTER'}
+
+UNDO_OPTIONS = {'REGISTER', 'UNDO'} if is_newer_than(5, 1) else {'REGISTER'}
 """`bl_options` for operators that edit the selection; pair with `push_undo`.
 
 Before Blender 5.1, undo in texture paint mode steps through the image
@@ -40,7 +42,7 @@ def undo_restores_data(context) -> bool:
     """
     if context.mode.startswith('EDIT'):
         return False
-    return bpy.app.version >= (5, 1, 0) or context.mode != 'PAINT_TEXTURE'
+    return is_newer_than(5, 1) or context.mode != 'PAINT_TEXTURE'
 
 
 def push_undo(context, message: str) -> None:

@@ -13,7 +13,7 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
-from ..common import rounded_rect
+from ..common import is_newer_than, rounded_rect
 
 
 def draw_header(node):
@@ -48,8 +48,7 @@ def draw_header(node):
         left = round(location.x * scale) - padding
         top = round(location.y * scale) + height / 2 - 10 * scale + padding
         # 4.x uses a capsule; 5.x uses the standard node corner radius.
-        corner_radius = height / \
-            2 if bpy.app.version < (5, 0, 0) else 4 * scale
+        corner_radius = 4 * scale if is_newer_than(5, 0) else height / 2
         corner_radius += padding
     right, bottom = left + width + 2 * padding, top - height - 2 * padding
     vertices = rounded_rect(left, bottom, right, top, corner_radius)
