@@ -1,6 +1,36 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+import logging
+
 import bpy
 
-from .common import add_keymap_entry, unregister_keymap_entries
+log = logging.getLogger(__name__)
+
+# (KeyMap, KeyMapItem) pairs this addon created in the addon keyconfig.
+# Only these are removed on unregister; user and default keymaps are
+# never touched.
+addon_keymaps = []
+
+
+def add_keymap_entry(
+    kc: bpy.types.KeyConfig,
+    name: str,
+    space_type: str,
+    idname: str,
+    key: str,
+    ctrl: bool = False,
+    properties: dict | None = None,
+):
+    """Bind a key press to *idname* in keymap *name* and record the item for unregister."""
+    km = kc.keymaps.new(name=name, space_type=space_type)
+    kmi = km.keymap_items.new(idname, type=key, value='PRESS', ctrl=ctrl)
+    if properties:
+        for prop, prop_value in properties.items():
+            try:
+                setattr(kmi.properties, prop, prop_value)
+            except (AttributeError, TypeError):
+                log.warning("keymap %s: cannot set %s on %s", name, prop, idname)
+    addon_keymaps.append((km, kmi))
 
 
 def register() -> None:
@@ -94,4 +124,9 @@ def register() -> None:
 
 
 def unregister() -> None:
-    unregister_keymap_entries()
+    for km, kmi in addon_keymaps:
+        try:
+            km.keymap_items.remove(kmi)
+        except (ReferenceError, RuntimeError):
+            log.debug("keymap item already gone", exc_info=True)
+    addon_keymaps.clear()

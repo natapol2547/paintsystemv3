@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import check, finish, guarded, import_from, register_addon, section  # noqa: E402
 
 addon = register_addon()
-common = import_from("keymaps.common")
+keymaps = import_from("keymaps")
 
 
 def addon_keyconfig():
@@ -54,7 +54,7 @@ def test_ctrl_d():
     check(kmi.key_modifier == 'NONE' and not kmi.repeat and kmi.active,
           f"no key held with it, no key repeat, active ({kmi.key_modifier}, {kmi.repeat=}, {kmi.active=})")
     check(kmi.properties.action == 'DESELECT', f"the action is DESELECT ({kmi.properties.action})")
-    check((km, kmi) in common.addon_keymaps, "the item is recorded for unregister")
+    check((km, kmi) in keymaps.addon_keymaps, "the item is recorded for unregister")
 
 
 def test_reregister():
@@ -63,7 +63,7 @@ def test_reregister():
     addon.unregister()
     try:
         check(our_items() == [], f"unregistering leaves no item of this add-on ({our_items()})")
-        check(common.addon_keymaps == [], f"nothing is left to remove ({len(common.addon_keymaps)})")
+        check(keymaps.addon_keymaps == [], f"nothing is left to remove ({len(keymaps.addon_keymaps)})")
     finally:
         addon.register()
     check(len(clear_items()) == 1, f"registered again, still exactly one Ctrl+D item ({len(clear_items())})")

@@ -67,8 +67,8 @@ renders it its own way.
   palette that stays up.
 - The tooltips popover is ported too, minus the "Suggest more!" URL: the
   platform rules keep links out of the addon's UI. It reads the live
-  keymap items through `keymaps.common.find_keymap` so the displayed keys
-  follow user remaps, which v2 hard-coded.
+  keymap items through a lookup in `keymaps/__init__.py`, added with the
+  popover, so the displayed keys follow user remaps, which v2 hard-coded.
 
 ### Stage 2: floating colour HUD
 

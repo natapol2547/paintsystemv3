@@ -312,7 +312,7 @@ turns nothing and `ALL` into each other.
 shortcut, added at the user's request after milestone 2: a Ctrl+D press
 runs `select_all(action='DESELECT')`, as Deselect does in Photoshop,
 Clip Studio Paint and Affinity. `keymaps/__init__.py` registers it with
-`keymaps.common.add_keymap_entry` in the add-on keyconfig's "Image
+its `add_keymap_entry` in the add-on keyconfig's "Image
 Paint" keymap (`EMPTY` space, `WINDOW` region). That is a mode keymap,
 not a tool keymap, so it works with the brush, these tools or any other
 tool active. A, Alt+A and Ctrl+I stay unbound (see above). Alt+D is not
