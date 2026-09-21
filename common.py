@@ -13,6 +13,12 @@ ADDON_ID = __package__
 log = logging.getLogger(__name__)
 
 
+def addon_preferences(context):
+    """The add-on's preferences, or None when it has no entry (a test, a reload)."""
+    addon = context.preferences.addons.get(ADDON_ID)
+    return addon.preferences if addon is not None else None
+
+
 def is_newer_than(major, minor=0, patch=0):
     return bpy.app.version >= (major, minor, patch)
 

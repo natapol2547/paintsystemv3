@@ -177,12 +177,12 @@ def steps():
 
     section("the preference turns it off")
     hidden = type("Preferences", (), {"show_action_bar": False})()
-    real_preferences = action_bar.preferences
-    action_bar.preferences = lambda context: hidden
+    real_preferences = action_bar.addon_preferences
+    action_bar.addon_preferences = lambda context: hidden
     try:
         check(not polls(), "the switch in the Gizmos popover hides the bar")
     finally:
-        action_bar.preferences = real_preferences
+        action_bar.addon_preferences = real_preferences
 
     screenshot = os.environ.get("SCREENSHOT")
     if screenshot:

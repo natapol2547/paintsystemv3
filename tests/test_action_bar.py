@@ -149,12 +149,12 @@ def test_the_bar_needs_a_live_selection():
     check(state.selected, f"even where the mask has a problem ({state.reason or 'none'})")
 
     hidden = SimpleNamespace(show_action_bar=False)
-    real_preferences = action_bar.preferences
-    action_bar.preferences = lambda context: hidden
+    real_preferences = action_bar.addon_preferences
+    action_bar.addon_preferences = lambda context: hidden
     try:
         check(not action_bar.show_bar(bpy.context), "the preference turns it off")
     finally:
-        action_bar.preferences = real_preferences
+        action_bar.addon_preferences = real_preferences
 
     run(bpy.ops.object.mode_set, mode='OBJECT')
     t.selection.clear()

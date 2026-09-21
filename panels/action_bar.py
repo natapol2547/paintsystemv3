@@ -25,7 +25,7 @@ from bpy.utils import register_class, unregister_class
 from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix
 
-from ..common import ADDON_ID, blender_icon, icon_kwargs, rounded_rect
+from ..common import addon_preferences, blender_icon, icon_kwargs, rounded_rect
 from ..context import get_active_tree
 from ..selection import session as selection_session
 
@@ -52,11 +52,6 @@ HUD, the Adjust Last Operation panel, is left out: it floats over a
 corner, can be collapsed, and draws above the bar where they overlap.
 """
 
-def preferences(context):
-    """The add-on's preferences, or None when it has no entry (a test, a reload)."""
-    addon = context.preferences.addons.get(ADDON_ID)
-    return addon.preferences if addon is not None else None
-
 
 def show_bar(context) -> bool:
     """Whether the bar belongs in this view now.
@@ -66,7 +61,7 @@ def show_bar(context) -> bool:
     selection there is nothing for it to act on that the sidebar does not
     already offer.
     """
-    prefs = preferences(context)
+    prefs = addon_preferences(context)
     if prefs is not None and not prefs.show_action_bar:
         return False
     if context.mode != 'PAINT_TEXTURE':
@@ -183,7 +178,7 @@ class PAINTSYSTEM_MT_action_bar(Menu):
         layout.separator()
         layout.operator("paint_system.blur_pixels", **icon_kwargs('MOD_SMOOTH'))
         layout.operator("paint_system.sharpen_pixels", **icon_kwargs('MOD_EDGESPLIT'))
-        prefs = preferences(context)
+        prefs = addon_preferences(context)
         if prefs is None:
             return
         layout.separator()
@@ -319,7 +314,7 @@ class PAINTSYSTEM_GGT_action_bar(GizmoGroup):
 
 def draw_gizmo_popover(self, context):
     """The bar's switch in the viewport's own Gizmos popover, where widgets live."""
-    prefs = preferences(context)
+    prefs = addon_preferences(context)
     if prefs is None:
         return
     layout = self.layout

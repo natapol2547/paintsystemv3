@@ -39,7 +39,7 @@ import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
-from ..common import ADDON_ID
+from ..common import addon_preferences
 from ..context import get_active_tree, get_ps_object
 from ..gpu_passes import core, surface
 from . import overlay_shader, raster
@@ -97,8 +97,7 @@ def srgb_to_linear(color) -> tuple[float, float, float]:
 
 def settings(context) -> dict:
     """The overlay preferences by name, or `DEFAULTS` when the add-on has no preferences entry."""
-    addon = context.preferences.addons.get(ADDON_ID)
-    prefs = addon.preferences if addon is not None else None
+    prefs = addon_preferences(context)
     if prefs is None:
         return DEFAULTS
     return {name: getattr(prefs, name) for name in DEFAULTS}
