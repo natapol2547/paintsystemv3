@@ -169,7 +169,7 @@ try:
     view_layer.objects.active = cube
     cube.data.materials.clear()
     ps = parse_context(bpy.context)
-    check(ps.ps_object == cube and ps.material is None, "cube without a material")
+    check(ps.ps_object == cube and cube.active_material is None, "cube without a material")
     check(ps.tree is None and ps.layer is None and ps.stack_item is None, "no material: no tree, layer or stack item")
 
     empty_obj = bpy.data.objects.new("Gradient Empty", None)
@@ -177,8 +177,7 @@ try:
     empty_obj.parent = cube
     view_layer.objects.active = empty_obj
     ps = parse_context(bpy.context)
-    check(ps.active_object == empty_obj and ps.ps_object == cube, "an empty resolves to its parent mesh")
-    check(ps.ps_objects == [cube], f"selected objects resolve to meshes {ps.ps_objects}")
+    check(bpy.context.object == empty_obj and ps.ps_object == cube, "an empty resolves to its parent mesh")
 
     view_layer.objects.active = cube
     mat = bpy.data.materials.new("Stack Material")
@@ -186,7 +185,7 @@ try:
     link_tree_to_material(mat, nested)
     nested.nodes.active = inner
     ps = parse_context(bpy.context)
-    check(ps.material == mat and ps.tree == nested, "material and tree")
+    check(ps.ps_object.active_material == mat and ps.tree == nested, "material and tree")
     check(ps.channel == nested.channels[0], "active channel")
     check(ps.layer == inner and ps.stack_item is not None and ps.stack_item.parent.node == box,
           "active layer and its stack item")

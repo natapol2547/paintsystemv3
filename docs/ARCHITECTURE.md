@@ -125,8 +125,8 @@ result over the stack with the base's settings. Moves and edits never
 touch `is_clip`; the next compile finds the new base. A layer whose
 outputs are part of a run ignores its cache.
 
-`context.parse_context(context)` resolves the object, material, tree,
-channel, active layer and its stack item in one place (PS-030).
+`context.parse_context(context)` resolves the object, tree, channel,
+active layer and its stack item in one place (PS-030).
 
 The layer list (`panels/layers_panels.py`) is a UIList over `tree.nodes`
 itself. `filter_items` hides nodes outside the stack and rows under a

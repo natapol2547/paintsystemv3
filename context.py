@@ -108,12 +108,7 @@ def get_active_tree(context) -> bpy.types.NodeTree | None:
 @dataclass
 class PSContext:
     """Everything a panel or operator resolves from ``bpy.context``, in one read."""
-    scene_settings: PaintSystemSceneSettings
-    active_object: bpy.types.Object | None
     ps_object: bpy.types.Object | None
-    ps_objects: list[bpy.types.Object]
-    material: bpy.types.Material | None
-    material_settings: PaintSystemMaterialSettings | None
     tree: bpy.types.NodeTree | None
     channel: bpy.types.PropertyGroup | None
     layer: bpy.types.Node | None
@@ -121,14 +116,7 @@ class PSContext:
 
 
 def parse_context(context) -> PSContext:
-    active_object = getattr(context, 'object', None)
-    ps_object = get_ps_object(active_object)
-    ps_objects = []
-    for obj in getattr(context, 'selected_objects', None) or ():
-        obj = get_ps_object(obj)
-        if obj is not None and obj not in ps_objects:
-            ps_objects.append(obj)
-    material = ps_object.active_material if ps_object is not None else None
+    ps_object = get_ps_object(getattr(context, 'object', None))
     tree = get_active_tree(context)
     channel = tree.active_channel if tree is not None else None
     layer = tree.nodes.active if tree is not None else None
@@ -138,12 +126,7 @@ def parse_context(context) -> PSContext:
     if layer is not None and channel is not None:
         stack_item = next((item for item in tree.stack(channel.name) if item.node == layer), None)
     return PSContext(
-        scene_settings=context.scene.paint_system,
-        active_object=active_object,
         ps_object=ps_object,
-        ps_objects=ps_objects,
-        material=material,
-        material_settings=material.paint_system if material is not None else None,
         tree=tree,
         channel=channel,
         layer=layer,

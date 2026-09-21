@@ -9,7 +9,11 @@ Done for the demo (M0 slice 3): `context.PSContext` and
 the design below:
 
 - No `prefs`, `trees` or `source_layer` fields yet; they arrive with the
-  tickets that need them (PS-040, PS-016).
+  tickets that need them (PS-040, PS-016). `scene_settings`,
+  `active_object`, `ps_objects`, `material` and `material_settings` are
+  left out too, since nothing reads them; each comes back with the first
+  code that does. `PSContext` holds `ps_object`, `tree`, `channel`,
+  `layer` and `stack_item`.
 - No `PSContextMixin`. Call sites use `parse_context(context)` directly,
   which reads the same without a base class.
 - `ps_object` accepts meshes only (an EMPTY resolves to its parent mesh).
