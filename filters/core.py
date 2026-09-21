@@ -352,24 +352,6 @@ class LayerImage:
         return undo_pixels.write_pixels(self.image, values)
 
 
-class ResultImage:
-    """Writes the result into a separate image, with no undo step.
-
-    For a filter whose output is a derived image rather than the layer's
-    pixels, such as a baked filter layer. PS-090's rule for derived
-    images applies: nothing pushes an undo step for them, and their owner
-    builds them again after undo or redo.
-    """
-
-    def __init__(self, image: bpy.types.Image):
-        self.image = image
-
-    def commit(self, values: np.ndarray) -> bool:
-        self.image.pixels.foreach_set(np.asarray(values, dtype=np.float32).ravel())
-        self.image.update()
-        return True
-
-
 _COMPOSE = FilterSpec(
     name="compose",
     apply_source="""

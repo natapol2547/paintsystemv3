@@ -8,15 +8,23 @@
 2. `filters.composite` draws that stack into one texture;
 3. the layer's kind runs over it -- its passes, or its own build where
    it has one -- followed by the encode below;
-4. the result is read back a band of rows at a time;
-5. `commit` writes it into the layer's image, packs it and stamps it.
+4. the result is read back as bytes a band of rows at a time, each band
+   going straight into a PNG (`filters.png`);
+5. `commit` packs that PNG into the layer's image and stamps it.
 
 A generator rather than a call because only the last unit writes
 anything, which is what lets a build be cancelled without anything
 changing on screen: the viewport goes on showing the previous result
-until the commit, and the commit is one `foreach_set` and four ID
-properties. The textures live in the generator's own frame, so abandoning
-it gives them back as well.
+until the commit, and the commit is one `pack` of a file already encoded
+and four ID properties. The textures live in the generator's own frame,
+so abandoning it gives them back as well.
+
+The PNG is the build's own rather than Blender's for time. Writing the
+pixels into the image and calling `Image.pack` encodes the whole picture
+in one call, about 0.9 s at 4K, which was the longest freeze of any
+build; encoding band by band spreads that over the readback units, at
+level 1, and the packed file is then the only copy of the pixels until
+the next draw decodes it.
 
 Colour space is the step that is easy to miss. Everything up to the
 encode is scene linear and straight, which is what the render engines
@@ -24,8 +32,8 @@ feed a shader and what the composite reproduces. The derived image is
 byte sRGB like a painted layer image, so the values are encoded on the
 way out and the compiled Image Texture node decodes them back. Doing it
 as a pass rather than in numpy keeps a 4K build in milliseconds rather
-than in tenths of a second, and costs no texture: it draws into one the
-pool has already handed back.
+than in tenths of a second, and the pass draws into a byte target, so
+the GPU rounds each value to the byte the file stores.
 """
 from __future__ import annotations
 
@@ -33,15 +41,16 @@ import hashlib
 import logging
 
 import bpy
-import numpy as np
+import gpu
 
 from ..compiler.bake import create_managed_image
 from ..compiler.core import build_ir, mark_dirty
 from ..compiler.ir import hash_payload
-from ..gpu_passes.core import read_color
+from ..gpu_passes.core import read_color_bytes
 from . import composite, derived, freshness, layer_plan
-from .core import BAND_ROWS, FilterSpec, PixelSource, Refused, ResultImage, run_pass
+from .core import BAND_ROWS, FilterSpec, PixelSource, Refused, run_pass
 from .layer_specs import layer_filter_kind
+from .png import RGBAStream
 from .registry import ENCODE_SRGB
 
 log = logging.getLogger(__name__)
@@ -79,12 +88,14 @@ def steps(context, tree, node, *, plan=None):
     true for video memory too: abandoning it raises `GeneratorExit` at
     whichever yield it reached, and the pool is closed on the way out.
 
-    Three textures are in flight at the widest point -- the composite,
-    the filter's output and the encode's -- and the pool hands the first
-    one back for the encode to draw into, so a filter costs one target
-    more than the composite it reads. A kind with a build of its own
-    decides for itself; the painter holds four while it analyses the
-    picture, as `filters.painter.build` explains.
+    Two of the pool's textures are in flight at the widest point of a
+    list of passes -- the one a pass reads and the one it draws into --
+    and three for an unsharp mask, which holds the composite as well. A
+    kind with a build of its own decides for itself; the painter holds
+    four while it analyses the picture, as `filters.painter.build`
+    explains. The encode draws into a byte target of its own, and the
+    pool is closed before the readback, so what the readback holds is
+    that target alone.
     """
     if plan is None:
         plan = layer_plan.resolve_input(context, tree, node)
@@ -117,21 +128,31 @@ def steps(context, tree, node, *, plan=None):
             else:
                 current = yield from _filtered(kind, settings, current, pool, 0.2, filtered)
             yield f"{kind.label}: filtering", filtered
-            framebuffer, encoded = _draw(ENCODE_SRGB, current, {}, pool)
+            framebuffer, encoded = _encoded(current, size)
             pool.release(current)
+            pool.close()
 
-            bands = []
-            for first in range(0, height, READ_ROWS):
-                last = min(height, first + READ_ROWS)
-                bands.append(read_color(framebuffer, width, height, rows=(first, last)))
+            # PNG rows run from the top and the framebuffer's from the
+            # bottom, so the bands are read top first and each is turned
+            # over. The digest is what makes the build stamp change when
+            # the picture does (`derived.BUILD_KEY`), and takes the bands
+            # as they come off the GPU: all it needs is the same order
+            # every time.
+            png = RGBAStream(width, height)
+            digest = hashlib.blake2b(digest_size=16)
+            firsts = range(0, height, READ_ROWS)
+            for index, first in enumerate(reversed(firsts)):
+                band = read_color_bytes(framebuffer, width, height,
+                                        rows=(first, min(height, first + READ_ROWS)))
+                digest.update(band)
+                png.add(band[::-1])
                 yield (f"{kind.label}: reading the result back",
-                       filtered + (0.9 - filtered) * last / height)
-            values = bands[0] if len(bands) == 1 else np.concatenate(bands)
+                       filtered + (0.9 - filtered) * (index + 1) / len(firsts))
         finally:
             pool.close()
 
         yield f"{kind.label}: writing the result", 0.9
-        return commit(tree, node, plan, values, size, read)
+        return commit(tree, node, plan, png.finish(), digest.hexdigest(), size, read)
 
 
 def inputs_of(tree, node, plan) -> tuple[str, int]:
@@ -205,27 +226,64 @@ def _draw(spec: FilterSpec, texture, params: dict, pool, *, second=None):
         source.release()
 
 
-def commit(tree, node, plan, values, size, read):
-    """Write *values* into *node*'s derived image, pack it and stamp it.
+def _encoded(texture, size):
+    """*texture* encoded to sRGB in an `RGBA8` target of its own, with its framebuffer.
 
-    *read* is what `inputs_of` said when the build started, and the stamp
-    is that rather than what the layer asks for now: the pixels are what
-    was read then.
+    Bytes because that is what the file stores: the GPU rounds each value
+    once, where it writes it, and `read_color_bytes` can only read a
+    texture that holds bytes.
+    """
+    try:
+        target = gpu.types.GPUTexture(size, format='RGBA8')
+    except RuntimeError as error:
+        log.warning("Could not allocate a %sx%s result target: %s", *size, error)
+        raise Refused("The GPU could not allocate the textures for this filter; "
+                      "try a lower resolution") from error
+    source = PixelSource.from_texture(texture)
+    try:
+        return run_pass(ENCODE_SRGB, source, target, params={})
+    finally:
+        source.release()
+
+
+def commit(tree, node, plan, data, digest, size, read):
+    """Pack *data*, the result as a PNG, into *node*'s derived image and stamp it.
+
+    *digest* is a digest of the bytes the PNG holds. *read* is what
+    `inputs_of` said when the build started, and the stamp is that rather
+    than what the layer asks for now: the pixels are what was read then.
 
     The pack comes before the stamps for the reason `filters.derived`
-    gives: an unpacked generated image loses its pixels to `image.copy()`
-    and to undo-then-redo while its ID properties survive both, so a
-    stamp written first could end up describing pixels that are gone.
+    gives: a stamp written first could end up describing pixels that are
+    gone. Here the packed file is the pixels, so the order is the only
+    way it could.
     """
     fingerprint, changes = read
-    image = _result_image(tree, node, size)
-    ResultImage(image).commit(values)
-    image.pack()
+    image = node.derived_image
+    if image is None:
+        # One texel: the packed file brings its own size, and a generated
+        # buffer the size of the result would only be thrown away.
+        image = create_managed_image(f"{tree.name} {node.name} Filter", 1, 1)
+    # The datablock is reused rather than replaced, as `bake_node_cache`
+    # does: every replacement is a name Blender has to make unique and an
+    # orphan for the next sweep to find. Nothing here asks for its size or
+    # scales it -- either would decode what was just packed -- and none is
+    # needed: a PNG of another size resizes the image as it is packed.
+    image.pack(data=data, data_len=len(data))
+    # A generated image ignores a packed file and would come back from an
+    # undo or a copy as black; a file image reads it. The first build's
+    # switch is also what drops its generated buffer.
+    if image.source != 'FILE':
+        image.source = 'FILE'
+    # The previous result is still in the image's buffer. Freed, the next
+    # read decodes the new file. `reload()` would do it too, but looks for
+    # a file on disk first and reports the empty path as missing.
+    image.buffers_free()
 
     image[derived.OWNER_KEY] = f"{tree.uuid}:{node.uuid}"
     image[derived.FINGERPRINT_KEY] = fingerprint
     image[derived.UV_MAP_KEY] = plan.uv_map
-    image[derived.BUILD_KEY] = hash_payload([fingerprint, _digest(values)])
+    image[derived.BUILD_KEY] = hash_payload([fingerprint, digest])
     derived.note_packed(image)
 
     node.derived_image = image
@@ -246,21 +304,6 @@ def commit(tree, node, plan, values, size, read):
     return image
 
 
-def _result_image(tree, node, size):
-    """*node*'s derived image, made or resized to *size*.
-
-    The datablock is reused rather than replaced, as `bake_node_cache`
-    does: every replacement is a name Blender has to make unique and an
-    orphan for the next sweep to find.
-    """
-    image = node.derived_image
-    if image is None:
-        return create_managed_image(f"{tree.name} {node.name} Filter", *size)
-    if tuple(image.size) != size:
-        image.scale(*size)
-    return image
-
-
 def _fingerprint(tree, node, plan) -> str:
     """What the build was asked for: the structural half of freshness.
 
@@ -272,15 +315,3 @@ def _fingerprint(tree, node, plan) -> str:
     """
     ctx = build_ir(tree).ctx
     return freshness.stamp(freshness.fingerprint_parts(ctx, node, plan.source))
-
-
-def _digest(values) -> str:
-    """A short digest of the pixels a build produced.
-
-    This is what makes the build stamp change when the picture does. The
-    structural fingerprint cannot: painting on a layer below moves no
-    property, so two builds around a brush stroke ask for exactly the
-    same thing and produce different pixels.
-    """
-    array = np.ascontiguousarray(values, dtype=np.float32)
-    return hashlib.blake2b(array, digest_size=16).hexdigest()

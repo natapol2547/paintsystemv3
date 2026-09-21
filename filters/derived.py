@@ -31,6 +31,10 @@ from ..compiler.core import ps_trees
 
 # Bumped when a build would produce different pixels from the same
 # inputs, so that every stamp an older build wrote reads as out of date.
+# A difference no one can see does not count: storing through a byte
+# target rather than a float readback moved some values by one step in
+# 255, and bumping for that would only make every file rebuild its
+# filter layers on open.
 FILTER_VERSION = 1
 
 # "<tree uuid>:<node uuid>" of the layer that built these pixels.

@@ -200,7 +200,11 @@ def _plan_layer(layer, positions, visited, group_input, *, holds_run: bool) -> L
         rule = blend_glsl.FILTER_MIX
         strength = layer.amount
         if derived.is_built(layer.derived_image):
-            image = _source_image(layer.derived_image)
+            # Not `_source_image`: a built result is packed by the build
+            # that stamped it, so there is nothing to check, and reading
+            # the size of one just committed would decode the whole file
+            # to learn it (`filters.layer_build.commit`).
+            image = layer.derived_image
             uv_map = derived.stamped_uv_map(image)
 
     if rule == blend_glsl.BLEND and layer.blend_mode not in blend_glsl.ALLOWED_BLEND_MODES:

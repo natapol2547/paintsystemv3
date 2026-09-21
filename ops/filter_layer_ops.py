@@ -10,9 +10,10 @@ back on the way out.
 
 Both take `UNDO`. That is not the case PS-090's no-`UNDO` rule covers: the
 rule exists because a memfile step stacked on an *image* undo step costs
-two Ctrl+Z, and a derived image pushes no image step at all -- which is
-what `filters.core.ResultImage` is for. With `UNDO` and a packed image,
-one Ctrl+Z takes the whole rebuild back, pixels and stamps together.
+two Ctrl+Z, and a derived image pushes no image step at all: its build
+packs the pixels rather than registering them. With `UNDO` and a packed
+image, one Ctrl+Z takes the whole rebuild back, pixels and stamps
+together.
 
 No dialog. `PAINTSYSTEM_OT_bake_cache` asks for a resolution because a
 cached layer has nowhere else to keep one; a filter layer has

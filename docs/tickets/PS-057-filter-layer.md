@@ -472,10 +472,10 @@ it.
 `bl_options = {'REGISTER', 'UNDO'}`, as `PAINTSYSTEM_OT_bake_cache` has.
 This is not the case PS-090's no-`UNDO` rule covers. That rule exists
 because a memfile step stacked on an *image undo step* costs two Ctrl+Z,
-and a derived image pushes no image step at all — that is what
-`ResultImage` is for. With `UNDO` and a packed image, one Ctrl+Z takes
-the whole rebuild back, pixels and stamps together, which is what a
-button labelled Update should do.
+and a derived image pushes no image step at all — its build packs the
+pixels rather than registering them. With `UNDO` and a packed image, one
+Ctrl+Z takes the whole rebuild back, pixels and stamps together, which is
+what a button labelled Update should do.
 
 **Automatically**, by `filters/layer_job.py`, the same generator pulled
 from a `bpy.app.timers` tick with a time budget, debounced 0.4 s, gated
@@ -552,9 +552,11 @@ instant and cannot fail. The image is made in the commit step through
 `create_managed_image` (`compiler/bake.py:24-31`), byte and sRGB like a
 painted layer image — which halves memory against float and keeps
 PS-056's open premultiply-twice bug (PS-056:32-37) away from this
-feature. The datablock is reused and `image.scale()`d on a resolution
-change, exactly as `bake_node_cache` does (`:116-120`), so PS-083 and
-PS-084 stay rare rather than becoming routine.
+feature. The datablock is reused on a resolution change, as
+`bake_node_cache` does (`:116-120`), so PS-083 and PS-084 stay rare
+rather than becoming routine. Since PS-053 it is resized by the pack
+itself, which carries the new size in the PNG, rather than by
+`image.scale()`.
 
 **Duplicate.** `copy()` calls `super().copy(node)` and then
 `self.derived_image = self.derived_image.copy()`, re-stamping
@@ -740,6 +742,27 @@ the result; `is_built` already degrades that to "reads as unbuilt" rather
 than to wrong pixels, so the failure is a rebuild rather than a
 corruption. Not taken here.
 
+**Since PS-053, the build writes the PNG itself.** The encode pass draws
+into a byte target, the readback bands are read as bytes, and each band
+goes into a PNG stream (`filters/png.py`: the Up filter, zlib at level 1
+with the run-length strategy) as it arrives. The commit hands the
+finished file to `image.pack(data=...)`, switches the image to a file
+source and frees its buffer, so the pack no longer encodes anything and
+the image decodes the new file the next time something draws it. The
+same stack as the first table, still best of three:
+
+| Resolution | Total | Longest single unit | Decode at the next draw | Packed size |
+| --- | --- | --- | --- | --- |
+| 1024² | 67 | 28 | 27 | 3.0 MB |
+| 2048² | 283 | 57 | 122 | 13.9 MB |
+| 4096² | 1094 | 128 | 452 | 43.4 MB |
+
+The source layer is noise, so the decode is at the slow end; a painted
+texture decodes faster. The decode is the one blocking call left, and it
+is a fifth of the pack it replaced. Storing through bytes rounds a few
+values differently from the float readback it replaced, by one step in
+255, which `FILTER_VERSION` deliberately does not count.
+
 ## Known gaps
 
 - No region-limited invalidation and no low-resolution proxy. A refresh
@@ -763,9 +786,10 @@ corruption. Not taken here.
   nodes stay. Pre-existing, out of scope.
 - `note_image_changed` marks a whole layer suspect, not a region, so a
   one-texel dab costs a full refresh.
-- The pack cannot be sliced, so the last unit of every rebuild blocks for
-  as long as a PNG encode of the result takes -- see Measurements. The
-  auto-refresh path pays it with no progress bar to explain it.
+- The decode of a new result cannot be sliced: the first draw after a
+  rebuild reads the whole packed PNG in one call, about half a second at
+  4096² -- see Measurements. The encode it replaced was five times that
+  and sat inside the last unit of every rebuild.
 - "Nothing can show it" is read as the layer's own `enabled` only. A
   filter layer inside a switched-off folder is just as invisible and is
   still refreshed. Folding that in means asking for the ancestors of

@@ -91,6 +91,22 @@ def read_color(framebuffer: gpu.types.GPUFrameBuffer, width: int, height: int,
     return np.frombuffer(buffer, dtype=np.float32).reshape(count, width, 4).copy()
 
 
+def read_color_bytes(framebuffer: gpu.types.GPUFrameBuffer, width: int, height: int,
+                     slot: int = 0, *, rows: tuple[int, int] | None = None) -> np.ndarray:
+    """`read_color` for a slot that holds bytes, as a uint8 `(rows, width, 4)` array.
+
+    Only for an `RGBA8` texture. Reading a float texture as bytes returns
+    zeros on Vulkan, so a caller wanting bytes draws into a byte target
+    first and lets the GPU round (PS-091).
+    """
+    first, last = (0, height) if rows is None else rows
+    count = last - first
+    buffer = gpu.types.Buffer('UBYTE', width * count * 4)
+    with framebuffer.bind():
+        framebuffer.read_color(0, first, width, count, 4, slot, 'UBYTE', data=buffer)
+    return np.frombuffer(buffer, dtype=np.uint8).reshape(count, width, 4).copy()
+
+
 def tile_offset(tile: int) -> tuple[float, float]:
     """The UV-space origin of a UDIM tile number (1001 is the 0..1 square)."""
     index = tile - 1001

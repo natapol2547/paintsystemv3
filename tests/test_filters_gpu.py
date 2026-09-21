@@ -205,22 +205,6 @@ def test_float_storage_is_premultiplied():
           f"colour and alpha fall together, staying premultiplied ({after[0]})")
 
 
-def test_result_image_leaves_the_source():
-    section("a result image takes the output instead of the layer")
-    if not available():
-        return
-    source = new_image("PS Filter Source", 16, 16)
-    result = new_image("PS Filter Result", 16, 16,
-                       values=np.zeros(16 * 16 * 4, dtype=np.float32))
-    before = read(source)
-    core.apply_filter(registry.INVERT, source, core.ResultImage(result),
-                      params={"channels": (1.0, 1.0, 1.0, 0.0), "encode": 0})
-    check(np.array_equal(read(source), before), "the source image is untouched")
-    expected = as_bytes(before).reshape(-1, 4)
-    got = as_bytes(read(result)).reshape(-1, 4)
-    check(np.array_equal(got[:, :3], 255 - expected[:, :3]), "the result image holds the inversion")
-
-
 def test_release():
     section("the shaders are given back")
     if not available():
@@ -237,7 +221,6 @@ for test in (test_identity_is_exact,
              test_mask_limits_the_pass,
              test_mask_matches_the_stencil,
              test_float_storage_is_premultiplied,
-             test_result_image_leaves_the_source,
              test_release):
     guarded(test)
 

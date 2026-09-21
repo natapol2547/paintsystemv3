@@ -113,6 +113,11 @@ if available():
         check(not image.is_float and image.colorspace_settings.name == 'sRGB',
               f"byte and sRGB like a painted layer ({image.colorspace_settings.name})")
         check(image.packed_file is not None, "and packed, so it survives into the next .blend")
+        # A generated image ignores its packed file, and comes back from an
+        # undo or a copy black. Dirty, it would be packed again by every
+        # save and hold up quitting with a prompt about unsaved images.
+        check(image.source == 'FILE' and not image.is_dirty,
+              f"as a file image with nothing unsaved ({image.source}, dirty {image.is_dirty})")
         check(derived.is_built(image), "the stamps say it is built")
         check(image[derived.OWNER_KEY] == f"{tree.uuid}:{node.uuid}",
               "and name the layer that built it")
@@ -218,8 +223,9 @@ if available():
         section("the datablock is reused")
         node.resolution = '2048'
         again = layer_build.build_layer(bpy.context, tree, node)
-        check(again == image, "a resolution change scales the image rather than replacing it")
+        check(again == image, "a resolution change resizes the image rather than replacing it")
         check(tuple(again.size) == (2048, 2048), f"to {tuple(again.size)}")
+        check(not again.is_dirty, "and leaves nothing unsaved")
         node.resolution = '1024'
 
         section("a build that is abandoned")
