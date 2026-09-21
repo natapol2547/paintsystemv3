@@ -23,7 +23,7 @@ from bpy_extras.view3d_utils import location_3d_to_region_2d
 from mathutils import Euler, Matrix, Quaternion, Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import check, finish, import_from, register_addon, section  # noqa: E402
+from harness import check, finish, import_from, read_texel_map, register_addon, section  # noqa: E402
 
 if bpy.app.background:
     print("test_selection_view_windowed.py needs a window; run without -b")
@@ -247,9 +247,9 @@ def check_region(label, index, region):
     hi = centre + (0.043 * width, 0.071 * height)
     add_view_box(region, lo, hi)
     mask = raster.get_mask(tree().selection, (SIZE, SIZE)).read().ravel()
-    found = texel_map.get_texel_map(cube(), "UVMap", (SIZE, SIZE), fallback_to_active=False)
-    positions = found.positions().reshape(-1, 4).astype(np.float64)
-    normals = found.normals().reshape(-1, 4)[:, :3].astype(np.float64)
+    found = texel_map.get_texel_map(cube(), "UVMap", (SIZE, SIZE))
+    positions = read_texel_map(found).reshape(-1, 4).astype(np.float64)
+    normals = read_texel_map(found, 1).reshape(-1, 4)[:, :3].astype(np.float64)
     view = np.array(rv3d.view_matrix, dtype=np.float64)
     clip = np.c_[positions[:, :3], np.ones(len(positions))] @ np.array(rv3d.perspective_matrix, dtype=np.float64).T
     screen = (clip[:, :2] / clip[:, 3:4] * 0.5 + 0.5) * (width, height)

@@ -88,19 +88,19 @@ instead of once per operation.
   multi-dimensional buffer reports reversed strides on 4.2 (PS-096
   spike 4).
 - `gpu_passes/texel_map.py`:
-  - `build_texel_map(obj, uv_map, width, height, tile=1001, margin=4)`
-    draws the evaluated mesh's loop triangles into a `GPUFrameBuffer`
-    with two colour slots, using the UV coordinate as clip position.
-    Outputs: `position` (RGBA32F: world position, coverage in alpha) and
-    `normal` (RGBA16F: world normal). One shader, two fragment outputs,
-    one pass.
+  - `get_texel_map(obj, uv_map, size, tile=1001, margin=4)` draws the
+    evaluated mesh's loop triangles into a `GPUFrameBuffer` with two
+    colour slots, using the UV coordinate as clip position. The
+    `TexelMap` it returns holds two textures: `position` (RGBA32F: world
+    position, coverage in alpha) and `normal` (RGBA16F: world normal).
+    One shader, two fragment outputs, one pass. A missing UV map gives
+    None.
   - Margin: the same batch drawn first with each triangle grown outward
     from its UV centroid by the margin, writing `MARGIN_COVERAGE` (0.5)
     in alpha, then again at its real size writing 1.0. A tool that wants
     real surface tests alpha `> 0.75`; one that wants every paintable
     texel tests `> 0.0`.
-  - `get_texel_map(obj, uv_map, size, tile, margin, *,
-    fallback_to_active=True)` caches maps per key. The key is the
+  - `get_texel_map` caches maps per key. The key is the
     object's `session_uid`, the resolved UV map name, the size, the tile,
     the margin, the world matrix and the surface key from
     `surface.resolve_key`. Maps store world positions, so a move gives a
@@ -108,7 +108,7 @@ instead of once per operation.
     key (Edit Mode) the map is built and not cached.
     `depsgraph_update_post`, undo and redo only mark surfaces suspect
     (PS-093); a file read drops every map.
-  - `get_position_batch(obj, uv_map, *, fallback_to_active=False)`: the
+  - `get_position_batch(obj, uv_map)`: the
     same triangles as a world-position `TRIS` batch for depth passes,
     keyed like the maps. A map and a batch that both miss in one build
     share one `_triangle_arrays` extraction.

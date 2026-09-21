@@ -370,10 +370,10 @@ class ObjectSurface:
         self.uv_map = uv_map
 
     def texel_map(self, width: int, height: int, tile: int):
-        return texel_map.get_texel_map(self.object, self.uv_map, (width, height), tile, fallback_to_active=False)
+        return texel_map.get_texel_map(self.object, self.uv_map, (width, height), tile)
 
     def batch(self):
-        return texel_map.get_position_batch(self.object, self.uv_map, fallback_to_active=False)
+        return texel_map.get_position_batch(self.object, self.uv_map)
 
 
 class SyntheticSurface:

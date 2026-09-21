@@ -28,7 +28,7 @@ from mathutils import Euler, Matrix
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import selection_reference as reference  # noqa: E402
-from harness import check, finish, guarded, import_from, register_addon, section, skip  # noqa: E402
+from harness import check, finish, guarded, import_from, read_texel_map, register_addon, section, skip  # noqa: E402
 
 register_addon()
 core = import_from("gpu_passes.core")
@@ -124,9 +124,9 @@ def full_box(region=REGION):
 
 def surface_texels(obj, size=SIZE):
     """World positions and normals of *obj*'s texel map, `(size * size, 4)` float64 each."""
-    found = texel_map.get_texel_map(obj, "UVMap", (size, size), fallback_to_active=False)
-    return (found.positions().reshape(-1, 4).astype(np.float64),
-            found.normals().reshape(-1, 4).astype(np.float64))
+    found = texel_map.get_texel_map(obj, "UVMap", (size, size))
+    return (read_texel_map(found).reshape(-1, 4).astype(np.float64),
+            read_texel_map(found, 1).reshape(-1, 4).astype(np.float64))
 
 
 def project(points, view, projection, region=REGION):

@@ -14,7 +14,7 @@ import gpu
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import check, finish, guarded, import_from, register_addon, section, skip  # noqa: E402
+from harness import check, finish, guarded, import_from, read_texel_map, register_addon, section, skip  # noqa: E402
 
 register_addon()
 core = import_from("gpu_passes.core")
@@ -61,6 +61,18 @@ def face_maps(obj):
                   @ polygon.normal).normalized()
         out.append((np.linalg.solve(uv_matrix, world), bounds, np.array(normal)))
     return out
+
+
+def build(obj, width, height, tile=1001, margin=texel_map.MARGIN):
+    """An uncached map of *obj* through its active render UV map, or None."""
+    name = texel_map.resolve_uv_map(obj, "")
+    arrays = texel_map._triangle_arrays(obj, name, bpy.context.evaluated_depsgraph_get())
+    return None if arrays is None else texel_map._draw_texel_map(arrays, width, height, tile, margin)
+
+
+def cached(kind='map'):
+    """How many entries of *kind*, 'map' or 'batch', the cache holds."""
+    return sum(1 for key in texel_map._cache if key[0] == kind)
 
 
 def texel(array, u, v):
@@ -120,12 +132,12 @@ def test_texels_match_the_surface():
     if not available():
         return
     obj = cube()
-    built = texel_map.build_texel_map(obj, "", SIZE, SIZE)
+    built = build(obj,SIZE, SIZE)
     check(built is not None, "the map was built")
     if built is None:
         return
-    positions = built.positions()
-    normals = built.normals()
+    positions = read_texel_map(built)
+    normals = read_texel_map(built, 1)
     covered = positions[..., 3] > 0.75
     us, vs = texel_centre_uvs(SIZE)
 
@@ -163,14 +175,15 @@ def test_margin_extends_islands():
     if not available():
         return
     obj = cube()
-    bare = texel_map.build_texel_map(obj, "", SIZE, SIZE, margin=0)
-    grown = texel_map.build_texel_map(obj, "", SIZE, SIZE, margin=texel_map.MARGIN)
+    bare = build(obj,SIZE, SIZE, margin=0)
+    grown = build(obj,SIZE, SIZE, margin=texel_map.MARGIN)
     if bare is None or grown is None:
         check(False, "both maps were built")
         return
 
-    islands = bare.positions()[..., 3] > 0.75
-    grown_alpha = grown.positions()[..., 3]
+    islands = read_texel_map(bare)[..., 3] > 0.75
+    grown_positions = read_texel_map(grown)
+    grown_alpha = grown_positions[..., 3]
     grown_islands = grown_alpha > 0.75
     margin = (grown_alpha > 0.0) & ~grown_islands
 
@@ -189,7 +202,7 @@ def test_margin_extends_islands():
     check(not (grown_alpha > 0.0).all(), "texels beyond the margin keep coverage 0")
 
     # A margin texel continues its own triangle, so it stays on the cube.
-    filled = grown.positions()[margin][:, :3]
+    filled = grown_positions[margin][:, :3]
     check(np.abs(filled).max() < 1.5,
           f"margin positions stay near the cube surface (max |coordinate| "
           f"{float(np.abs(filled).max()):.3f}, the cube reaches 1.0)")
@@ -200,10 +213,10 @@ def test_transform_is_applied():
     if not available():
         return
     obj = cube()
-    before = texel_map.build_texel_map(obj, "", SIZE, SIZE)
+    before = build(obj,SIZE, SIZE)
     obj.location = (5.0, 0.0, 0.0)
     bpy.context.view_layer.update()
-    after = texel_map.build_texel_map(obj, "", SIZE, SIZE)
+    after = build(obj,SIZE, SIZE)
     obj.location = (0.0, 0.0, 0.0)
     bpy.context.view_layer.update()
     if before is None or after is None:
@@ -212,7 +225,7 @@ def test_transform_is_applied():
 
     u0, v0, u1, v1 = face_maps(obj)[0][1]
     centroid = ((u0 + u1) / 2, (v0 + v1) / 2)
-    moved = texel(after.positions(), *centroid) - texel(before.positions(), *centroid)
+    moved = texel(read_texel_map(after), *centroid) - texel(read_texel_map(before), *centroid)
     check(abs(moved[0] - 5.0) < 1e-3 and abs(moved[1]) < 1e-3 and abs(moved[2]) < 1e-3,
           f"positions moved by exactly the object's 5 units in x {tuple(round(float(v), 4) for v in moved[:3])}")
 
@@ -226,7 +239,7 @@ def test_cache():
     first = texel_map.get_texel_map(obj, "", (64, 64))
     second = texel_map.get_texel_map(obj, "", (64, 64))
     check(first is not None and first is second, "the same arguments return the same map")
-    check(texel_map.cached_count() == 1, f"one map is cached, not {texel_map.cached_count()}")
+    check(cached() == 1, f"one map is cached, not {cached()}")
 
     other_size = texel_map.get_texel_map(obj, "", (32, 32))
     check(other_size is not first, "a different size is a different map")
@@ -239,8 +252,8 @@ def test_cache():
     bpy.context.view_layer.update()
 
     texel_map.invalidate(obj.session_uid)
-    check(texel_map.cached_count() == 0,
-          f"invalidating the object empties the cache, {texel_map.cached_count()} left")
+    check(cached() == 0,
+          f"invalidating the object empties the cache, {cached()} left")
 
 
 def test_cache_follows_surface_content():
@@ -253,8 +266,8 @@ def test_cache_follows_surface_content():
     first = texel_map.get_texel_map(obj, "", (64, 64))
     obj.data.update()
     bpy.context.view_layer.update()
-    check(texel_map.get_texel_map(obj, "", (64, 64)) is first and texel_map.cached_count() == 1,
-          f"a geometry update that changes nothing keeps the map ({texel_map.cached_count()} cached)")
+    check(texel_map.get_texel_map(obj, "", (64, 64)) is first and cached() == 1,
+          f"a geometry update that changes nothing keeps the map ({cached()} cached)")
 
     bpy.ops.ed.undo_push(message="before the vertex move")
     obj.data.vertices[0].co.z += 0.5
@@ -262,7 +275,8 @@ def test_cache_follows_surface_content():
     bpy.ops.ed.undo_push(message="vertex move")
     bpy.context.view_layer.update()
     moved = texel_map.get_texel_map(obj, "", (64, 64))
-    changed = int((np.abs(moved.positions() - first.positions()) > 1e-4).any(-1).sum()) if moved is not None else 0
+    changed = (int((np.abs(read_texel_map(moved) - read_texel_map(first)) > 1e-4).any(-1).sum())
+               if moved is not None else 0)
     check(moved is not None and moved is not first and changed > 0,
           f"moving a vertex builds a new map with moved positions ({changed} texels differ)")
 
@@ -270,24 +284,23 @@ def test_cache_follows_surface_content():
     bpy.context.view_layer.update()
     obj = cube()
     undone = texel_map.get_texel_map(obj, "", (64, 64))
-    fresh = texel_map.build_texel_map(obj, "", 64, 64)
+    fresh = build(obj,64, 64)
     check(undone is first, "undoing the move finds the map built before it")
-    check(undone is not None and fresh is not None and np.array_equal(undone.positions(), fresh.positions()),
+    check(undone is not None and fresh is not None
+          and np.array_equal(read_texel_map(undone), read_texel_map(fresh)),
           "which matches a fresh build pixel for pixel")
 
-    count = texel_map.cached_count()
+    count = cached()
     bpy.ops.object.mode_set(mode='EDIT')
     try:
         in_edit = texel_map.get_texel_map(obj, "", (64, 64))
-        check(in_edit is not None and texel_map.cached_count() == count,
-              f"in Edit Mode a map is built and not cached ({texel_map.cached_count()} cached, {count} before)")
+        check(in_edit is not None and cached() == count,
+              f"in Edit Mode a map is built and not cached ({cached()} cached, {count} before)")
     finally:
         bpy.ops.object.mode_set(mode='OBJECT')
 
-    check(texel_map.get_texel_map(obj, "PS Texel Missing", (64, 64), fallback_to_active=False) is None,
-          "a missing UV map without the fallback gives None")
-    check(texel_map.get_texel_map(obj, "PS Texel Missing", (64, 64)) is not None,
-          "and with it falls back to the active UV map")
+    check(texel_map.get_texel_map(obj, "PS Texel Missing", (64, 64)) is None,
+          "a missing UV map gives None, not another map")
     texel_map.invalidate()
 
 
@@ -306,12 +319,12 @@ def test_position_batch():
 
     texel_map._triangle_arrays = counting_triangle_arrays
     try:
-        texel_map.get_texel_map(obj, "", (64, 64), fallback_to_active=False)
+        texel_map.get_texel_map(obj, "", (64, 64))
         batch = texel_map.get_position_batch(obj, "")
         check(batch is not None and len(calls) == 1,
               f"a batch after a map miss in the same build extracts once ({len(calls)} extractions)")
-        check(texel_map.cached_batch_count() == 1 and texel_map.cached_count() == 1,
-              f"one batch and one map are cached ({texel_map.cached_batch_count()}, {texel_map.cached_count()})")
+        check(cached('batch') == 1 and cached() == 1,
+              f"one batch and one map are cached ({cached('batch')}, {cached()})")
         texel_map._forget_pending_arrays()
         check(texel_map.get_position_batch(obj, "") is batch and len(calls) == 1,
               f"a later call is a hit ({len(calls)} extractions)")
@@ -319,8 +332,8 @@ def test_position_batch():
         bpy.context.view_layer.update()
         try:
             moved = texel_map.get_position_batch(obj, "")
-            check(moved is not None and moved is not batch and texel_map.cached_batch_count() == 2,
-                  f"moving the object gives a new batch ({texel_map.cached_batch_count()} cached)")
+            check(moved is not None and moved is not batch and cached('batch') == 2,
+                  f"moving the object gives a new batch ({cached('batch')} cached)")
         finally:
             obj.location = (0.0, 0.0, 0.0)
             bpy.context.view_layer.update()
@@ -329,13 +342,13 @@ def test_position_batch():
         texel_map.invalidate()
         calls.clear()
         texel_map.get_position_batch(obj, "")
-        texel_map.get_texel_map(obj, "", (32, 32), fallback_to_active=False)
-        check(len(calls) == 1 and texel_map.cached_count() == 1,
+        texel_map.get_texel_map(obj, "", (32, 32))
+        check(len(calls) == 1 and cached() == 1,
               f"so does a map after a batch miss ({len(calls)} extractions)")
     finally:
         texel_map._triangle_arrays = extract
         texel_map.invalidate()
-    check(texel_map.cached_batch_count() == 0, "invalidate drops the batches too")
+    check(cached('batch') == 0, "invalidate drops the batches too")
 
 
 def test_cache_budget():
@@ -350,8 +363,8 @@ def test_cache_budget():
         texel_map.CACHE_BUDGET = 64 * 64 * 24 + 1
         first = texel_map.get_texel_map(obj, "", (64, 64))
         texel_map.get_texel_map(obj, "", (64, 64), tile=1002)
-        check(texel_map.cached_count() == 1,
-              f"the older map was evicted, {texel_map.cached_count()} cached")
+        check(cached() == 1,
+              f"the older map was evicted, {cached()} cached")
         check(texel_map.get_texel_map(obj, "", (64, 64)) is not first,
               "the evicted map is rebuilt on the next request")
     finally:
@@ -374,15 +387,14 @@ def test_udim_tile():
         obj.data.update()
         bpy.context.view_layer.update()
 
-        in_tile = texel_map.build_texel_map(obj, "", SIZE, SIZE, tile=1002)
-        out_of_tile = texel_map.build_texel_map(obj, "", SIZE, SIZE, tile=1001)
+        in_tile = build(obj,SIZE, SIZE, tile=1002)
+        out_of_tile = build(obj,SIZE, SIZE, tile=1001)
         if in_tile is None or out_of_tile is None:
             check(False, "both maps were built")
             return
-        check((in_tile.positions()[..., 3] > 0.75).any(), "tile 1002 holds the shifted UVs")
-        check(not (out_of_tile.positions()[..., 3] > 0.0).any(),
-              f"tile 1001 is empty, "
-              f"{int((out_of_tile.positions()[..., 3] > 0.0).sum())} texels covered")
+        check((read_texel_map(in_tile)[..., 3] > 0.75).any(), "tile 1002 holds the shifted UVs")
+        out_alpha = read_texel_map(out_of_tile)[..., 3]
+        check(not (out_alpha > 0.0).any(), f"tile 1001 is empty, {int((out_alpha > 0.0).sum())} texels covered")
     finally:
         layer.uv.foreach_set('vector', original)
         obj.data.update()
@@ -396,7 +408,7 @@ def test_cost():
         return
     obj = cube()
     start = time.perf_counter()
-    built = texel_map.build_texel_map(obj, "", 4096, 4096)
+    built = build(obj,4096, 4096)
     elapsed = 1000 * (time.perf_counter() - start)
     if built is None:
         check(False, "the 4K map was built")
@@ -406,7 +418,7 @@ def test_cost():
     check(elapsed < 2000, f"building a 4K map takes {elapsed:.0f} ms")
 
     start = time.perf_counter()
-    array = built.positions()
+    array = read_texel_map(built)
     read = 1000 * (time.perf_counter() - start)
     print(f"  4096x4096 RGBA32F read back: {read:.0f} ms")
     check(array.shape == (4096, 4096, 4), f"the read back is shaped {array.shape}")

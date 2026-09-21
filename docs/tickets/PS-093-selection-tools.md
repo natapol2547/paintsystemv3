@@ -503,9 +503,9 @@ map, material indices, sharp faces and edges and custom normals
   `TARGET_SETS` (2) region sizes, least recently used dropped: 2 x 127
   MiB at 4K. The depth `GPUFrameBuffer` is created per build, because an
   OpenGL framebuffer only works in the context that created it.
-- `texel_map.get_texel_map` and `get_position_batch` are called with
-  `fallback_to_active=False`: a silent fallback to another UV map would
-  change the selection without telling the user.
+- `texel_map.get_texel_map` and `get_position_batch` return None for a
+  missing UV map instead of falling back to another: a silent fallback
+  would change the selection without telling the user.
 - **Cost.** The first build per surface pays for the texel map and depth
   batch: 170–620 ms at 100k triangles on Intel GL, in the tick after
   release. A warm 4K build takes 14–94 ms on Intel GL and 6–35 ms on an

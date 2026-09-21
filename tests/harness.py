@@ -238,6 +238,17 @@ def ops_hash(selection):
     return selection.prefix_digests()[-1].hex() if len(selection.ops) else ""
 
 
+def read_texel_map(found, slot=0):
+    """Read back a `gpu_passes.texel_map.TexelMap` as a `(height, width, 4)` float32 array.
+
+    Slot 0 is the world position and slot 1 the world normal, both with
+    the coverage in alpha.
+    """
+    import gpu
+    framebuffer = gpu.types.GPUFrameBuffer(color_slots=(found.position, found.normal))
+    return import_from("gpu_passes.core").read_color(framebuffer, found.width, found.height, slot)
+
+
 # ── Simulated input ──────────────────────────────────────────────────
 #
 # Blender must run with --enable-event-simulate, which also makes it
