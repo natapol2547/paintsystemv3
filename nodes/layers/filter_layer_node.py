@@ -6,8 +6,8 @@ from bpy.props import (BoolProperty, EnumProperty, FloatProperty, IntProperty,
                        PointerProperty, StringProperty)
 from bpy.utils import register_classes_factory
 
-from .base_layer_node import (EMPTY_SOURCE, PaintSystemLayerNode, draw_uv_map, emit_image_texture,
-                              emit_mix_group, update_painting)
+from .base_layer_node import (EMPTY_SOURCE, RESOLUTION_ITEMS, PaintSystemLayerNode, draw_uv_map,
+                              emit_image_texture, emit_mix_group, update_painting)
 from ..base_node import mark_tree_dirty
 from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
@@ -18,7 +18,6 @@ from ...filters.painter.brushes import brush_items
 from ...filters.registry import BLUR_MAX_EFFECTIVE_SIGMA
 from ...filters import layer_job
 from ...nodetree.stack_ops import feeding_link
-from ...ops.node_tree_ops import RESOLUTION_ITEMS
 
 
 def _auto_refresh_changed(self, context):

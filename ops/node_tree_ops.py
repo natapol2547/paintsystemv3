@@ -8,12 +8,6 @@ from ..compiler.core import compile_tree, flush_now, ensure_artifact
 
 MATERIAL_GROUP_KEY = "ps_tree_uuid"
 
-RESOLUTION_ITEMS = [
-    ('1024', "1024", ""),
-    ('2048', "2048", ""),
-    ('4096', "4096", ""),
-]
-
 
 def _find_material_group_node(material, tree):
     for node in material.node_tree.nodes:

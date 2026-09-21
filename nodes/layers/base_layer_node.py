@@ -26,6 +26,14 @@ for blend_mode in bpy.types.ShaderNodeMix.bl_rna.properties['blend_type'].enum_i
         BLEND_MODE_ITEMS.append(None)
 
 
+# Square image sizes offered for a new image layer, a filter layer's result and a baked cache.
+RESOLUTION_ITEMS = [
+    ('1024', "1024", ""),
+    ('2048', "2048", ""),
+    ('4096', "4096", ""),
+]
+
+
 # What a layer with no content emits: fully transparent, so the stack below shows through.
 EMPTY_SOURCE = ((0.0, 0.0, 0.0, 1.0), 0.0)
 

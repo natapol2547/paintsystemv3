@@ -731,7 +731,7 @@ name.
   is updated.
 - PS-090's caller rule about owners of derived images is amended to allow
   pack, re-check and flag.
-- Not done yet: `ops/bake_ops.py` should refuse to bake a cache over an
+- Not done yet: `PAINTSYSTEM_OT_bake_cache` (`ops/layer_ops.py`) should refuse to bake a cache over an
   out-of-date filter layer below the target, by name. PS-007 and PS-055
   owe the same check when they land.
 - PS-051 becomes a dependency of PS-057 rather than a sibling, and
