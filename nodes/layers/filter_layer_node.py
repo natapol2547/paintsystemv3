@@ -16,6 +16,7 @@ from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items, layer_filt
 from ...filters.painter.brushes import brush_items
 from ...filters.registry import BLUR_MAX_EFFECTIVE_SIGMA
 from ...filters import layer_job
+from ...nodetree.stack_ops import feeding_link
 from ...ops.node_tree_ops import RESOLUTION_ITEMS
 
 
@@ -405,7 +406,7 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         if not is_built(image):
             reason = ""
         else:
-            link = ctx.incoming_link(self.inputs['Color'])
+            link = feeding_link(self.inputs['Color'])
             parts = fingerprint_parts(ctx, self, link.from_node if link else None)
             reason = structure_reason(str(image.get(FINGERPRINT_KEY, "")), parts)
         # Writing an RNA property tags the tree and the materials using

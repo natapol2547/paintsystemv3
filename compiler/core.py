@@ -106,8 +106,7 @@ class CompileContext:
     """Passed to every node's ``emit``. Tracks which IR sockets provide each
     custom node's outputs so downstream nodes can link to them."""
 
-    def __init__(self, tree, ir: IR, *, bake_target=None) -> None:
-        self.tree = tree
+    def __init__(self, ir: IR, *, bake_target=None) -> None:
         self.ir = ir
         self.bake_target = bake_target
         self._outputs: dict[tuple[str, str], Ref] = {}
@@ -157,10 +156,6 @@ class CompileContext:
 
     # -- reading inputs -------------------------------------------------
 
-    @staticmethod
-    def incoming_link(socket) -> bpy.types.NodeLink | None:
-        return feeding_link(socket)
-
     def source(self, socket) -> tuple[bpy.types.Node, str] | None:
         """The node and output name *socket* reads from, or None.
 
@@ -171,13 +166,13 @@ class CompileContext:
         """
         color_in = paired_color_input(socket)
         if color_in is not None:
-            link = self.incoming_link(color_in)
+            link = feeding_link(color_in)
             if link is None:
                 return None
             partner = alpha_partner(link.from_node, link.from_socket.name)
             if partner is not None and partner in link.from_node.outputs:
                 return link.from_node, partner
-        link = self.incoming_link(socket)
+        link = feeding_link(socket)
         if link is None:
             return None
         return link.from_node, link.from_socket.name
@@ -225,7 +220,7 @@ class CompileContext:
         self._subtree_hashes[node.name] = "cycle"
         parts: list[Any] = [node.bl_idname, _serialize(node_state(node))]
         for sock in node.inputs:
-            link = self.incoming_link(sock)
+            link = feeding_link(sock)
             if link is not None:
                 parts.append([sock.identifier, 'link',
                               self.subtree_hash(link.from_node),
@@ -335,7 +330,7 @@ def build_ir(tree, *, bake_target=None) -> IR:
 def _build_ir(tree, *, bake_target=None) -> IR:
     ir = IR()
     ir.meta['tree'] = tree.name
-    ctx = CompileContext(tree, ir, bake_target=bake_target)
+    ctx = CompileContext(ir, bake_target=bake_target)
 
     # Inputs are always the channel sockets so a Group Input node upstream of
     # the bake target still resolves (unlinked in the bake material = empty stack).

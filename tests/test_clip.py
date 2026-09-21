@@ -195,8 +195,8 @@ try:
     for node in (base, clipped):
         node.cache_image = cache
         node.cache_enabled = True
-        node.cache_hash = core.CompileContext(tree, IR()).subtree_hash(node)
-    ctx = core.CompileContext(tree, IR())
+        node.cache_hash = core.CompileContext(IR()).subtree_hash(node)
+    ctx = core.CompileContext(IR())
     check(not ctx.is_cached(base), "a base's cache is not used: its outputs are the run")
     check(ctx.is_cached(clipped), "the top of a run uses its cache")
     core.compile_tree(tree)
