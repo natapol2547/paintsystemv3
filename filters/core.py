@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """One GPU pass over a layer image, in and out of the image's own pixels (PS-050).
 
-A call reads `Image.pixels` into a float32 array, uploads it unchanged,
-draws one full-target fragment pass in bands, reads the result back and
-hands it to an `Output`. Nothing here converts colour: what the image
+`PixelSource.from_image` reads `Image.pixels` into a float32 array and
+uploads it unchanged. `run_pass` draws one full-target fragment pass in
+bands, and `filters.actions.apply_passes` reads the result back into the
+image. Nothing here converts colour: what the image
 stores is what the pass sees, so an identity filter writes the bytes it
 read and `Invert` gives exactly ``255 - k``. A byte image is carried in
 `RGBA16F`, whose 11 bits of mantissa round back to the byte they came
@@ -42,8 +43,7 @@ import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
-from ..gpu_passes.core import offscreen_state, read_color
-from ..undo import pixels as undo_pixels
+from ..gpu_passes.core import offscreen_state
 
 log = logging.getLogger(__name__)
 
@@ -343,86 +343,6 @@ def run_pass(spec: FilterSpec, source: PixelSource, target=None, *, mask=None,
                 # sees a stream of short draws rather than one long one.
                 framebuffer.read_color(0, first, 1, 1, 4, 0, 'FLOAT', data=sync)
     return framebuffer, target
-
-
-class LayerImage:
-    """Writes the result back into the layer's own image, undoably.
-
-    The write goes through `undo.pixels.write_pixels`, so one Ctrl+Z
-    takes it back. `commit` returns False when the pixels are there but
-    the undo step could not be pushed.
-    """
-
-    def __init__(self, image: bpy.types.Image):
-        self.image = image
-
-    def commit(self, values: np.ndarray) -> bool:
-        return undo_pixels.write_pixels(self.image, values)
-
-
-_COMPOSE = FilterSpec(
-    name="compose",
-    apply_source="""
-/* Become the second texture. On its own that is a copy; run with a mask
-   it is how a filter of several passes is limited to a selection, which
-   `apply_passes` explains. It lives here rather than in `registry`
-   because it is part of the masking and not a filter anyone chooses. */
-vec4 apply(ivec2 texel, vec4 c)
-{
-  return stored_to_straight(texelFetch(second, texel, 0));
-}
-""",
-    reads_second=True,
-)
-
-
-def apply_passes(passes, image: bpy.types.Image, output, *, mask=None) -> bool:
-    """Run *passes* over *image* in order and give the result to *output*.
-
-    *passes* is a list of ``(spec, push constants)``. A spec whose
-    `reads_second` is set reads the image's own values, which is what an
-    unsharp mask needs: by the time the combine runs, the chain holds the
-    blur.
-
-    The mask is where this is more than a loop. A single pass takes it
-    directly, which keeps a masked Invert exactly ``255 - k`` inside the
-    selection and bit-identical outside it. Several passes cannot: a
-    masked blur would blend each pass against the half-filtered picture
-    it was drawn from rather than against the layer, so the passes run
-    unmasked and one more pass composes the result over the original
-    through the mask. The blending is the same either way -- it is
-    `_MAIN` doing it in both -- so the edge of a selection behaves the
-    same for a blur as for a fill.
-    """
-    source = PixelSource.from_image(image)
-    try:
-        original = source.texture
-        current = original
-        framebuffer = None
-        # One pass carries the mask itself; several compose at the end.
-        inline_mask = mask if len(passes) == 1 else None
-        for spec, params in passes:
-            step = PixelSource.from_texture(current, storage=source.storage)
-            try:
-                framebuffer, current = run_pass(
-                    spec, step, mask=inline_mask,
-                    second=original if spec.reads_second else None, params=params)
-            finally:
-                step.release()
-        if mask is not None and inline_mask is None:
-            step = PixelSource.from_texture(original, storage=source.storage)
-            try:
-                framebuffer, current = run_pass(_COMPOSE, step, mask=mask, second=current)
-            finally:
-                step.release()
-        if framebuffer is None:
-            # No passes at all, so nothing was written and there is
-            # nothing for an undo step to take back.
-            return True
-        values = read_color(framebuffer, source.width, source.height)
-        return output.commit(values)
-    finally:
-        source.release()
 
 
 def release() -> None:

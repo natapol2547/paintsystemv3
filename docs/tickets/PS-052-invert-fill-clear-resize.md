@@ -47,7 +47,7 @@ Other decisions worth keeping:
 - One Ctrl+Z takes an action back. The operators carry `{'REGISTER'}`
   only and change no document data in the same call (PS-090). An action
   of several passes costs no more undo steps than a one-pass one: the
-  chain runs on the GPU and `core.apply_passes` reads back and writes
+  chain runs on the GPU and `actions.apply_passes` reads back and writes
   the image once.
 - Blur and Sharpen ask for a radius in a dialog before they run, unlike
   the other three, which run on the click. A radius is not a number to

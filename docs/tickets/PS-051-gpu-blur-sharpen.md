@@ -79,7 +79,7 @@ Parameters: radius/sigma, strength.
   in another colour space (Non-Color data) is blurred as stored. This
   departs from Blender's own Soften brush, which works on the stored
   bytes.
-- **A masked action masks once, at the end.** `core.apply_passes` runs
+- **A masked action masks once, at the end.** `actions.apply_passes` runs
   one pass with the selection mask inline, as the single-filter path did
   before it,
   and several passes unmasked followed by a `_COMPOSE` pass that lays

@@ -24,6 +24,7 @@ from harness import check, finish, guarded, import_from, register_addon, section
 register_addon()
 gpu_core = import_from("gpu_passes.core")
 core = import_from("filters.core")
+actions = import_from("filters.actions")
 registry = import_from("filters.registry")
 raster = import_from("selection.raster")
 
@@ -215,10 +216,6 @@ def test_failed_allocation_refuses():
     def fail(*_args, **_kwargs):
         raise RuntimeError("GPUTexture: texture creation failed")
 
-    class Output:
-        def commit(self, values):
-            raise AssertionError("nothing is committed after a failed allocation")
-
     image = new_image("PS Filter Byte", 8, 8)
     before = read(image)
     # `new_texture` is the one place the filters allocate through, so
@@ -227,7 +224,7 @@ def test_failed_allocation_refuses():
     core.gpu = types.SimpleNamespace(types=types.SimpleNamespace(
         GPUTexture=fail, Buffer=gpu.types.Buffer))
     try:
-        core.apply_passes([(IDENTITY, {})], image, Output())
+        actions.apply_passes([(IDENTITY, {})], image)
         message = None
     except core.Refused as error:
         message = str(error)

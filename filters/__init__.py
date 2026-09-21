@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """GPU image filters and the actions built on them (PS-050).
 
-`core` runs one fragment pass over a layer's image and writes the result
-back: the source is the image's own stored values, so a filter that
-changes nothing changes no byte. `registry` holds the filters themselves,
-`brush_color` resolves what colour a stroke would store, and `actions`
-decides whether an action may run on the active layer, limits it to the
-selection and commits the result through Blender's image undo.
+`core` runs one fragment pass over a layer's image: the source is the
+image's own stored values, so a filter that changes nothing changes no
+byte. `registry` holds the filters themselves, `brush_color` resolves
+what colour a stroke would store, and `actions` decides whether an action
+may run on the active layer, runs its passes limited to the selection and
+writes the result back through Blender's image undo.
 
 `composite`, `layer_plan`, `layer_build`, `freshness` and `layer_job` are
 the filter *layer* (PS-057): the stack below one drawn into a texture,

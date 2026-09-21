@@ -31,7 +31,9 @@ design below with six differences, all of which the spikes forced:
   into a separate image with no undo step, for a derived image under
   PS-090's rule. `ResultImage` has since gone: a filter layer's build
   packs a PNG it writes itself (PS-053), which is faster than writing
-  the pixels and having Blender encode them.
+  the pixels and having Blender encode them. With one output left,
+  `LayerImage` went too: `filters.actions.apply_passes` writes through
+  `undo.pixels.write_pixels` itself.
 - UDIM is not covered. `filters.actions` refuses a tiled image; the
   per-tile loop belongs with PS-009.
 
