@@ -508,17 +508,13 @@ class NodeTreeBuilder:
     ) -> tuple[dict[str, list], dict[str, list]]:
         """Build (successors, predecessors) maps from link instructions.
 
-        Skips self-loops and links whose endpoints aren't in _existing_nodes.
+        Skips self-loops. Both ends of every link exist by now: the link
+        phase looked each of them up.
         """
         successors: dict[str, list] = defaultdict(list)
         predecessors: dict[str, list] = defaultdict(list)
         for from_id, from_sock, to_id, to_sock in self._link_instructions:
             if from_id == to_id:
-                continue
-            if (
-                from_id not in self._existing_nodes
-                or to_id not in self._existing_nodes
-            ):
                 continue
             successors[from_id].append((from_sock, to_id, to_sock))
             predecessors[to_id].append((to_sock, from_id, from_sock))
@@ -555,15 +551,17 @@ class NodeTreeBuilder:
             location[axis] = value
             self._bbox_cache.pop(node.as_pointer(), None)
 
-    def _shift_loc(self, node: bpy.types.Node, axis: int, delta: float) -> None:
-        """Move one component of *node*'s location by *delta*, if that moves it."""
+    def _shift_x(self, node_ids, delta: float) -> None:
+        """Move the nodes *node_ids* sideways by *delta*, skipping any it would not move."""
         if not delta:
             return
-        location = node.location
-        current = location[axis]
-        if _as_float32(current + delta) != current:
-            location[axis] = current + delta
-            self._bbox_cache.pop(node.as_pointer(), None)
+        for nid in node_ids:
+            node = self._existing_nodes[nid]
+            location = node.location
+            current = location[0]
+            if _as_float32(current + delta) != current:
+                location[0] = current + delta
+                self._bbox_cache.pop(node.as_pointer(), None)
 
     def _node_bbox(
         self, node: bpy.types.Node,
@@ -761,13 +759,6 @@ class NodeTreeBuilder:
                 ]
                 if bottoms:
                     y_cursor = min(bottoms) - V_MARGIN
-
-            bottoms = [
-                b for intervals in column_occupied.values()
-                for (_, b) in intervals
-            ]
-            if bottoms:
-                y_cursor = min(bottoms) - V_MARGIN
 
     def _place_in_column(
         self,
@@ -1060,22 +1051,7 @@ class NodeTreeBuilder:
                 self._set_loc(node, 0, col_x[k])
                 # Y: align to immediate neighbor on the anchor side
                 target_top = self._neighbor_aligned_y(nid, meta, up_id)
-
-                height = self._node_height(node)
-                max_passes = max(8, len(column_intervals[k]) * 2)
-                for _ in range(max_passes):
-                    bottom = target_top - height
-                    hit = False
-                    for (other_top, other_bottom) in column_intervals[k]:
-                        if not (bottom >= other_top
-                                or target_top <= other_bottom):
-                            target_top = other_bottom - V_MARGIN
-                            hit = True
-                            break
-                    if not hit:
-                        break
-                self._set_loc(node, 1, target_top)
-                column_intervals[k].append((target_top, target_top - height))
+                self._place_in_column(node, k, target_top, column_intervals)
                 all_placed_members.append(nid)
 
         self._resolve_overlaps_for_group(
@@ -1156,11 +1132,9 @@ class NodeTreeBuilder:
         )
 
         if len(up_cluster) <= len(down_cluster):
-            for nid in up_cluster:
-                self._shift_loc(self._existing_nodes[nid], 0, -deficit)
+            self._shift_x(up_cluster, -deficit)
         else:
-            for nid in down_cluster:
-                self._shift_loc(self._existing_nodes[nid], 0, deficit)
+            self._shift_x(down_cluster, deficit)
 
     def _reachable(
         self,
@@ -1254,15 +1228,13 @@ class NodeTreeBuilder:
                     worst, predecessors, positioned_ids,
                     exclude=group_member_set,
                 )
-                for cid in cluster:
-                    self._shift_loc(self._existing_nodes[cid], 0, -shift_amount)
+                self._shift_x(cluster, -shift_amount)
             else:
                 cluster = self._reachable(
                     worst, successors, positioned_ids,
                     exclude=group_member_set,
                 )
-                for cid in cluster:
-                    self._shift_loc(self._existing_nodes[cid], 0, shift_amount)
+                self._shift_x(cluster, shift_amount)
 
         log.debug("arrange_nodes: overlap resolution did not converge after %d iterations",
                   max_iter)
