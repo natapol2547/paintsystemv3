@@ -1,5 +1,4 @@
 import bpy
-import uuid
 from bpy.types import NodeTree
 from bpy.props import CollectionProperty, IntProperty, PointerProperty, StringProperty
 from bpy.utils import register_classes_factory
@@ -11,7 +10,7 @@ from ..common import blender_icon
 from ..props.channel import PaintSystemChannel, channel_socket_specs, channel_alpha_name
 from ..props.collection_manager import CollectionManager
 from ..props.selection import PaintSystemSelection
-from ..compiler.core import mark_dirty, suspend_compile, tree_updated
+from ..compiler.core import ensure_tree_uuid, mark_dirty, ps_trees, suspend_compile, tree_updated
 
 
 GROUP_INPUT_ID = 'PaintSystemGroupInputNode'
@@ -59,14 +58,12 @@ def sync_sockets(sockets, specs) -> None:
 
 def sync_group_nodes_referencing(tree) -> None:
     """Re-sync every group layer node (in any tree) that wraps *tree*."""
-    for ng in bpy.data.node_groups:
-        if ng.bl_idname != 'PaintSystemNodeTree':
-            continue
-        for node in ng.nodes:
-            if node.bl_idname == GROUP_LAYER_ID and node.node_tree == tree:
-                node.sync_sockets()
-        if ng != tree and any(
-                n.bl_idname == GROUP_LAYER_ID and n.node_tree == tree for n in ng.nodes):
+    for ng in ps_trees():
+        wrappers = [n for n in ng.nodes
+                    if n.bl_idname == GROUP_LAYER_ID and n.node_tree == tree]
+        for node in wrappers:
+            node.sync_sockets()
+        if wrappers and ng != tree:
             mark_dirty(ng)
 
 
@@ -139,8 +136,7 @@ class PaintSystemNodeTree(NodeTree):
 
     def initialize(self):
         """Populate a brand-new tree: io nodes, a Color channel, passthrough link."""
-        if not self.uuid:
-            self.uuid = str(uuid.uuid4())
+        ensure_tree_uuid(self)
         with suspend_compile(self):
             self.ensure_io_nodes()
             if len(self.channels) == 0:
@@ -218,9 +214,6 @@ class PaintSystemNodeTree(NodeTree):
             if node.bl_idname == GROUP_INPUT_ID:
                 return node
         return None
-
-    def layer_nodes(self) -> list:
-        return [n for n in self.nodes if getattr(n, 'is_layer_node', False)]
 
     def _channel_name(self, channel_name: str | None) -> str | None:
         if channel_name is not None:
