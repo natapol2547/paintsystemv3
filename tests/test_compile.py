@@ -321,6 +321,17 @@ try:
     check(force_compile_ok(rerouted) and output_feeds(rerouted) == [],
           "a reroute with nothing feeding it reads as unlinked")
 
+    section("last channel removed")
+    no_channels = bpy.data.node_groups.new("No Channels", 'PaintSystemNodeTree')
+    no_channels.initialize()
+    compile_tree(no_channels)
+    check(len(no_channels.compiled.interface.items_tree) > 0, "the artifact has the channel's sockets")
+    no_channels.delete_channel(0)
+    compile_tree(no_channels, force=True)
+    iface = [(s.in_out, s.name) for s in no_channels.compiled.interface.items_tree]
+    check(len(no_channels.channels) == 0 and iface == [],
+          f"removing the last channel removes its sockets from the artifact ({iface})")
+
     section("cleanup")
     orphan_name = tree.compiled.name
     bpy.data.node_groups.remove(tree)

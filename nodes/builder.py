@@ -320,9 +320,6 @@ class NodeTreeBuilder:
 
     def _sync_interface_sockets(self) -> None:
         """Ensure the node tree interface matches _socket_instructions in order."""
-        if not self._socket_instructions:
-            return
-
         # Sory socket instructions by in_out, Output first
         self._socket_instructions.sort(
             key=lambda x: x.in_out == 'OUTPUT', reverse=True)
