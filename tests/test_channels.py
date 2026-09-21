@@ -53,6 +53,16 @@ def passes_through(tree):
                for socket in tree.get_output_node().inputs)
 
 
+def fed_by(tree, socket_name):
+    """The node linked into the Group Output input called *socket_name*, or None.
+
+    Found by name: ``inputs[socket_name]`` matches identifiers first, and a
+    socket renamed in place keeps its old name as its identifier.
+    """
+    socket = next(s for s in tree.get_output_node().inputs if s.name == socket_name)
+    return socket.links[0].from_node if socket.is_linked else None
+
+
 def test_add():
     section("adding a channel")
     tree = new_tree("Channels Add")
@@ -105,6 +115,10 @@ def test_move():
     ops.add_channel('EXEC_DEFAULT', name="Rough")
     ops.add_channel('EXEC_DEFAULT', name="Mask")
     check(names(tree) == ["Color", "Rough", "Mask"], f"three channels {names(tree)}")
+    # All three are Color channels, so a move swaps sockets of the same
+    # type. The layer shows whether the links move with their channel.
+    layer = tree.insert_layer_node('PaintSystemSolidColorLayerNode', "Color")
+    check(fed_by(tree, "Color") == layer, "the Color channel has a layer")
 
     tree.active_channel_index = 0
     check(not ops.move_channel_up.poll() and ops.move_channel_down.poll(),
@@ -113,6 +127,8 @@ def test_move():
     check(names(tree) == ["Rough", "Color", "Mask"] and tree.active_channel_index == 1,
           f"the channel moved down and stays active {names(tree)}")
     check(sockets_follow(tree), "the group sockets follow the new order")
+    check(fed_by(tree, "Color") == layer and fed_by(tree, "Rough") == tree.get_input_node(),
+          "the layer moved with its channel, not onto the channel now in its place")
 
     tree.active_channel_index = 2
     check(ops.move_channel_up.poll() and not ops.move_channel_down.poll(),
@@ -121,6 +137,8 @@ def test_move():
     check(names(tree) == ["Rough", "Mask", "Color"] and tree.active_channel_index == 1,
           f"the channel moved up and stays active {names(tree)}")
     check(sockets_follow(tree), "the group sockets follow the new order")
+    check(fed_by(tree, "Color") == layer and fed_by(tree, "Mask") == tree.get_input_node(),
+          "moving the channel next to it leaves the layer in place")
 
     single = new_tree("Channels Single")
     check(names(single) == ["Color"] and not ops.move_channel_up.poll() and not ops.move_channel_down.poll(),

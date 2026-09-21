@@ -20,14 +20,18 @@ GROUP_LAYER_ID = 'PaintSystemGroupLayerNode'
 def sync_sockets(sockets, specs) -> None:
     """Make *sockets* match *specs* (list of (name, socket_type, props)).
 
-    A pure rename (same count, same types, one name changed) is applied in
-    place so existing links survive. Anything else is reconciled by
-    removing/adding/moving sockets.
+    A rename (same count, same types, new names) is applied in place so
+    existing links survive. Anything else is reconciled by removing, adding
+    and moving sockets. That includes a reorder of sockets of the same
+    type: a moved socket keeps its links, while renaming in place would
+    leave each link on the socket that now has another channel's name.
     """
     desired = [(name, socket_type) for name, socket_type, _ in specs]
 
     current = [(s.name, s.bl_idname) for s in sockets]
-    if len(current) == len(desired) and all(c[1] == d[1] for c, d in zip(current, desired)):
+    same_types = len(current) == len(desired) and all(c[1] == d[1] for c, d in zip(current, desired))
+    reordered = current != desired and sorted(current) == sorted(desired)
+    if same_types and not reordered:
         for sock, (name, _) in zip(sockets, desired):
             if sock.name != name:
                 sock.name = name
@@ -185,10 +189,8 @@ class PaintSystemNodeTree(NodeTree):
             # Looked up again: the item `add` returned now refers to the last slot.
             channel = self.channels[index]
             # Name and type are set once the channel is in place. Each update
-            # syncs the sockets, and a sync that finds one channel more adds
-            # its sockets and keeps the other links. A sync after moving
-            # channels of the same type renames sockets in place instead, so
-            # their links would follow the wrong channel.
+            # syncs the sockets: the first adds the new channel's sockets in
+            # its row and keeps the other channels' links.
             channel.name = name
             channel.type = type
             channel.ensure_uuid()
