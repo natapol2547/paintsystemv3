@@ -312,13 +312,8 @@ def composite_below(plan: ChainPlan, pool: Pool):
     The result holds straight alpha and scene-linear colour, the same as
     the shader graph carries, so a filter pass over it and the render
     engines are looking at the same picture.
-    """
-    return _draw_chain(plan, pool)
 
-
-def _draw_chain(plan: ChainPlan, pool: Pool):
-    """`PaintSystemLayerNode.emit` over textures, bottom-up.
-
+    The walk is `PaintSystemLayerNode.emit` over textures, bottom-up.
     *prev* is what the next layer up sees on its ``Color`` input, which
     is the previous layer's ``Color`` output. A clip base's is kept in
     *held* until the top of its run blends the two together.
@@ -352,7 +347,7 @@ def _draw_chain(plan: ChainPlan, pool: Pool):
 
 def _draw_source(step: LayerStep, pool: Pool):
     if step.content is not None:
-        return _draw_chain(step.content, pool)
+        return composite_below(step.content, pool)
     if step.image is not None:
         return _draw_image(pool, step.image)
     return _draw_fill(pool, step.fill)
