@@ -273,7 +273,7 @@ def _run(pool, spec: FilterSpec, texture, params: dict | None = None, *, keep: b
     return result
 
 
-def _blurred(pool, texture, sigma: int, *, keep: bool, progress: tuple[str, float]):
+def _blurred(pool, texture, sigma: float, *, keep: bool, progress: tuple[str, float]):
     """*texture* through v2's gaussian: one pass per axis, cut off at two sigma.
 
     A generator yielding *progress* between the two passes, each of

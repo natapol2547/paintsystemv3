@@ -1,4 +1,4 @@
-from math import tau
+from math import pi, tau
 
 import bpy
 from bpy.types import Node
@@ -100,10 +100,10 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # bake above the layer before a single pixel had changed.
     ps_unhashed_props = (
         'filter_type', 'invert_alpha', 'blur_sigma', 'sharpen_radius', 'sharpen_strength',
-        'painter_brush', 'painter_steps', 'painter_density', 'painter_min_scale',
-        'painter_max_scale', 'painter_start_opacity', 'painter_end_opacity',
-        'painter_sigma', 'painter_threshold', 'painter_rotation', 'painter_random_rotation',
-        'painter_rotation_range', 'painter_hue', 'painter_saturation', 'painter_value',
+        'painter_brush', 'painter_largest_stroke', 'painter_smallest_stroke', 'painter_passes',
+        'painter_first_opacity', 'painter_last_opacity', 'painter_coverage',
+        'painter_edge_threshold', 'painter_smoothing', 'painter_rotation',
+        'painter_random_rotation', 'painter_hue', 'painter_saturation', 'painter_value',
         'painter_seed',
         'resolution', 'uv_map', 'auto_refresh',
         'derived_image', 'derived_stale_reason', 'derived_stale_pixels', 'derived_error',
@@ -133,51 +133,65 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         update=mark_tree_dirty,
         description="How much of that detail to add back")
 
-    # Painterly. Defaults and ranges are v2's brush painter's, except the
-    # seed, which is always used: see `filters.painter.plan`.
+    # Painterly. Defaults are v2's brush painter's, except the seed, which
+    # is always used: see `filters.painter.plan`. Sizes, coverage and the
+    # threshold are percentages here and fractions in `plan.Settings`, as
+    # they were in v2.
     painter_brush: EnumProperty(
         name="Brush", items=brush_items(), update=mark_tree_dirty,
         description="The brushes the strokes are stamped with")
-    painter_steps: IntProperty(
-        name="Steps", default=4, min=1, max=20, update=mark_tree_dirty,
-        description="Passes of strokes, from the largest brush to the smallest")
-    painter_density: FloatProperty(
-        name="Coverage", default=0.7, min=0.1, max=1.0, subtype='FACTOR',
+    painter_largest_stroke: FloatProperty(
+        name="Largest Stroke", default=10.0, min=0.1, max=100.0, soft_max=30.0,
+        subtype='PERCENTAGE', precision=1, step=10, update=mark_tree_dirty,
+        description="Size of the strokes in the first pass, the broadest, as a percentage "
+                    "of the image. The strokes are the same at any resolution")
+    painter_smallest_stroke: FloatProperty(
+        name="Smallest Stroke", default=3.0, min=0.1, max=100.0, soft_max=10.0,
+        subtype='PERCENTAGE', precision=1, step=10, update=mark_tree_dirty,
+        description="Size of the strokes in the last pass, the finest, as a percentage "
+                    "of the image")
+    painter_passes: IntProperty(
+        name="Passes", default=4, min=1, max=20, update=mark_tree_dirty,
+        description="How many passes of strokes to paint, stepping from the largest "
+                    "strokes down to the smallest. A single pass paints only the smallest")
+    painter_first_opacity: FloatProperty(
+        name="First Pass Opacity", default=0.4, min=0.0, max=1.0, subtype='FACTOR',
         update=mark_tree_dirty,
-        description="How much of the picture each pass covers with strokes")
-    painter_max_scale: FloatProperty(
-        name="Largest Brush", default=0.1, min=0.001, max=1.0, subtype='FACTOR',
+        description="Opacity of the strokes in the first pass. The passes between step "
+                    "evenly from this to Last Pass Opacity")
+    painter_last_opacity: FloatProperty(
+        name="Last Pass Opacity", default=1.0, min=0.0, max=1.0, subtype='FACTOR',
         update=mark_tree_dirty,
-        description="Size of the first pass's strokes, as a fraction of the image")
-    painter_min_scale: FloatProperty(
-        name="Smallest Brush", default=0.03, min=0.001, max=1.0, subtype='FACTOR',
+        description="Opacity of the strokes in the last pass, and in the only pass when "
+                    "there is one")
+    painter_coverage: FloatProperty(
+        name="Coverage", default=70.0, min=1.0, max=200.0, soft_min=10.0, soft_max=100.0,
+        subtype='PERCENTAGE', precision=0, step=100, update=mark_tree_dirty,
+        description="How much of the picture each pass covers with strokes. Lower values "
+                    "leave more of the picture below showing between them")
+    painter_edge_threshold: FloatProperty(
+        name="Edge Threshold", default=0.0, min=0.0, max=100.0, soft_max=50.0,
+        subtype='PERCENTAGE', precision=0, step=100, update=mark_tree_dirty,
+        description="Place strokes only where the edge under them is at least this strong, "
+                    "as a percentage of the picture's strongest edge. Away from the strong "
+                    "edges the picture shows through, and 0 places strokes everywhere")
+    painter_smoothing: FloatProperty(
+        name="Smoothing", default=3.0, min=0.0, max=10.0, precision=1, step=10,
         update=mark_tree_dirty,
-        description="Size of the last pass's strokes, as a fraction of the image")
-    painter_start_opacity: FloatProperty(
-        name="First Opacity", default=0.4, min=0.0, max=1.0, subtype='FACTOR',
-        update=mark_tree_dirty, description="Opacity of the first pass's strokes")
-    painter_end_opacity: FloatProperty(
-        name="Last Opacity", default=1.0, min=0.0, max=1.0, subtype='FACTOR',
-        update=mark_tree_dirty, description="Opacity of the last pass's strokes")
-    painter_sigma: IntProperty(
-        name="Smoothing", default=3, min=0, max=10, subtype='PIXEL', update=mark_tree_dirty,
-        description="Blur of the colour the strokes pick up and of the edges they "
-                    "follow, in pixels of the image this layer builds")
-    painter_threshold: FloatProperty(
-        name="Edge Threshold", default=0.0, min=0.0, max=1.0, subtype='FACTOR',
-        update=mark_tree_dirty,
-        description="Leave out strokes where the picture's edges are weaker than this, "
-                    "relative to its strongest edge")
+        description="How much fine detail the strokes ignore when they take their colour "
+                    "and direction from the picture. Measured in pixels of a 2048 image "
+                    "and scaled with the resolution, so the painting looks the same at "
+                    "any resolution")
     painter_rotation: FloatProperty(
-        name="Rotation", default=0.0, min=-tau, max=tau, subtype='ANGLE',
+        name="Rotation", default=0.0, min=-pi, max=pi, subtype='ANGLE',
         update=mark_tree_dirty,
         description="Turn every stroke by this much from the direction of the edge under it")
-    painter_random_rotation: BoolProperty(
-        name="Random Rotation", default=False, update=mark_tree_dirty,
-        description="Turn each stroke by a random amount as well")
-    painter_rotation_range: FloatProperty(
-        name="Rotation Range", default=tau, min=0.0, max=tau, subtype='ANGLE',
-        update=mark_tree_dirty, description="How far a stroke can be turned at random")
+    painter_random_rotation: FloatProperty(
+        name="Random Rotation", default=0.0, min=0.0, max=tau, subtype='ANGLE',
+        update=mark_tree_dirty,
+        description="Turn each stroke by a random amount within a fan this wide, centred "
+                    "on its direction. 0 turns no stroke at random, and a full turn points "
+                    "strokes anywhere")
     painter_hue: FloatProperty(
         name="Hue", default=0.0, min=0.0, max=1.0, subtype='FACTOR', update=mark_tree_dirty,
         description="How far each stroke's hue can wander from the picture's")

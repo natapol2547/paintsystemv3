@@ -66,13 +66,15 @@ log = logging.getLogger(__name__)
 PIXEL_REASON = "the pixels below changed"
 
 # Checked in this order, so the reason names the most useful difference
-# when several moved at once.
+# when several moved at once. The resolution comes before the settings
+# because a Painterly layer's settings record its blur in texels, which
+# a new resolution changes as well.
 REASONS = (
     ("below", "the layers below changed"),
     ("clip", "clipping changed what it filters"),
+    ("size", "the resolution changed"),
     ("params", "the filter settings changed"),
     ("filter", "the filter changed"),
-    ("size", "the resolution changed"),
     ("uv_map", "the UV map changed"),
     ("version", "Paint System was updated"),
 )

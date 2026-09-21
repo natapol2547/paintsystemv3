@@ -275,7 +275,8 @@ try:
     steps = plan.schedule(plan.Settings(), 2048, 2048, circle_areas)
     check([step.index for step in steps] == [0, 1, 2, 3]
           and steps[0].size > steps[-1].size and steps[0].opacity < steps[-1].opacity,
-          "from the largest brush to the smallest, and from First Opacity to Last")
+          "from the largest stroke to the smallest, and from the first pass's opacity to the "
+          "last's")
     tiny = plan.schedule(plan.Settings(min_scale=0.001, max_scale=0.001), 64, 64, circle_areas)
     check(all(step.size == 1 and step.count == 64 * 64 // 8 for step in tiny),
           "a brush smaller than a texel is one texel, at most one stamp per eight texels")
@@ -306,7 +307,7 @@ try:
     count = step.count
     check(all(same(getattr(denser, name)[:count], getattr(drawn, name)) for name in streams),
           "more stamps extend every stream, so raising the coverage moves no stamp")
-    turned = plan.draws(replace(settings, random_rotation=True, hue=0.5), step, 512, 512, 3)
+    turned = plan.draws(replace(settings, rotation_range=tau, hue=0.5), step, 512, 512, 3)
     check(all(same(getattr(turned, name), getattr(drawn, name)) for name in streams),
           "and what the settings use of them changes none of them")
 
@@ -394,7 +395,7 @@ try:
     offset = replace(settings, rotation=pi / 6)
     got = planned(offset, turns, turn_drawn, turn_colors, turn_gradients).angle
     check(np.abs(got - want - pi / 6).max() < 1e-6, "Rotation turns every stroke by the same amount")
-    loose = replace(settings, random_rotation=True, rotation_range=pi / 2)
+    loose = replace(settings, rotation_range=pi / 2)
     got = planned(loose, turns, turn_drawn, turn_colors, turn_gradients).angle
     check(np.abs(got - want - turn_drawn.turn * pi / 2).max() < 1e-6
           and float(np.abs(got - want).max()) <= pi / 4,
@@ -466,7 +467,25 @@ try:
     check(kind.fingerprint(node) != stamp, "and the brush")
     node.painter_brush = 'GOUACHE_SHORT_1'
     check(kind.fingerprint(node) == stamp, "and nothing else when both are put back")
-    check(abs(node.painter_rotation_range - tau) < 1e-6, "Rotation Range starts at a full turn")
+
+    node.painter_coverage, node.painter_edge_threshold = 35.0, 12.5
+    got = plan.Settings.of(node)
+    check(got.density == float(np.float32(0.35)) and got.threshold == 0.125,
+          "a percentage reaches the planner as v2's single-precision fraction")
+    node.painter_coverage, node.painter_edge_threshold = 70.0, 0.0
+    check(node.resolution == '2048' and plan.Settings.of(node).sigma == 3.0,
+          "Smoothing is in texels of a 2048 image, a new layer's resolution")
+    sigmas = []
+    for resolution in ('1024', '4096'):
+        node.resolution = resolution
+        sigmas.append(plan.Settings.of(node).sigma)
+        check(kind.fingerprint(node) != stamp,
+              f"at {resolution} a build records the blur it ran")
+    node.resolution = '2048'
+    check(sigmas == [1.5, 6.0], f"and it scales with the resolution ({sigmas})")
+    node.painter_random_rotation = pi / 2
+    check(plan.Settings.of(node).rotation_range == float(np.float32(pi / 2)),
+          "Random Rotation is the whole spread of the turn")
     bpy.data.node_groups.remove(tree)
 
 except Exception:

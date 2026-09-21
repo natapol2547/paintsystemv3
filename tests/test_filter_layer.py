@@ -138,10 +138,10 @@ try:
               f"(missing {sorted(names - unhashed)})")
     node.filter_type = 'PAINTERLY'
     node.painter_seed = 7
-    node.painter_density = 0.3
+    node.painter_coverage = 30.0
     check(core.build_ir(tree).ctx.subtree_hash(node) == before,
           "so changing Painterly's changes no hash before the rebuild either")
-    node.painter_seed, node.painter_density = 42, 0.7
+    node.painter_seed, node.painter_coverage = 42, 70.0
     node.filter_type = 'INVERT'
 
     section("the blend mode is not offered")

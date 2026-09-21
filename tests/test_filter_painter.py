@@ -288,14 +288,14 @@ if available():
         # threshold between the two keeps only the strokes on the discs.
         # Nothing kept at all would pass a peak read as infinite, which is
         # why the lower bound is there.
-        node.painter_threshold = 0.3
+        node.painter_edge_threshold = 30.0
         core.flush_now()
         edged = pixels(layer_build.build_layer(bpy.context, tree, node))
         few = np.abs(edged - detailed).max(axis=2) > BYTE_TOL
         check(0.0 < float(few.mean()) < float(moved.mean()) / 2,
               f"a threshold leaves out the strokes off the strong edges "
               f"({few.mean():.1%} moved, {moved.mean():.1%} without it)")
-        node.painter_threshold = 0.0
+        node.painter_edge_threshold = 0.0
 
         clear = np.zeros((SIZE, SIZE, 4), dtype=np.float32)
         source.pixels.foreach_set(clear.ravel())

@@ -117,13 +117,19 @@ try:
     node.filter_type = 'PAINTERLY'
     restamp(tree, node)
     for name, value in (("painter_seed", 7), ("painter_brush", 'CIRCLE'),
-                        ("painter_density", 0.3), ("painter_hue", 0.2)):
+                        ("painter_coverage", 30.0), ("painter_hue", 0.2)):
         previous = getattr(node, name)
         setattr(node, name, value)
         check(reason(tree, node) == "the filter settings changed",
               f"a Painterly setting, {name}: {reason(tree, node)!r}")
         setattr(node, name, previous)
         check(reason(tree, node) == "", f"and putting {name} back settles it")
+    # Its Smoothing scales with the resolution, so its settings change
+    # with it; the reason is still the one the user changed.
+    node.resolution = '4096'
+    check(reason(tree, node) == "the resolution changed",
+          f"Painterly's resolution: {reason(tree, node)!r}")
+    node.resolution = '2048'
     node.filter_type = 'INVERT'
     restamp(tree, node)
 

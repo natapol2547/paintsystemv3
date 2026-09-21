@@ -148,6 +148,8 @@ SHARPEN = LayerFilterSpec(
 def _painterly_fingerprint(node) -> list:
     # The brush by name: a preset's images ship with the add-on, and a
     # change to them comes with a `derived.FILTER_VERSION` of its own.
+    # The settings as the build reads them, so the blur is in texels and
+    # a change of resolution is a change of blur as well.
     return [["painterly", Settings.of(node).as_dict()]]
 
 
@@ -157,10 +159,10 @@ PAINTERLY = LayerFilterSpec(
     description="Repaint everything below this layer in brush strokes that follow its edges",
     params=(
         'painter_brush',
-        ("Strokes", ('painter_steps', 'painter_density', 'painter_max_scale',
-                     'painter_min_scale', 'painter_start_opacity', 'painter_end_opacity')),
-        ("Direction", ('painter_sigma', 'painter_threshold', 'painter_rotation',
-                       'painter_random_rotation', 'painter_rotation_range')),
+        ("Strokes", ('painter_largest_stroke', 'painter_smallest_stroke', 'painter_passes',
+                     'painter_first_opacity', 'painter_last_opacity')),
+        ("Placement", ('painter_coverage', 'painter_edge_threshold')),
+        ("Direction", ('painter_smoothing', 'painter_rotation', 'painter_random_rotation')),
         ("Colour Variation", ('painter_hue', 'painter_saturation', 'painter_value')),
         'painter_seed',
     ),

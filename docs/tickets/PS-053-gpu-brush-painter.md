@@ -101,6 +101,40 @@ angle of the stamps it reaches and never where any stamp lands.
   shrinks by a factor of two or more, where v2's bilinear alone skips texels.
   The stamp count is still computed from the resized brushes' covered
   area, v2's formula.
+- **Smoothing** is in texels of a 2048 image and scales with the layer's
+  resolution, where v2's sigma was in texels of whatever image it
+  painted. Every other size here is already a fraction of the image, and
+  a texel blur made raising the resolution repaint the picture: measured
+  on a 4K test picture, stroke directions at 4096 were a median 25.6°
+  from those at 2048, and 2.8° once the blur scales. At 2048, v2's usual
+  size and a new layer's, the two are the same.
+
+### Settings
+
+Renamed on 2026-09-21, after the first slice was tried: "Largest Brush"
+read as a choice of brush beside the Brush menu, and fractions of the
+image on a 0-1 slider left the useful range in its first quarter.
+
+| Setting | v2 | Stored as |
+|---|---|---|
+| Largest / Smallest Stroke | max / min brush scale | percent of the image |
+| Passes | steps | count |
+| First / Last Pass Opacity | start / end opacity | factor |
+| Coverage | density | percent |
+| Edge Threshold | gradient threshold | percent of the strongest edge |
+| Smoothing | sigma | texels of a 2048 image |
+| Rotation | (fixed at 0) | angle |
+| Random Rotation | random rotation and its range | angle, 0 is off |
+
+`plan.Settings` keeps v2's quantities and `Settings.of` converts. A
+percentage becomes a single-precision fraction, as v2's properties were,
+so that the stamp counts stay exact. Random Rotation is one angle rather
+than v2's switch and range, since the layer's settings panel cannot hide
+a range that does nothing while its switch is off; an angle of 0 paints
+exactly what the switch off did. Coverage runs from 1 % to 200 %, past
+v2's 10-100 %: a few loose strokes and denser paint are both looks worth
+having, and stamps cost little. At 2048
+the default settings paint the same pixels as before the rename.
 
 ### Brushes
 

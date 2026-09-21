@@ -7,8 +7,8 @@ per-texel work around it: it blurs the picture and takes its gradient,
 reads both back at the centres `draws` picked, hands them to `stamps`,
 and draws what `quads` returns.
 
-The order of a build is v2's. The steps run from the largest brush to
-the smallest and from Start Opacity to End Opacity, each step places
+The order of a build is v2's. The steps run from the largest stroke to
+the smallest and from the first pass's opacity to the last's, each step places
 the number of stamps `schedule` works out for it, and every stamp takes
 its colour from a blur of the picture below rather than from the
 canvas being painted, so a later stamp never samples an earlier one.
@@ -28,7 +28,7 @@ turns counter-clockwise on screen. v2 held its arrays top-down.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import ceil, sqrt, tau
+from math import ceil, sqrt
 
 import numpy as np
 
@@ -48,6 +48,11 @@ TEXELS_PER_STAMP = 8
 # round to zero, and the count would no longer be v2's.
 SAFE_MIN = 1e-20
 
+# A layer's Smoothing is in texels of an image this wide, v2's usual size
+# and a new filter layer's, and scales with the layer's resolution so the
+# strokes follow the same shapes at any of them.
+SMOOTHING_SIDE = 2048
+
 # A sampled colour this transparent places no stamp, as in v2.
 MIN_ALPHA = 1e-6
 # A gradient field whose strongest edge is this weak has no edges at all,
@@ -62,7 +67,13 @@ X, Y, BRUSH, TURN, JITTER = range(5)
 
 @dataclass(frozen=True)
 class Settings:
-    """A painter layer's parameters, as the build reads them."""
+    """A painter layer's parameters, as the build reads them.
+
+    These are v2's quantities, which the planning is written in: stroke
+    sizes, coverage and threshold as fractions, and the blur in texels
+    of the image being built. The layer's settings are percentages and
+    a resolution-independent Smoothing; `of` converts.
+    """
 
     density: float = 0.7
     min_scale: float = 0.03
@@ -71,13 +82,13 @@ class Settings:
     end_opacity: float = 1.0
     steps: int = 4
     threshold: float = 0.0
-    # Texels of the image the layer builds, like a blur layer's.
-    sigma: int = 3
+    # Texels of the image the layer builds.
+    sigma: float = 3.0
     seed: int = 42
     # Radians, counter-clockwise.
     rotation: float = 0.0
-    random_rotation: bool = False
-    rotation_range: float = tau
+    # The whole spread of the random turn, centred; zero turns nothing.
+    rotation_range: float = 0.0
     hue: float = 0.0
     saturation: float = 0.0
     value: float = 0.0
@@ -86,20 +97,21 @@ class Settings:
 
     @classmethod
     def of(cls, node) -> "Settings":
+        # A filter layer's image is square, *resolution* on a side.
+        side = int(node.resolution)
         return cls(
             brush=node.painter_brush,
-            density=node.painter_density,
-            min_scale=node.painter_min_scale,
-            max_scale=node.painter_max_scale,
-            start_opacity=node.painter_start_opacity,
-            end_opacity=node.painter_end_opacity,
-            steps=node.painter_steps,
-            threshold=node.painter_threshold,
-            sigma=node.painter_sigma,
+            density=_fraction(node.painter_coverage),
+            min_scale=_fraction(node.painter_smallest_stroke),
+            max_scale=_fraction(node.painter_largest_stroke),
+            start_opacity=node.painter_first_opacity,
+            end_opacity=node.painter_last_opacity,
+            steps=node.painter_passes,
+            threshold=_fraction(node.painter_edge_threshold),
+            sigma=node.painter_smoothing * side / SMOOTHING_SIDE,
             seed=node.painter_seed,
             rotation=node.painter_rotation,
-            random_rotation=node.painter_random_rotation,
-            rotation_range=node.painter_rotation_range,
+            rotation_range=node.painter_random_rotation,
             hue=node.painter_hue,
             saturation=node.painter_saturation,
             value=node.painter_value,
@@ -107,6 +119,16 @@ class Settings:
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+
+def _fraction(percentage: float) -> float:
+    """*percentage* as a fraction, rounded to single precision.
+
+    v2's settings were single-precision fractions, and a stamp count is a
+    truncated product of them: a double 0.7 can count one stamp more
+    than the single 0.7 v2 counted with.
+    """
+    return float(np.float32(percentage / 100.0))
 
 
 @dataclass(frozen=True)
@@ -127,7 +149,7 @@ class Draws:
     x: np.ndarray
     y: np.ndarray
     brush: np.ndarray
-    # Uniform in [-0.5, 0.5), scaled by the rotation range when it is used.
+    # Uniform in [-0.5, 0.5), scaled by the rotation range.
     turn: np.ndarray
     # ``(count, 3)``, uniform in [-0.5, 0.5), scaled by the HSV shifts.
     jitter: np.ndarray
@@ -367,8 +389,8 @@ def stamp_count(density: float, width: int, height: int, area: float) -> int:
 def draws(settings: Settings, step: Step, width: int, height: int, brushes: int) -> Draws:
     """The random numbers of *step*, from the layer's seed.
 
-    Every stream is drawn in full whatever the settings use, so switching
-    Random Rotation on or raising a colour shift changes no position.
+    Every stream is drawn in full whatever the settings use, so raising
+    Random Rotation or a colour shift changes no position.
     """
     def stream(kind):
         return np.random.default_rng([settings.seed, step.index, kind])
@@ -411,7 +433,7 @@ def stamps(settings: Settings, step: Step, drawn: Draws, colors: np.ndarray,
             keep &= gradients[:, 2] / peak >= settings.threshold
 
     angle = np.arctan2(gradients[:, 1], gradients[:, 0]) + settings.rotation
-    if settings.random_rotation:
+    if settings.rotation_range > 0.0:
         angle = angle + drawn.turn * settings.rotation_range
 
     weight = (alpha * step.opacity)[:, None]
