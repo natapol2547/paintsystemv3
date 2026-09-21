@@ -179,8 +179,24 @@ class PaintSystemNodeTree(NodeTree):
                 sync_sockets(node.inputs, specs)
 
     def create_channel(self, name: str = "Channel", type: str = 'COLOR'):
+        """Add a channel below the active one, make it active and pass its input straight through."""
         with suspend_compile(self):
-            channel = self.channels_manager.add(properties={'name': name, 'type': type})
+            self.channels.add()
+            last = len(self.channels) - 1
+            # Clamped because the active index can be -1 with no channels,
+            # and Blender 5.3+ raises IndexError on an out-of-range target.
+            index = max(0, min(self.active_channel_index + 1, last))
+            self.channels.move(last, index)
+            self.active_channel_index = index
+            # Looked up again: the item `add` returned now refers to the last slot.
+            channel = self.channels[index]
+            # Name and type are set once the channel is in place. Each update
+            # syncs the sockets, and a sync that finds one channel more adds
+            # its sockets and keeps the other links. A sync after moving
+            # channels of the same type renames sockets in place instead, so
+            # their links would follow the wrong channel.
+            channel.name = name
+            channel.type = type
             channel.ensure_uuid()
             input_node = self.get_input_node()
             output_node = self.get_output_node()

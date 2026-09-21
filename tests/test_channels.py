@@ -42,6 +42,17 @@ def sockets_follow(tree):
             and [s.name for s in tree.get_output_node().inputs] == want)
 
 
+def passes_through(tree):
+    """Whether every Group Output input is linked from the Group Input output of its name.
+
+    True for a tree with no layers, where each channel is its input.
+    """
+    input_node = tree.get_input_node()
+    return all(socket.is_linked and socket.links[0].from_node == input_node
+               and socket.links[0].from_socket.name == socket.name
+               for socket in tree.get_output_node().inputs)
+
+
 def test_add():
     section("adding a channel")
     tree = new_tree("Channels Add")
@@ -61,11 +72,19 @@ def test_add():
     ops.add_channel('EXEC_DEFAULT', name="Mask")
     check(names(tree) == ["Color", "Mask", "Rough"] and tree.active_channel_index == 1,
           f"with the first channel active the new one goes second {names(tree)}")
+    check(sockets_follow(tree) and passes_through(tree),
+          "every channel, the new one and those below it, still passes its input through")
 
     ops.add_channel('EXEC_DEFAULT', name="Color")
     check(names(tree) == ["Color", "Mask", "Color 1", "Rough"],
           f"a name another channel has gets a number {names(tree)}")
     check(sockets_follow(tree), "the group sockets follow")
+
+    tree.active_channel_index = 0
+    created = tree.create_channel("Height", 'FLOAT')
+    check(created.name == "Height" and created.type == 'FLOAT' and tree.active_channel == created,
+          f"create_channel returns the channel it added ({created.name})")
+    check(passes_through(tree), "and the channels below keep their links")
 
 
 def test_rename():
