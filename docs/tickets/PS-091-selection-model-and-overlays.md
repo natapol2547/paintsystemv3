@@ -106,9 +106,10 @@ The selection is document data; its mask is derived from it, the same
 way the artifact is derived from the tree.
 
 - `PaintSystemSelection` on the tree: `ops`, an ordered collection of
-  operations. It stores no image. The selection applies to the active layer, whichever that is,
-  the way a Photoshop selection stays put while the user switches
-  layers: the mask is built at the size of the active layer's image
+  operations. It stores no image. The selection applies to the active
+  layer, whichever that is, the way a Photoshop selection stays put
+  while the user switches layers: the mask is built at the size of the
+  active layer's image
   (`raster.image_size(image, tile)`) and sampled through that layer's
   UV map (`texel_map.resolve_uv_map`: the map the layer names, else the
   active render map). A stored image pointer would go stale on a layer
@@ -247,8 +248,7 @@ GPU passes build the mask at the image's size, or at a UDIM tile's.
   distance tables past one data texture row and tiles other than 1001
   are not checked. `VIEW` ops have a self-test of their own
   (`view_raster.view_self_test`, PS-093), run before the first build
-  that holds one;
-  its failure gives only `VIEW` selections `SELF_TEST`.
+  that holds one; its failure gives only `VIEW` selections `SELF_TEST`.
 - The stencil file is named by the same digest the session uses,
   surface keys included, so a `VIEW` selection gets a new file after its
   mesh changes.

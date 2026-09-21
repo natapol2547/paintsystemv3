@@ -100,18 +100,23 @@ instead of once per operation.
     in alpha, then again at its real size writing 1.0. A tool that wants
     real surface tests alpha `> 0.75`; one that wants every paintable
     texel tests `> 0.0`.
-  - `get_texel_map` caches maps per key. The key is the
-    object's `session_uid`, the resolved UV map name, the size, the tile,
-    the margin, the world matrix and the surface key from
+  - `get_texel_map` caches maps per key. The key is the object's
+    `session_uid`, the resolved UV map name, the size, the tile, the
+    margin, the world matrix and the surface key from
     `surface.resolve_key`. Maps store world positions, so a move gives a
     new key; the surface key leaves the transform out. Without a surface
     key (Edit Mode) the map is built and not cached.
     `depsgraph_update_post`, undo and redo only mark surfaces suspect
     (PS-093); a file read drops every map.
-  - `get_position_batch(obj, uv_map)`: the
-    same triangles as a world-position `TRIS` batch for depth passes,
-    keyed like the maps. A map and a batch that both miss in one build
-    share one `_triangle_arrays` extraction.
+  - `get_position_batch(obj, uv_map)`: the same triangles as a
+    world-position `TRIS` batch for depth passes, keyed like the maps. A
+    map and a batch that both miss in one build share one
+    `_triangle_arrays` extraction.
+  - `local_triangles(obj, uv_map, depsgraph, normals=True)` reads the
+    evaluated mesh as a local-space triangle soup: UVs, positions and
+    normals per corner and the material index per triangle. The texel
+    map moves it to world space; the selection overlay (PS-091) draws
+    its mesh batch from it.
   - The cache evicts least recently used maps and batches over
     `CACHE_BUDGET` (1 GB), since two 4K maps alone come to 768 MB. A
     batch is counted as 12 bytes per vertex. Maps of a surface that
