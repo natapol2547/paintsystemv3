@@ -1,25 +1,25 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Update and Clear Result on a filter layer (PS-057).
+"""Update, Cancel Refresh and Clear Result for a filter layer.
 
-The work is in `filters.layer_build.steps`; Update wraps it in a modal
-that spends a slice of each timer event on it, so a 4K build shows
-progress and answers Escape instead of freezing the window. The generator
-is what makes cancelling safe: it writes nothing before its last unit, so
-stopping leaves the previous result bit-identical and gives the textures
-back on the way out.
+Design: docs/tickets/PS-057-filter-layer.md.
 
-Both take `UNDO`. That is not the case PS-090's no-`UNDO` rule covers: the
-rule exists because a memfile step stacked on an *image* undo step costs
-two Ctrl+Z, and a derived image pushes no image step at all: its build
-packs the pixels rather than registering them. With `UNDO` and a packed
-image, one Ctrl+Z takes the whole rebuild back, pixels and stamps
-together.
-
-No dialog. `PAINTSYSTEM_OT_bake_cache` asks for a resolution because a
-cached layer has nowhere else to keep one; a filter layer has
-`resolution` and `uv_map` of its own, sitting in the panel directly above
-the button, so asking again would only be a second place to get them
-wrong.
+- The build itself is the generator `filters.layer_build.steps`. Update
+  runs it in a modal operator that does a slice of the work on each
+  timer event. So a 4K build shows progress and can be cancelled with
+  Escape, instead of freezing the window. The generator writes nothing
+  before its last step, so cancelling leaves the previous result exactly
+  as it was, and frees the GPU textures on the way out.
+- Update and Clear Result have the `UNDO` option. The no-`UNDO` rule in
+  `undo.pixels` does not apply here. That rule exists because a memfile
+  step on top of an image undo step costs two Ctrl+Z. A filter build
+  pushes no image undo step, because it packs the pixels instead. With
+  `UNDO` and a packed image, one Ctrl+Z undoes the whole rebuild, pixels
+  and stamps together.
+- Update opens no dialog. A filter layer has its own `resolution` and
+  `uv_map`, shown in the panel just above the button, so asking again
+  would only add a second place to get them wrong. Bake Cache
+  (`PAINTSYSTEM_OT_bake_cache`) does ask for a resolution, because a
+  cached layer has nowhere else to store one.
 """
 import logging
 import time
@@ -41,18 +41,23 @@ BUDGET = 0.05
 
 
 def filter_layer(context, tree):
-    """The filter layer the buttons act on: the node editor's, or the active one."""
+    """The filter layer the buttons act on, or None.
+
+    That is the node that drew the button in the node editor, else the
+    tree's active node.
+    """
     node = button_layer(context, tree)
     return node if node is not None and node.ps_type == 'FILTER' else None
 
 
 def _resume_auto_refresh(node):
-    """After a successful Update, undo an automatic refresh that gave up.
+    """Turn Auto Refresh back on if the automatic refresh had turned it off.
 
-    When the auto job gives up on a layer it turns Auto Refresh off and
-    leaves a message telling the user to press Update. Nothing else sets
-    that message, so a message here means the job switched Auto Refresh
-    off, not the user, and a build that just worked should switch it back.
+    Called after a successful Update. When the automatic refresh gives up
+    on a layer, it turns Auto Refresh off and sets `derived_error` to a
+    message asking the user to press Update. Nothing else sets that
+    message. So a message here means the job turned Auto Refresh off, not
+    the user, and a build that just worked should turn it back on.
     """
     if node.derived_error:
         node.derived_error = ""
@@ -60,7 +65,7 @@ def _resume_auto_refresh(node):
 
 
 class FilterLayerAction:
-    """Shared poll of the two buttons, answering from flags only."""
+    """Shared poll of Update and Clear Result. It only checks cheap flags."""
 
     @classmethod
     def poll(cls, context):
@@ -108,16 +113,16 @@ class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
     def invoke(self, context, event):
         tree = get_active_tree(context)
         node = filter_layer(context, tree)
-        # Two builds of one layer would race for the same image, and the
-        # button is the one the user is watching.
+        # Two builds of one layer would race for the same image. The
+        # button wins, because it is the build the user is watching.
         layer_job.cancel_all()
         self._name = node.name
         self._node = node
         self._steps = layer_build.steps(context, tree, node)
         try:
-            # The first unit only resolves, so every refusal this build
-            # can raise before a byte of video memory is spent comes out
-            # here, where it is reported without going modal at all.
+            # The first step only resolves the inputs. So every refusal
+            # that can come before any GPU memory is used is raised here,
+            # and is reported without starting the modal.
             next(self._steps)
         except Refused as refusal:
             self.report({'WARNING'}, str(refusal))
@@ -150,8 +155,9 @@ class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
                 self.report({'WARNING'}, str(refusal))
                 return {'CANCELLED'}
             except Exception:
-                # A driver that gives up mid-build would otherwise leave
-                # the timer and the status text behind for good.
+                # Without this, an unexpected error mid-build, such as a
+                # GPU driver failure, would leave the timer and the status
+                # text behind for good.
                 self._stop(context)
                 log.exception("filter layer '%s' failed to build", self._name)
                 self.report({'ERROR'}, f"Building '{self._name}' failed; see the system console")
@@ -161,21 +167,21 @@ class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
         return {'RUNNING_MODAL'}
 
     def cancel(self, context):
-        """Blender's own hook, for a modal ended from outside.
+        """Clean up when Blender ends the modal from outside.
 
         Closing a window or loading a file ends a modal without going
-        through `modal`, which would otherwise leave the timer and the
-        status text behind for the rest of the session.
+        through `modal`. Without this hook, the timer and the status text
+        would stay for the rest of the session.
         """
         self._stop(context)
 
     def _stop(self, context):
-        """Give back everything `invoke` took, whichever way the build ends."""
+        """Release everything `invoke` set up, however the build ends."""
         if self._steps is None:
             return
         window_manager = context.window_manager
-        # Closing the generator raises GeneratorExit at whichever yield it
-        # reached, which is what releases the textures it was holding.
+        # Closing the generator raises GeneratorExit at the yield it has
+        # reached. That is what frees the GPU textures it holds.
         self._steps.close()
         self._steps = None
         window_manager.event_timer_remove(self._timer)

@@ -18,12 +18,12 @@ log = logging.getLogger(__name__)
 
 
 def paint_system_images() -> set[bpy.types.Image]:
-    """Images the addon created and every image a Paint System node points at.
+    """Images the addon created, plus every image a Paint System node points at.
 
-    A filter result is in only while a layer still points at it. An orphan
-    is a full-resolution image nothing can reach, waiting for the next
-    file read to sweep it; packing it would carry it into the next
-    ``.blend`` instead (PS-057).
+    A filter result is included only while a layer still points at it.
+    An orphaned filter result is a full-resolution image that nothing
+    uses, and the next file read deletes it. Packing it here would carry
+    it into the saved ``.blend`` instead.
     """
     pointed_at = set()
     for tree in ps_trees():
@@ -64,26 +64,32 @@ def save_image(image: bpy.types.Image) -> None:
 
 @bpy.app.handlers.persistent
 def on_depsgraph_update_post(scene, depsgraph=None):
-    """Initialise trees created from the node editor header (no init hook exists)."""
+    """Initialise new trees, and pass geometry and image changes on.
+
+    A tree created from the node editor header gets no init call, so it
+    is initialised here.
+    """
     for tree in ps_trees():
         if not tree.is_initialized:
             tree.initialize()
     if depsgraph is None:
         return
     # Texel maps and overlay batches are keyed by the content of the
-    # evaluated surface, so a geometry update only marks it suspect, and
-    # the next resolve compares arrays. A texture paint stroke reports a
-    # geometry update on 5.3 without changing the surface, and dropping the
-    # caches here rebuilt them after every stroke (PS-092, PS-093). A move
-    # changes no surface key; the texel map cache keys the world matrix.
+    # evaluated surface. So a geometry update only marks the surface as
+    # suspect, and the next `surface.resolve_key` compares the arrays.
+    # Do not drop the caches here. On 5.3 a texture paint stroke reports a
+    # geometry update without changing the surface, so every stroke would
+    # rebuild them. Moving an object changes no surface key, because the
+    # texel map cache has the world matrix in its own key.
     geometry_changed = False
     painted = []
     for update in depsgraph.updates:
         original = getattr(update.id, 'original', None)
-        # Blender tags a painted image at the end of a stroke, which is
-        # the only notice a filter layer below the stroke gets that its
-        # pixels have stopped describing the stack (PS-057). Checked
-        # before the geometry guard: an image update sets no such flag.
+        # Blender tags a painted image at the end of a stroke. That is
+        # the only signal a filter layer that reads the image gets that
+        # its own pixels are out of date. This check comes before the
+        # geometry check, because an image update does not set
+        # `is_updated_geometry`.
         if isinstance(original, bpy.types.Image):
             painted.append(original.session_uid)
             continue
@@ -94,16 +100,16 @@ def on_depsgraph_update_post(scene, depsgraph=None):
             geometry_changed = True
     if painted:
         freshness.note_image_changed(painted)
-        # Unconditionally, even when nothing was newly marked: this is
-        # what makes the refresh debounce hold for the length of a stroke
-        # rather than starting one partway through it. A pass with
-        # nothing to do costs a scan and unregisters itself.
+        # Notify even when nothing new was marked. Each call pushes the
+        # refresh deadline back, so a refresh does not start partway
+        # through a stroke. A pass with nothing to do costs one scan and
+        # then unregisters itself.
         layer_job.notify()
-    # Renaming or removing a UV map shows up only as a geometry update, and
-    # the live selection samples a layer's UV map by name (PS-091). While
-    # a view selection cannot be used, any update may be the fix: scaling
-    # its object back from zero or linking it back into the scene reports
-    # no geometry update (PS-093).
+    # The live selection looks up a layer's UV map by name, and renaming
+    # or removing a UV map shows up only as a geometry update. While the
+    # selection cannot be used for one of the `GEOMETRY_REASONS`, any
+    # update may be the fix. Scaling its object back from zero, or linking
+    # it back into the scene, reports no geometry update.
     if geometry_changed or (depsgraph.updates
                             and selection_session.current().reason in selection_raster.GEOMETRY_REASONS):
         selection_session.notify()
@@ -112,11 +118,12 @@ def on_depsgraph_update_post(scene, depsgraph=None):
 @bpy.app.handlers.persistent
 def on_restore_pre(*args):
     # Blender calls NodeTree.update on half-restored data while it reads a
-    # file or an undo step; compile once it is done instead.
+    # file or an undo step. Block compiles until the restore is done, and
+    # compile once after it.
     block_compile()
-    # A refresh in flight holds the tree and the node it was started with,
-    # and neither survives a restore (PS-090). It has written nothing, so
-    # there is no half-built image to clean up (PS-057).
+    # A running refresh holds the tree and the node it started with, and
+    # neither survives a restore. It has written nothing yet, so there is
+    # no half-built image to clean up.
     layer_job.cancel_all()
 
 
@@ -125,30 +132,29 @@ def on_load_post(*args):
     unblock_compile()
     subscribe_name_changes()
     cleanup_orphan_artifacts()
-    # A file read is the one moment with no undo stack for a removal to
-    # break, which is why the filter results are swept here and nowhere
-    # else (PS-057).
+    # Orphaned filter results are deleted here and nowhere else. A file
+    # read is the one moment with no undo stack that a removal could
+    # break.
     derived.cleanup_orphan_derived()
     # Reading a file frees the undo stack and everything the addon pushed
-    # onto it (PS-090).
+    # onto it.
     pixels.forget_undo_state()
     derived.forget_packed()
-    # Cached maps and surface keys belong to objects of the file that was
-    # open (PS-092).
+    # Cached maps and surface keys belong to the objects of the previous
+    # file.
     texel_map.invalidate()
     surface.forget()
-    # Masks are keyed by content and would still be right, but nothing in
-    # the new file is likely to ask for them; give the memory back.
+    # Masks are keyed by content and would still be valid, but the new
+    # file is unlikely to need them. Free the memory.
     selection_raster.invalidate()
-    # A file saved without `on_save_pre`, as an autosave, can still point
-    # the stencil at the previous session's mask file.
+    # A file saved without `on_save_pre`, such as an autosave, can still
+    # point the stencil at the previous session's mask file.
     selection_stencil.on_file_loaded()
     # The overlay's batches and buffers belong to the old file's objects
     # and regions.
     selection_overlay.invalidate_all()
-    # The file's selection and active layer arrive together; reconcile
-    # everything derived from them, and try masks that failed before
-    # again (PS-091).
+    # The file brings its own selection and active layer. Sync everything
+    # derived from them, and retry masks that failed before.
     selection_session.forget_failures()
     selection_session.notify(force=True)
     # Runs before Blender records the file's initial undo step, so the
@@ -170,34 +176,39 @@ def on_load_post_fail(*args):
 
 @bpy.app.handlers.persistent
 def on_undo_post(*args):
-    # Every undo step already holds a matching artifact, so this is normally
-    # a fingerprint check per tree. It repairs files from before that held.
+    # Every undo step should already hold a matching compiled artifact, so
+    # this is usually one fingerprint check per tree. It repairs steps
+    # from older files where that is not the case.
     unblock_compile()
     mark_dirty()
-    # The steps the addon pushed may no longer be on the stack (PS-090).
+    # The steps the addon pushed may no longer be on the stack.
     pixels.forget_baselines()
-    # A filter result's packed file and stamps came back, but its decoded
-    # pixels did not (PS-057).
+    # Undo brings back a filter result's packed file and stamps, but not
+    # its decoded pixels.
     derived.free_stale_buffers()
-    # An undo can restore different geometry under the same world matrix,
-    # so every surface key is checked again on its next resolve. Cached
-    # maps stay: the undo of a stroke restores the same surface, and the
-    # undo of a vertex move finds the map built before it (PS-092).
+    # Undo can restore different geometry under the same world matrix, so
+    # every surface key is checked again on its next resolve. Cached maps
+    # are kept. Undoing a stroke restores the same surface, and undoing a
+    # vertex move finds the map that was built before the move.
     surface.mark_suspect()
-    # Selection masks stay: they are keyed by a digest of the ops and the
-    # size, so the restored ops find their mask, if it is cached, without
-    # a rebuild. Undo restores the ops and Blender's own settings
-    # independently, so the session reconciles everything derived from the
-    # selection even when its state matches (PS-091).
+    # Selection masks are kept. They are keyed by a hash of the ops and
+    # the size, so the restored ops find their cached mask without a
+    # rebuild. Undo restores the ops and Blender's own settings
+    # separately, so the session syncs everything derived from the
+    # selection even when its state has not changed.
     selection_session.notify(force=True)
 
 
 @bpy.app.handlers.persistent
 def on_frame_change_post(scene, depsgraph=None):
-    """An animated deformation changes surfaces with no depsgraph update to report it (PS-093)."""
+    """Mark every surface as suspect when the frame changes.
+
+    Animated deformation changes surfaces without a depsgraph update that
+    reports it.
+    """
     # A render job calls this from its own thread for each frame it
-    # renders. The entries and timers are not thread safe, and a render
-    # depsgraph changes no surface drawn in the viewport.
+    # renders. The surface entries and timers are not thread safe, and a
+    # render depsgraph changes no surface drawn in the viewport.
     if depsgraph is not None and depsgraph.mode == 'RENDER':
         return
     surface.mark_suspect()
@@ -206,10 +217,11 @@ def on_frame_change_post(scene, depsgraph=None):
 
 @bpy.app.handlers.persistent
 def on_save_pre(*args):
-    """Save or pack painted layer images so their pixels survive reload (PS-056)."""
-    # The file keeps the user's stencil settings and no reference to the
-    # selection's stencil image, which then has no users and is not
-    # written (PS-091). `on_save_post` applies the selection again.
+    """Save or pack painted layer images so their pixels survive a reload."""
+    # Put the user's stencil settings back before saving. The file then
+    # has no reference to the selection's stencil image, so that image
+    # has no users and is not written. `on_save_post` applies the
+    # selection again.
     selection_stencil.restore_all()
     for image in paint_system_images():
         save_image(image)
@@ -217,8 +229,8 @@ def on_save_pre(*args):
 
 @bpy.app.handlers.persistent
 def on_save_post(*args):
-    # Synchronously rather than on the next tick, so no stroke paints
-    # unclipped in between (PS-091).
+    # Sync now rather than on the next tick, so that no stroke can paint
+    # unclipped in between.
     selection_session.sync(force=True)
 
 

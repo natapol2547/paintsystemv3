@@ -5,8 +5,9 @@ import bpy
 import bpy.utils.previews
 
 
-# The add-on's module name, which keys its preferences entry: "paint_system"
-# as a legacy add-on, "bl_ext.<repository>.paint_system" as an extension.
+# The add-on's module name. Blender stores the add-on's preferences under
+# it. It is "paint_system" for a legacy add-on and
+# "bl_ext.<repository>.paint_system" for an extension.
 ADDON_ID = __package__
 
 
@@ -17,7 +18,10 @@ def addon_preferences(context):
 
 
 def redraw_paint_views(window_manager) -> None:
-    """Redraw every 3D view and image editor in every window; nothing when *window_manager* is None."""
+    """Redraw every 3D view and image editor in every window.
+
+    Does nothing when *window_manager* is None.
+    """
     for window in getattr(window_manager, 'windows', ()):
         for area in window.screen.areas:
             if area.type in {'VIEW_3D', 'IMAGE_EDITOR'}:
@@ -30,8 +34,8 @@ def is_newer_than(major, minor=0, patch=0):
 # UI
 
 
-# The add-on icons in icons/, keyed by file name without the extension,
-# while the add-on is registered.
+# Previews of the add-on icons in icons/, keyed by file name without the
+# extension. None while the add-on is not registered.
 _icon_previews = None
 
 
@@ -71,11 +75,11 @@ def _blender_icon_names() -> set[str]:
 def icon_kwargs(*names: str) -> dict:
     """Layout keyword arguments for the first of *names* that exists.
 
-    A name is an addon icon from ``icons/`` or a Blender icon. Blender
+    Each name is an add-on icon from ``icons/`` or a Blender icon. Blender
     renames icons between versions, and forks such as Bforartists ship
-    their own set, and an unknown name makes the layout call raise. So
-    every icon a layout call draws goes through here, with the old name
-    listed after the new one.
+    their own set. A layout call raises on an unknown icon name. So every
+    icon a layout call draws goes through here, with the new name first
+    and the old name after it.
     """
     blender_icons = _blender_icon_names()
     for name in names:
@@ -90,9 +94,11 @@ def icon_kwargs(*names: str) -> dict:
 def blender_icon(*names: str) -> str:
     """The first of *names* that is a Blender icon, else ``'NONE'``.
 
-    For ``bl_icon`` on node and node tree classes: an unknown name there
-    makes ``register_class`` raise, so the class resolves it when it is
-    defined. List the old name after the new one, as for ``icon_kwargs``.
+    Use it where a layout call is not involved, such as ``bl_icon`` on
+    node and node tree classes or a gizmo's ``icon``. An unknown name in
+    ``bl_icon`` makes ``register_class`` raise, so the class picks its
+    icon when it is defined. List the new name first and the old name
+    after it, as for ``icon_kwargs``.
     """
     blender_icons = _blender_icon_names()
     return next((name for name in names if name in blender_icons), 'NONE')

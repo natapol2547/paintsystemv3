@@ -16,17 +16,16 @@ def is_ps_node_tree_poll(self, node_tree: bpy.types.NodeTree):
 
 
 def paint_settings(context):
-    """The paint settings Blender's own brush UI reads in this context.
+    """The paint settings that Blender's own brush UI reads in this context.
 
-    From 5.3 they come from the active tool rather than from the mode,
-    so anything that has to agree with what the brush would do reads
-    them from here: the Brush and Color panels (PS-033) and the colour a
-    Fill stores (PS-052).
+    From Blender 5.3 they come from the active tool, not from the mode.
+    Code that must agree with what the brush would do reads them from
+    here, such as the Brush and Color panels and the colour a Fill stores.
 
-    None where the context has no space data. Blender resolves the mode
-    through the active tool of the space, so there is nothing to answer
-    from in a background session, a timer, or a script run with no area
-    override; a caller that needs an answer there picks its own mode.
+    Returns None when the context has no space data. Blender finds the
+    mode through the active tool of the space, so there is no answer in a
+    background session, a timer, or a script run without an area
+    override. A caller that needs an answer there picks the mode itself.
     """
     if getattr(context, 'space_data', None) is None:
         return None
@@ -43,7 +42,8 @@ class PaintSystemSceneSettings(bpy.types.PropertyGroup):
         description="Currently active Paint System node tree",
         poll=is_ps_node_tree_poll,
     )
-    # Stencil UV maps the selection replaced (`selection/stencil.py`).
+    # The stencil UV maps that the selection replaced, so they can be put
+    # back (`selection/stencil.py`).
     stencil_meshes: CollectionProperty(type=PaintSystemStencilMeshBackup)
 
 
@@ -97,10 +97,11 @@ def node_editor_tree(context) -> bpy.types.NodeTree | None:
 
 
 def get_active_tree(context) -> bpy.types.NodeTree | None:
-    """Resolve the tree the UI should act on.
+    """The Paint System tree the UI should act on, or None.
 
-    Node editor: the edited tree. Elsewhere: the active object's active
-    material tree, falling back to the scene-level selection.
+    In the node editor this is the edited tree. Elsewhere it is the tree
+    of the active object's active material, else the scene's
+    `active_node_tree`.
     """
     tree = node_editor_tree(context)
     if tree is not None:
@@ -118,8 +119,9 @@ def get_active_tree(context) -> bpy.types.NodeTree | None:
 def button_layer(context, tree) -> bpy.types.Node | None:
     """The layer a button acts on, or None when that node is not a layer.
 
-    A button a node draws in the node editor gets that node as
-    ``context.node``. Anywhere else it acts on *tree*'s active node.
+    A button that a node draws in the node editor gets that node as
+    ``context.node``. Anywhere else the button acts on *tree*'s active
+    node.
     """
     node = getattr(context, 'node', None)
     if node is None and tree is not None:
@@ -157,29 +159,32 @@ def parse_context(context) -> PSContext:
 
 
 def layer_uv_layer(obj, layer) -> bpy.types.MeshUVLoopLayer | None:
-    """The UV map of *obj*'s mesh that *layer*'s image is placed with, or None when it is missing.
+    """The UV map of *obj*'s mesh that *layer*'s image uses, or None.
 
-    `resolve_uv_map` holds the rule: the map the layer names, else the
-    active render map.
+    `resolve_uv_map` picks the map: the one the layer names, else the
+    active render map. Returns None when that map does not exist.
     """
     name = resolve_uv_map(obj, getattr(layer, 'uv_map', ''))
     return obj.data.uv_layers.get(name) if name else None
 
 
 def update_active_image(context) -> None:
-    """Point texture painting at the active layer (PS-060).
+    """Point texture painting at the active layer.
 
-    The canvas becomes the layer's ``paint_image``, or none for a locked
-    layer or one without an image, and the mesh's active UV map the one the
-    layer's image is placed with. In texture paint mode the brush keeps
-    alpha when the layer locks it. Called whenever the active layer, tree
-    or object changes; never by the compiler. Writes only what differs.
+    Sets the paint canvas to the layer's ``paint_image``. A locked layer,
+    or a layer without an image, gets no canvas. Makes the UV map that
+    the layer's image uses the mesh's active UV map. In texture paint
+    mode, sets the brush's `use_alpha` to the opposite of the layer's
+    `lock_alpha`.
+
+    Call it whenever the active layer, tree or object changes. The
+    compiler never calls it. It only writes values that differ.
 
     The live selection applies to the active layer, so this also notifies
-    the selection session, whether or not there is a tree (PS-091).
+    the selection session, even when there is no tree.
     """
-    # Imported here: the session imports this module. The sync it
-    # schedules runs after this function returns.
+    # Imported here because the session module imports this one. The
+    # sync that `notify` schedules runs after this function returns.
     from .selection import session
     session.notify()
     ps = parse_context(context)

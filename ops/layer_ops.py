@@ -54,11 +54,12 @@ class PAINTSYSTEM_OT_add_layer(Operator):
 
 
 def _filter_results(node) -> list:
-    """The derived images *node* and its content own, if any (PS-057).
+    """The filter result images of *node* and of the layers inside it.
 
-    A filter result is the layer's content rather than a re-derivable
-    artifact, so removing the layer removes it. A cache image is not in
-    here on purpose: it can always be baked again.
+    A filter result counts as the layer's content, not as an artifact
+    that can be rebuilt, so removing the layer removes it too. Cache
+    images are left out on purpose, because they can always be baked
+    again.
     """
     nodes = [node, *descendants(node)] if node.is_folder else [node]
     return [layer.derived_image for layer in nodes
@@ -77,7 +78,8 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
         return tree is not None and is_layer(tree.nodes.active)
 
     def invoke(self, context, event):
-        # The dialog draws on every redraw; resolve what it shows once.
+        # The dialog draws on every redraw, so work out what it shows once
+        # here.
         node = parse_context(context).layer
         self.layer_name = node.name
         self.content_count = len(descendants(node)) if node.is_folder else 0
@@ -102,8 +104,9 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
     def execute(self, context):
         ps = parse_context(context)
         tree, node = ps.tree, ps.layer
-        # The row that moves up into the removed row stays active, or the
-        # last row when the removed one was at the bottom.
+        # The row that moves up into the removed row's place becomes
+        # active. If the removed row was at the bottom, the new last row
+        # becomes active.
         rows = [item.node.name for item in tree.stack()]
         gone = {node.name, *(child.name for child in descendants(node))} if node.is_folder else {node.name}
         position = rows.index(node.name) if node.name in rows else len(rows)
@@ -111,12 +114,12 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
         before = [name for name in rows[:position] if name not in gone]
         next_active = after[0] if after else (before[-1] if before else None)
 
-        # Before the node goes: once its pointer is gone the image is an
-        # orphan nothing can name, and only the next file read would
-        # sweep it. Here rather than in ``Node.free`` because ``free``
-        # also runs on undo-driven teardown, while this operator carries
-        # UNDO -- so the step records the node and the packed image
-        # together and one Ctrl+Z brings back both (PS-057).
+        # Remove the filter results before the node. Once the node is
+        # gone, nothing points at the images, and only the next file read
+        # would delete them. This is done here and not in ``Node.free``,
+        # because ``free`` also runs when undo tears nodes down. This
+        # operator has the UNDO option, so its undo step holds the node
+        # and the packed image together, and one Ctrl+Z brings both back.
         for image in _filter_results(node):
             bpy.data.images.remove(image)
 

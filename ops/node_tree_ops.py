@@ -17,7 +17,11 @@ def _find_material_group_node(material, tree):
 
 
 def link_tree_to_material(material, tree):
-    """Instance the compiled group in *material* and feed Base Color if free."""
+    """Add the tree's compiled group to *material* and return the group node.
+
+    Reuses the group node from an earlier call. The first channel is
+    linked to the Principled BSDF's Base Color when that input is free.
+    """
     material.use_nodes = True
     material.paint_system.tree = tree
     compile_tree(tree)

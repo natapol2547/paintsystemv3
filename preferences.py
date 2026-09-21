@@ -8,7 +8,7 @@ from .common import ADDON_ID, icon_kwargs
 class PaintSystemPreferences(AddonPreferences):
     bl_idname = ADDON_ID
 
-    # Selection overlay (PS-091). Colours are display values; the overlay
+    # Selection overlay. The colours are display (sRGB) values. The overlay
     # converts them to linear before drawing.
     show_selection_3d: BoolProperty(
         name="Show Selection in 3D View",

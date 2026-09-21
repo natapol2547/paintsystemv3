@@ -78,10 +78,11 @@ def _set_name_transform(self, new_value, curr_value, is_set):
 
 
 def _ensure_unique_name(channel) -> bool:
-    """Rename *channel* if another channel has its name; before 5.0, which has no set_transform.
+    """Rename *channel* if another channel has its name. Used before Blender 5.0.
 
-    Assigning the name re-enters the property's update once; the second
-    pass finds the name unique and stops.
+    Before 5.0 there is no `set_transform`, so the rename happens in the
+    update callback. Assigning the name runs the update once more, and
+    that second pass finds the name unique and stops.
     """
     unique = get_next_unique_name(channel.name, _other_channel_names(channel))
     if unique != channel.name:
@@ -104,7 +105,8 @@ class PaintSystemChannel(bpy.types.PropertyGroup):
         name="Name",
         default="Channel",
         update=_on_channel_changed,
-        # set_transform exists from Blender 5.0; older versions rename in update.
+        # set_transform exists from Blender 5.0. Older versions rename in
+        # the update callback.
         **({'set_transform': _set_name_transform} if is_newer_than(5, 0) else {}),
     )
     type: EnumProperty(

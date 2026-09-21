@@ -34,8 +34,9 @@ def layer_rows(tree) -> dict[str, LayerRow]:
     return rows
 
 
-# ``filter_items`` stores the rows it computed for ``draw_item``, which
-# Blender calls right after it for every shown row of the same list.
+# Rows computed by ``filter_items``, kept for ``draw_item`` and keyed by
+# tree pointer. Blender calls ``draw_item`` right after ``filter_items``
+# for every shown row of the same list.
 _rows_by_tree: dict[int, dict[str, LayerRow]] = {}
 
 
@@ -66,8 +67,9 @@ class PAINTSYSTEM_UL_layers(UIList):
         if row_state is None or not is_layer(item):
             return
         main_row = layout.row(align=True)
-        # ``active`` greys a row out and, unlike ``enabled``, keeps it usable:
-        # a disabled folder still expands, and the layers in it still rename.
+        # ``active`` greys the row out but, unlike ``enabled``, keeps it
+        # usable. A disabled folder can still expand, and the layers in it
+        # can still be renamed.
         main_row.active = row_state.parent_enabled
 
         row = main_row.row(align=True)
@@ -112,7 +114,10 @@ class PAINTSYSTEM_MT_add_layer(Menu):
 
 
 def draw_layer_properties(layout, context, node):
-    """Clip, lock alpha, lock, blend mode and opacity of the active layer, on one row when the sidebar is wide enough."""
+    """Draw clip, lock alpha, lock, blend mode and opacity of the active layer.
+
+    They share one row when the sidebar is wide enough.
+    """
     ui_scale = context.preferences.view.ui_scale
     region = getattr(context, 'region', None)
     wide = region is not None and region.width - 70 * ui_scale > 170 * ui_scale

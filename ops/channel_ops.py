@@ -74,7 +74,7 @@ class PAINTSYSTEM_OT_remove_channel(Operator):
 
 
 class ChannelMoveOperator:
-    """Move the active channel one row; `offset` is -1 for up and 1 for down."""
+    """Move the active channel one row. `offset` is -1 for up and 1 for down."""
     bl_options = {'REGISTER', 'UNDO'}
     offset = 0
 

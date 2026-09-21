@@ -1,8 +1,9 @@
-"""Brush and Color sections of the main panel in texture paint mode (PS-033).
+"""Brush and Color sections of the main panel in texture paint mode.
 
-Both draw with Blender's own paint panel helpers, which follow the brush
-system of the running version: brushes are local data up to 4.2 and
-assets from 4.3, and the paint settings come from the active tool from 5.3.
+Both sections draw with Blender's own paint panel helpers, so they follow
+the brush system of the running version. Brushes are local data up to
+4.2 and assets from 4.3. From 5.3 the paint settings come from the active
+tool.
 """
 from bl_ui import properties_paint_common
 from bl_ui.properties_paint_common import UnifiedPaintPanel, brush_settings, draw_color_settings
@@ -21,7 +22,8 @@ def texture_paint_settings(context):
 def draw_brush_selector(layout, context, settings):
     shelf = getattr(properties_paint_common, 'BrushAssetShelf', None)
     if hasattr(shelf, 'draw_popup_selector'):
-        # Brush assets: the asset shelf popover the tool settings header uses.
+        # Brush assets: use the same asset shelf popover as the tool
+        # settings header.
         shelf.draw_popup_selector(layout, context, settings.brush)
     else:
         layout.template_ID_preview(settings, "brush", new="brush.add", rows=3, cols=8, hide_buttons=False)

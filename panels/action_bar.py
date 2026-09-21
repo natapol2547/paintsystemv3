@@ -1,22 +1,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""A floating row of action buttons inside the 3D view (PS-052).
+"""A floating row of action buttons inside the 3D view.
 
-One `GizmoGroup` in VIEW_3D / WINDOW holds a backdrop gizmo and one
-`GIZMO_GT_button_2d` per action, each bound to an operator with
-`target_set_operator`. Gizmos are what makes the bar work at all: they
-are picked before the tool keymap, so a click on a button beats the
-brush and the selection tools without the add-on binding a key, and
-`gizmogroup.gizmo_tweak` has no `UNDO` option, so the action it runs owns
-the one Ctrl+Z it costs.
+`PAINTSYSTEM_GGT_action_bar` is one `GizmoGroup` in the 3D view's WINDOW
+region. It holds a backdrop gizmo and one `GIZMO_GT_button_2d` per
+action. Each button is bound to an operator with `target_set_operator`.
 
-`draw_prepare` runs before every draw of the region and lays the row out
-in region pixels inside the part of the region no other region covers, so
-opening the tool bar, the sidebar or the asset shelf, or resizing the
-area, moves the bar on the next draw.
-
-The poll has to check `SpaceView3D.show_gizmo`: gizmos that are not drawn
-are still picked, so without it a hidden bar would go on swallowing
-clicks over its own rectangle.
+- The bar is built from gizmos because gizmos are picked before the
+  tool keymap. A click on a button wins over the brush and the selection
+  tools without the add-on binding any key. Also,
+  `gizmogroup.gizmo_tweak` has no `UNDO` option, so the operator it runs
+  owns the single Ctrl+Z.
+- `draw_prepare` runs before every draw of the region. It places the row,
+  in region pixels, inside the part of the region that no other region
+  covers. Opening the tool bar, the sidebar or the asset shelf, or
+  resizing the area, moves the bar on the next draw.
+- The poll must check `SpaceView3D.show_gizmo`. Gizmos that are not drawn
+  can still be clicked, so without this check a hidden bar would keep
+  swallowing clicks over its rectangle.
 """
 import bpy
 import gpu
@@ -48,18 +48,18 @@ COVERING_REGIONS = frozenset((
     'TOOLS', 'UI', 'HEADER', 'TOOL_HEADER', 'ASSET_SHELF', 'ASSET_SHELF_HEADER'))
 """Region types that can be drawn over the 3D view's WINDOW region.
 
-HUD, the Adjust Last Operation panel, is left out: it floats over a
+HUD (the Adjust Last Operation panel) is left out. It floats over a
 corner, can be collapsed, and draws above the bar where they overlap.
 """
 
 
 def show_bar(context) -> bool:
-    """Whether the bar belongs in this view now.
+    """True when the bar should show in this view now.
 
-    Texture Paint, a live selection on the active tree, and the
-    preference on. The bar is the selection's own toolbar, so without a
-    selection there is nothing for it to act on that the sidebar does not
-    already offer.
+    That needs Texture Paint mode, a live selection on the active tree,
+    and the `show_action_bar` preference on. The bar is a toolbar for the
+    selection. Without a selection it would only repeat what the sidebar
+    already offers.
     """
     prefs = addon_preferences(context)
     if prefs is not None and not prefs.show_action_bar:
@@ -74,7 +74,10 @@ def show_bar(context) -> bool:
 
 
 def is_shown(region) -> bool:
-    """Whether *region* takes up space; a hidden one reports a width or height of 1."""
+    """True when *region* takes up space.
+
+    A hidden region reports a width or height of 1.
+    """
     return region.width > 1 and region.height > 1
 
 
@@ -84,13 +87,13 @@ def _bounds(region) -> tuple[int, int, int, int]:
 
 
 def visible_rect(area, region) -> tuple[int, int, int, int]:
-    """Region-local rect of the part of *region* no covering region hides.
+    """Region-local rectangle of the part of *region* left uncovered.
 
-    With Region Overlap on, the tool bar, the sidebar, the headers and
-    the asset shelf are drawn over the WINDOW region; with it off they
-    sit beside it and never intersect it. Each shown region that does
-    intersect trims the side it is aligned to, so a tool bar flipped to
-    the right trims the right side.
+    Only regions in `COVERING_REGIONS` count. With Region Overlap on, the tool bar, the sidebar, the headers and
+    the asset shelf are drawn over the WINDOW region. With it off, they
+    sit beside it and never overlap it. Each shown region that does
+    overlap trims the side it is aligned to. So a tool bar moved to the
+    right trims the right side.
     """
     x0, y0, x1, y1 = _bounds(region)
     for other in area.regions:
@@ -112,10 +115,11 @@ def visible_rect(area, region) -> tuple[int, int, int, int]:
 
 
 def bar_layout(visible, count: int, scale: float) -> dict:
-    """The backdrop rect and the button centres, centred at the bottom of *visible*.
+    """Backdrop rect and button centres of a bar at the bottom of *visible*.
 
-    A view narrower than the bar gets the bar from its left edge running
-    past the right one, rather than a row of buttons too small to hit.
+    The bar is centred horizontally. In a view narrower than the bar, the
+    bar starts at the left margin and runs past the right edge. That is
+    better than shrinking the buttons until they are too small to hit.
     """
     vx0, vy0, vx1, vy1 = visible
     size, gap = BUTTON_SIZE * scale, BUTTON_GAP * scale
@@ -172,9 +176,9 @@ class PAINTSYSTEM_MT_action_bar(Menu):
         layout.operator("paint_system.select_all", text="Select All",
                         **icon_kwargs('SELECT_SET')).action = 'SELECT'
         layout.menu(PAINTSYSTEM_MT_invert_channels.bl_idname, **icon_kwargs('MOD_MASK'))
-        # Not buttons on the bar: both ask for a radius first, and a
-        # gizmo that opens a dialog is not the one-click thing the bar
-        # is for. Placeholder icons.
+        # Blur and Sharpen are not buttons on the bar. Both ask for a
+        # radius first, and the bar is for one-click actions. The icons
+        # are placeholders.
         layout.separator()
         layout.operator("paint_system.blur_pixels", **icon_kwargs('MOD_SMOOTH'))
         layout.operator("paint_system.sharpen_pixels", **icon_kwargs('MOD_EDGESPLIT'))
@@ -229,7 +233,7 @@ class PAINTSYSTEM_GGT_action_bar(GizmoGroup):
     bl_region_type = 'WINDOW'
     # SCALE: the sizes below are pixels times the UI scale, not world
     # units. PERSISTENT: the group survives a tool change, so the bar
-    # does not blink away when the user picks a selection tool.
+    # does not flicker off when the user picks a selection tool.
     bl_options = {'PERSISTENT', 'SCALE'}
 
     @classmethod
@@ -240,14 +244,14 @@ class PAINTSYSTEM_GGT_action_bar(GizmoGroup):
         return show_bar(context)
 
     def button(self, operator: str, **properties):
-        """A button gizmo running *operator*, added to the row. The caller sets its icon.
+        """Add a button running *operator* to the row. The caller sets its icon.
 
-        The icons are literal `blender_icon` calls at the call sites
-        below rather than a table here, because `GIZMO_GT_button_2d`
-        takes an icon name and grew `icon_value` only in 4.5: a gizmo
-        cannot show an add-on icon on every version the add-on supports,
-        so these are Blender's own and `tests/test_icons.py` checks each
-        one where it is written.
+        `GIZMO_GT_button_2d` takes an icon name, and only has `icon_value`
+        from 4.5. So a gizmo cannot show an add-on icon on every version
+        the add-on supports, and the bar uses Blender's own icons. Each
+        icon is a literal `blender_icon` call at the call site below, not
+        an entry in a table here, so that `tests/test_icons.py` can check
+        each one where it is written.
         """
         item = self._theme
         gizmo = self.gizmos.new("GIZMO_GT_button_2d")
@@ -275,9 +279,9 @@ class PAINTSYSTEM_GGT_action_bar(GizmoGroup):
         self.button("paint_system.select_all", action='DESELECT').icon = blender_icon('X')
         more = self.button("wm.call_menu", name=PAINTSYSTEM_MT_action_bar.bl_idname)
         more.icon = blender_icon('THREE_DOTS', 'COLLAPSEMENU')
-        # Created last: Blender draws a group's gizmos last to first and
-        # picks them first to last, so the backdrop draws under the
-        # buttons and is only picked where no button is.
+        # Created last. Blender draws a group's gizmos from last to first
+        # and picks them from first to last. So the backdrop draws under
+        # the buttons, and only gets clicks where there is no button.
         backdrop = self.gizmos.new(PAINTSYSTEM_GT_action_backdrop.bl_idname)
         backdrop.color = self._theme.inner[:3]
         backdrop.alpha = max(self._theme.inner[3], 0.85)
@@ -286,12 +290,12 @@ class PAINTSYSTEM_GGT_action_bar(GizmoGroup):
         self.backdrop = backdrop
 
     def shown_buttons(self, context):
-        """The buttons whose operator can run now.
+        """The buttons whose operator can run now. Hides the others.
 
-        A gizmo cannot be greyed out, and one that runs nothing looks
-        broken, so a button whose operator polls False is hidden and the
-        row closes up. The operator's `poll` answers from flags alone, so
-        this costs no read (`ops.pixel_ops`).
+        A gizmo cannot be greyed out, and a button that does nothing looks
+        broken. So a button whose operator's poll fails is hidden, and the
+        row closes the gap. The operators' polls only check cheap flags
+        (see `ops.pixel_ops`), so this reads no pixels.
         """
         shown = []
         for operator, gizmo in self.buttons:
@@ -313,7 +317,10 @@ class PAINTSYSTEM_GGT_action_bar(GizmoGroup):
 
 
 def draw_gizmo_popover(self, context):
-    """The bar's switch in the viewport's own Gizmos popover, where widgets live."""
+    """Draw the bar's on/off switch in the 3D view's Gizmos popover.
+
+    That popover is where Blender keeps the switches for viewport widgets.
+    """
     prefs = addon_preferences(context)
     if prefs is None:
         return

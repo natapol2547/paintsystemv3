@@ -21,13 +21,13 @@ class PAINTSYSTEM_OT_select_all(Operator):
         ),
         default='SELECT',
     )
-    # Set only by the click item of the selection tools' keymaps
-    # (tools/workspace_tools.py); execute ignores it. A button's tooltip
-    # names the first keymap item whose properties equal the button's
-    # exactly, and the active tool's keymap is searched before Image
-    # Paint. Without this property the Selection section's None button
-    # would name that click (Left Mouse) instead of Ctrl D while one of
-    # the tools is active.
+    # Set only by the click item in the selection tools' keymaps
+    # (tools/workspace_tools.py). `execute` ignores it. A button's tooltip
+    # shows the first keymap item whose properties match the button's
+    # exactly, and Blender searches the active tool's keymap before Image
+    # Paint. Without this property, the None button in the Selection
+    # section would show that click (Left Mouse) as its shortcut instead
+    # of Ctrl D while a selection tool is active.
     from_tool_click: BoolProperty(
         name="From Tool Click",
         description="Set by the click of a selection tool; changes nothing",

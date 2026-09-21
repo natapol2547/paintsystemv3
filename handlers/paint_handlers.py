@@ -1,13 +1,16 @@
-"""Keep texture painting on the active layer when the selection changes (PS-060).
+"""Keep texture painting on the active layer when the selection changes.
 
-Selecting another object shows up as a depsgraph update. Selecting another
-material slot does not, but notifies the message bus. Clicking a node in
-the node editor makes it active without any update, message bus
-notification or handler call, but the editor redraws, so a draw callback
-notices and a timer syncs (drawing cannot write data).
+Each kind of change reaches the addon in a different way:
 
-Mode and scene switches also notify the message bus; the selection
-session hears about them here (PS-091).
+- Selecting another object causes a depsgraph update.
+- Selecting another material slot causes no depsgraph update, but it
+  notifies the message bus.
+- Clicking a node in the node editor makes it active with no update,
+  message bus notification or handler call. The editor does redraw, so a
+  draw callback notices the change. A timer then does the sync, because
+  a draw callback cannot write data.
+- Mode and scene switches notify the message bus. This module passes
+  them on to the selection session.
 """
 import bpy
 
@@ -17,7 +20,8 @@ from ..selection import session as selection_session
 
 # Object and material pointers the canvas was last synced for.
 _last_selection: tuple[int, int] | None = None
-# Active node pointer per Paint System tree pointer, as last seen drawn.
+# Active node pointer of each Paint System tree at its last draw, keyed by
+# tree pointer.
 _seen_active_nodes: dict[int, int] = {}
 _draw_handle = None
 _msgbus_owner = object()
@@ -62,17 +66,20 @@ def on_active_material_index(*args):
 
 
 def on_object_mode(*args):
-    # The selection session's state records whether texture paint mode is on (PS-091).
+    # The selection session's state records whether texture paint mode is on.
     selection_session.notify()
 
 
 def on_scene_change(*args):
-    # The selection session's state belongs to one scene (PS-091).
+    # The selection session's state belongs to one scene.
     selection_session.notify()
 
 
 def subscribe() -> None:
-    """(Re)subscribe to the message bus, which forgets subscribers on file load."""
+    """Subscribe to the message bus again.
+
+    The message bus forgets all subscribers when a file loads.
+    """
     bpy.msgbus.clear_by_owner(_msgbus_owner)
     bpy.msgbus.subscribe_rna(key=(bpy.types.Object, "active_material_index"),
                              owner=_msgbus_owner, args=(), notify=on_active_material_index)
@@ -91,8 +98,9 @@ def on_load_post(*args):
 
 @bpy.app.handlers.persistent
 def on_undo_post(*args):
-    # The restored step can hold a selection with the canvas of the step
-    # before it: syncs run after the step for the selection was pushed.
+    # The restored step can hold the new selection with the old canvas,
+    # because the sync runs after the undo step for the selection change
+    # was pushed. Forget the last sync so the next update syncs again.
     reset()
 
 

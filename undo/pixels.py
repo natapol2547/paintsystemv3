@@ -1,36 +1,41 @@
-"""Put scripted pixel writes into Blender's image undo (PS-090).
+"""Put scripted pixel writes into Blender's image undo.
 
-Blender records image pixels only in image undo steps, which paint strokes
-and the pixel-editing image operators push. Pixels written from Python
-through ``foreach_set`` belong to no step: Ctrl+Z after a scripted write
-restores nothing, and undoing a native stroke made afterwards reverts the
-scripted write along with it, because the stroke's step restores the tiles
-of the step before it.
+Main entry point: `write_pixels`. Design:
+docs/tickets/PS-090-pixel-undo-stack.md.
 
-``bpy.ops.image.invert`` with all four channels off changes no pixel and
-pushes a full image undo step. That is the whole mechanism here: the addon
-keeps no pixel stack of its own, and Blender undoes and redoes the steps
-itself, in order with native strokes and memfile steps.
+Blender stores image pixels only in image undo steps. Paint strokes and
+the image operators that edit pixels push these steps. Pixels written
+from Python with ``foreach_set`` are in no step. Ctrl+Z after such a
+write restores nothing. Also, undoing a normal stroke made afterwards
+reverts the scripted write too, because the stroke's step restores the
+tiles as they were in the step before it.
 
-Undo and redo restore the pixels recorded by the step they arrive at, so an
-image needs one step holding the pixels from *before* the first scripted
-write, or that write is not undoable. `write_pixels` pushes that baseline
-the first time it touches an image, which is why the handlers call
-`forget_baselines` after every undo, redo and file read: the addon's steps
-may no longer be on the stack.
+``bpy.ops.image.invert`` with all four channels off changes no pixel,
+but it still pushes a full image undo step. This module relies on that
+alone. The addon keeps no pixel stack of its own. Blender undoes and
+redoes the steps itself, in order with normal strokes and memfile steps.
+
+Undo and redo restore the pixels stored in the step they land on. So an
+image needs one step that holds its pixels from *before* the first
+scripted write, or that write cannot be undone. `write_pixels` pushes
+this baseline step the first time it writes to an image. The handlers
+call `forget_baselines` after every undo and redo, and
+`forget_undo_state` after a file read, because the addon's steps may no
+longer be on the stack.
 
 Rules for callers:
 
-- An operator that writes pixels has no ``UNDO`` option. With it Blender
-  pushes a memfile step on top of the image step and every write costs two
-  Ctrl+Z.
-- It changes no document data in the same call. A document change that
-  belongs with a pixel write is pushed as its own step before the write.
-- Nothing infers pixel state from document state after undo. Owners of
-  derived images rebuild them from their inputs in ``undo_post`` and
-  ``redo_post``.
-- Datablocks are fetched by name or ``session_uid`` after undo; Python
-  references may dangle.
+- An operator that writes pixels must not have the ``UNDO`` option. With
+  it, Blender pushes a memfile step on top of the image step, and every
+  write costs two Ctrl+Z.
+- It must not change document data in the same call. A document change
+  that belongs with a pixel write is pushed as its own step before the
+  write.
+- Nothing may work out pixel state from document state after undo.
+  Owners of derived images rebuild them from their inputs in
+  ``undo_post`` and ``redo_post``.
+- After undo, fetch datablocks by name or ``session_uid``. Python
+  references may point at freed data.
 """
 import logging
 
@@ -39,8 +44,9 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-# ``session_uid`` of every image this session has pushed a step for. Stable
-# across undo, new after a file reload, so it cannot outlive its stack.
+# ``session_uid`` of every image this session has pushed a step for. The
+# uid stays the same across undo and changes on a file reload, so an entry
+# cannot outlive its undo stack.
 _baselines: set[int] = set()
 
 _undo_stack_ready = False
@@ -49,11 +55,11 @@ _undo_stack_ready = False
 def ensure_undo_stack() -> None:
     """Give a background Blender an undo stack before an image step is pushed.
 
-    Blender builds the window manager's undo stack when something first
-    pushes to it, and does that for itself only in an interactive session.
-    ``image.invert`` dereferences the stack without a null check, so the
-    first call in a ``-b`` session crashes Blender on 4.2 and 5.2. Reading a
-    file frees the stack again; `forget_undo_state` clears the flag.
+    Blender creates the window manager's undo stack on the first push, and
+    only does this by itself in an interactive session. ``image.invert``
+    uses the stack without checking for null, so its first call in a
+    ``-b`` session crashes Blender on 4.2 and 5.2. Reading a file frees
+    the stack again, and `forget_undo_state` resets the flag.
     """
     global _undo_stack_ready
     if _undo_stack_ready or not bpy.app.background:
@@ -77,9 +83,9 @@ def forget_undo_state() -> None:
 def push_undo_step(image: bpy.types.Image) -> bool:
     """Push an image undo step holding the current pixels of *image*.
 
-    Costs about 75-120 ms and 90 MB on a 4K byte image (PS-096); the steps
-    live in Blender's ``undo_memory_limit``. Edit > Undo History labels them
-    "Invert Channels".
+    Costs about 75-120 ms and 90 MB for a 4K byte image. The steps count
+    against Blender's ``undo_memory_limit``. Edit > Undo History lists
+    them as "Invert Channels".
     """
     ensure_undo_stack()
     try:
@@ -101,10 +107,12 @@ def write_pixels(image: bpy.types.Image, pixels) -> bool:
 
     *pixels* holds ``width * height * channels`` float values in Blender's
     own layout, bottom row first. The write marks the image dirty, so
-    PS-056 saves or packs it with the blend file.
+    `handlers.node_tree_handlers.on_save_pre` saves or packs it with the
+    blend file.
 
-    Returns False when the write happened but could not be registered, so
-    the caller can tell the user the edit is there but not undoable.
+    Returns False when the pixels were written but no undo step could be
+    pushed. The caller can then tell the user that the edit cannot be
+    undone.
     """
     width, height = image.size
     if not width or not height:
@@ -125,11 +133,12 @@ def write_pixels(image: bpy.types.Image, pixels) -> bool:
 
 
 def _note_filters(image: bpy.types.Image) -> None:
-    """Tell any filter layer reading *image* that its pixels moved.
+    """Tell any filter layer that reads *image* that its pixels changed.
 
-    Deferred import: `filters.freshness` reaches `filters.core`, which
-    imports this module. Exact rather than waiting for the depsgraph,
-    which reports a stroke but says nothing about a scripted write.
+    This is done here because the depsgraph reports a paint stroke but
+    not a scripted write. The import is inside the function because
+    `filters.freshness` leads to `filters.core`, which imports this
+    module.
     """
     from ..filters.freshness import note_image_changed
     note_image_changed([image.session_uid])

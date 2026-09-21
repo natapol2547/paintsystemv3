@@ -8,7 +8,11 @@ _GROUP_NODE_ID = 'PaintSystemGroupLayerNode'
 
 
 def _target_node(context):
-    """The group node a button/keymap acted on (draw_buttons sets context.node)."""
+    """The group node a button or key press acts on.
+
+    A button drawn by a node's `draw_buttons` gets that node as
+    `context.node`. Otherwise this is the active node.
+    """
     node = getattr(context, 'node', None)
     if node is None:
         node = getattr(context, 'active_node', None)

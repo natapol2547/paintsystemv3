@@ -50,7 +50,10 @@ def _draw_paint_mode_row(layout, context):
 
 
 def _draw_selection_section(layout, context, tree):
-    """Select all, none and invert, and why the selection cannot be used when it cannot."""
+    """Draw the Selection section with its select and pixel action buttons.
+
+    When the selection cannot be used, the section also says why.
+    """
     header, body = layout.panel("paint_system_selection", default_closed=False)
     row = header.row()
     row.label(text="Selection", **icon_kwargs('SELECT_SET'))

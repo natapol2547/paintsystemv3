@@ -1,14 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Clear, Fill, Invert, Blur and Sharpen as operators (PS-052, PS-051).
+"""Operators for Clear, Fill, Invert, Blur and Sharpen on the active layer.
 
-The work is in `filters.actions`; these wrap it in Blender's report and
-progress. None of them takes the `UNDO` option: the pixel write pushes an
-image undo step of its own, and a memfile step on top of it would cost a
-second Ctrl+Z (`undo.pixels`).
+The work is done in `filters.actions`. These operators add Blender's
+reports and progress display around it.
 
-Blur and Sharpen open their dialog first, because a radius is not
-something to guess at and running them again is a second full pass over
-the layer rather than a redo of a cheap one.
+- None of them has the `UNDO` option. The pixel write pushes its own
+  image undo step, and a memfile step on top of it would cost a second
+  Ctrl+Z (see `undo.pixels`).
+- Blur and Sharpen open a dialog first. A radius should not be guessed,
+  and changing it afterwards means another full pass over the layer, not
+  a cheap redo.
 """
 from bpy.props import BoolProperty, FloatProperty
 from bpy.types import Operator
@@ -23,13 +24,14 @@ from ..gpu_passes.core import gpu_known
 
 
 class PixelAction:
-    """Shared poll, report and progress of the pixel actions.
+    """Shared poll, report and progress for the pixel operators.
 
-    `poll` answers from flags only, and reads the active node itself
-    rather than through `parse_context`, which walks the stack. Whether
-    the image has pixels, what the selection covers and what the layer is
-    baked into cost a read or a GPU pass, so they are `execute`'s
-    refusals rather than a greyed out button with no explanation.
+    `poll` only checks cheap flags. It reads the active node directly
+    instead of calling `parse_context`, which walks the whole stack.
+    Some checks need a pixel read or a GPU pass: whether the image has
+    pixels, what the selection covers, and what the layer is baked into.
+    Those are done in `execute`, which can refuse with a message. A
+    greyed out button would give no explanation.
     """
 
     bl_options = {'REGISTER'}
@@ -62,14 +64,15 @@ class PixelAction:
     def action_params(self) -> dict:
         """Keyword arguments for `run_action`, from this operator's properties.
 
-        Not called `options`: `Operator.options` is Blender's own.
+        Not named `options`, because Blender already has `Operator.options`.
         """
         return {}
 
     def execute(self, context):
         window_manager = context.window_manager
-        # A 4K layer takes about a second on 5.2 and up to five on 4.2,
-        # with no redraw in between, so the cursor carries the progress.
+        # A 4K layer takes about one second on 5.2 and up to five on 4.2,
+        # with no redraw in between. So the progress shows on the mouse
+        # cursor.
         window_manager.progress_begin(0.0, 1.0)
         try:
             registered = actions.run_action(context, self.action, **self.action_params())
@@ -108,8 +111,8 @@ class PAINTSYSTEM_OT_invert_pixels(PixelAction, Operator):
                       "or all of it when nothing is selected")
     action = actions.INVERT
 
-    # SKIP_SAVE: otherwise a channel picked from the Invert Channels menu
-    # becomes what the plain Invert Colors button does next time.
+    # SKIP_SAVE, so that channels picked in the Invert Channels menu are
+    # not remembered by the plain Invert Colors button next time.
     invert_r: BoolProperty(name="Red", default=True, options={'SKIP_SAVE'})
     invert_g: BoolProperty(name="Green", default=True, options={'SKIP_SAVE'})
     invert_b: BoolProperty(name="Blue", default=True, options={'SKIP_SAVE'})
