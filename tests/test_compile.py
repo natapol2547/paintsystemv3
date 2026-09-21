@@ -33,6 +33,10 @@ def compiled_nodes(tree, bl_idname):
     return [n for n in tree.compiled.nodes if n.bl_idname == bl_idname]
 
 
+def is_library_group(ng):
+    return ng.name.startswith(library.LIBRARY_PREFIX)
+
+
 try:
     section("tree init")
     tree = bpy.data.node_groups.new("Main", 'PaintSystemNodeTree')
@@ -58,14 +62,14 @@ try:
     check(art.get('ps_fingerprint') == fp1, "fingerprint stored on the artifact")
     blends = compiled_nodes(tree, 'ShaderNodeGroup')
     check(len(blends) == 2, f"two blend group instances ({len(blends)})")
-    check(all(library.is_library_group(n.node_tree) for n in blends), "blends use static library group")
+    check(all(is_library_group(n.node_tree) for n in blends), "blends use static library group")
     texs = compiled_nodes(tree, 'ShaderNodeTexImage')
     check(len(texs) == 1 and texs[0].image == image, "image texture bound to layer image")
     out = compiled_nodes(tree, 'NodeGroupOutput')[0]
     check(out.inputs['Color'].is_linked and out.inputs['Color Alpha'].is_linked, "group output linked")
     iface = [(s.in_out, s.name) for s in art.interface.items_tree]
     check(('OUTPUT', 'Color') in iface and ('INPUT', 'Color Alpha') in iface, "interface sockets from channels")
-    lib_count = len([ng for ng in bpy.data.node_groups if library.is_library_group(ng)])
+    lib_count = len([ng for ng in bpy.data.node_groups if is_library_group(ng)])
     check(lib_count == 1, f"one library group so far ({lib_count})")
     for ng in bpy.data.node_groups:
         check(not (ng.bl_idname == 'ShaderNodeTree' and ng.name.startswith('.PS ') and 'Channel' in ng.name),
@@ -91,7 +95,7 @@ try:
     img_layer.blend_mode = 'MULTIPLY'
     compile_tree(tree)
     check(blend.node_tree.name.endswith('[MULTIPLY]'), "blend mode swaps library group")
-    check(len([ng for ng in bpy.data.node_groups if library.is_library_group(ng)]) == 2,
+    check(len([ng for ng in bpy.data.node_groups if is_library_group(ng)]) == 2,
           "second library group generated lazily")
 
     img_layer.enabled = False

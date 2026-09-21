@@ -215,7 +215,8 @@ def check_artifact(label, tree, mode):
 section("library groups nothing uses")
 core = import_from("compiler.core")
 link_tree_to_material = import_from("ops.node_tree_ops").link_tree_to_material
-check(not [ng.name for ng in bpy.data.node_groups if library.is_library_group(ng) and ng.use_fake_user],
+check(not [ng.name for ng in bpy.data.node_groups
+           if ng.name.startswith(library.LIBRARY_PREFIX) and ng.use_fake_user],
       "library groups have no fake user")
 bpy.ops.ed.undo_push(message="Library start")
 tree = bpy.data.node_groups.new("Library Users", 'PaintSystemNodeTree')
@@ -243,7 +244,8 @@ path = os.path.join(tempfile.mkdtemp(prefix="ps_blend_"), "library.blend")
 del tree
 check(bpy.ops.wm.save_as_mainfile(filepath=path) == {'FINISHED'}, "saved")
 check(bpy.ops.wm.open_mainfile(filepath=path) == {'FINISHED'}, "reopened")
-kept = sorted((ng.name, ng.users) for ng in bpy.data.node_groups if library.is_library_group(ng))
+kept = sorted((ng.name, ng.users) for ng in bpy.data.node_groups
+              if ng.name.startswith(library.LIBRARY_PREFIX))
 check(kept and all(users > 0 for _name, users in kept), f"only library groups in use are saved {kept}")
 check(blend_group_name('MULTIPLY') not in [name for name, _users in kept], "the unused MULTIPLY group is gone")
 tree = bpy.data.node_groups["Library Users"]

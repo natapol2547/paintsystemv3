@@ -37,10 +37,6 @@ def get_library_group(key: str, build: Callable[[bpy.types.NodeTree], None]) -> 
     return tree
 
 
-def is_library_group(tree: bpy.types.NodeTree) -> bool:
-    return tree.name.startswith(LIBRARY_PREFIX)
-
-
 # -- layer blend ------------------------------------------------------
 
 # ShaderNodeMix socket indices (name lookup is ambiguous: "A"/"B" repeat per data type).

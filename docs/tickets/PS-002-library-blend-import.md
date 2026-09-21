@@ -37,9 +37,10 @@ Groups in the file (name: inputs -> outputs):
 - Add `get_appended_group(name)` next to `get_library_group`. It loads the
   group with `libraries.load(link=False)`, renames it to `.PS Lib <name>`,
   stamps `ps_lib_version = LIBRARY_VERSION` and `ps_lib_source = 'blend'`.
-  `is_library_group` must recognise both kinds. Like generated groups it
-  gets no fake user: a group no artifact uses is dropped when the file is
-  saved and appended again on next use.
+  Both kinds carry the `.PS Lib ` name prefix, which is how library groups
+  are recognised. Like a generated group, an appended group gets no fake
+  user: a group no artifact uses is dropped when the file is saved and
+  appended again on next use.
 - Version bump replaces the group in place: append the new copy, then
   `user_remap` the old datablock to it and remove the old one, so existing
   artifact instances keep working without a recompile.
