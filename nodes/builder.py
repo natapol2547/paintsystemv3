@@ -96,12 +96,6 @@ DEFAULT_NODE_WIDTH = 140.0
 
 
 @dataclass
-class Flexible:
-    """Wrap a value to apply it only when the node/socket is first created."""
-    value: Any
-
-
-@dataclass
 class BuildStats:
     """What a build actually changed in the tree.
 
@@ -247,17 +241,16 @@ class NodeTreeBuilder:
                     self.node_tree.nodes.remove(node)
                     node = None
 
-                is_new = node is None
-                if is_new:
+                if node is None:
                     node = self.node_tree.nodes.new(instr.bl_idname)
                     node[IDENTIFIER_KEY] = identifier
                     self._existing_nodes[identifier] = node
                     self._newly_created.add(identifier)
                     self.stats.nodes_created += 1
 
-                self._apply_node_properties(node, instr.properties, is_new)
-                self._apply_socket_properties(node.inputs, instr.inputs, is_new)
-                self._apply_socket_properties(node.outputs, instr.outputs, is_new)
+                self._apply_node_properties(node, instr.properties)
+                self._apply_socket_properties(node.inputs, instr.inputs)
+                self._apply_socket_properties(node.outputs, instr.outputs)
 
         with phase("links", self.node_tree):
             self._sync_links()
@@ -361,7 +354,6 @@ class NodeTreeBuilder:
         existing: dict[SocketKey, bpy.types.NodeTreeInterfaceSocket] = {
             (s.name, s.in_out): s for s in _flat_sockets()
         }
-        existing_before_creation: set[SocketKey] = set(existing.keys())
 
         # Create any still-missing sockets
         for instr in self._socket_instructions:
@@ -381,17 +373,11 @@ class NodeTreeBuilder:
             if current_idx != idx:
                 interface.move(sock, idx)
 
-        # Apply declared properties (Flexible values only on first creation)
+        # Apply declared properties
         for instr in self._socket_instructions:
-            key = (instr.name, instr.in_out)
-            sock = existing[key]
-            sock_is_new = key not in existing_before_creation
+            sock = existing[(instr.name, instr.in_out)]
             for prop, value in instr.properties.items():
-                is_flexible = isinstance(value, Flexible)
-                if is_flexible and not sock_is_new:
-                    continue
-                self._write_if_changed(
-                    sock, prop, value.value if is_flexible else value)
+                self._write_if_changed(sock, prop, value)
 
     # ── Hydration ────────────────────────────────────────────────────
 
@@ -441,40 +427,22 @@ class NodeTreeBuilder:
 
     def _apply_node_properties(
         self, node: bpy.types.Node, properties: dict[str, Any],
-        is_new: bool = True,
     ) -> None:
         for prop, value in properties.items():
-            is_flexible = isinstance(value, Flexible)
-            if is_flexible and not is_new:
+            # A property this node type does not have is skipped, not an error.
+            if node.bl_rna.properties.get(prop) is None:
                 continue
-            actual_value = value.value if is_flexible else value
-
-            prop_rna = node.bl_rna.properties.get(prop)
-            if prop_rna is None:
-                continue
-            if prop_rna.type == "POINTER" and isinstance(actual_value, str):
-                collection = _get_data_collection(prop_rna.fixed_type)
-                if collection:
-                    ptr = collection.get(actual_value)
-                    if ptr is not None:
-                        self._write_if_changed(node, prop, ptr)
-            else:
-                self._write_if_changed(node, prop, actual_value)
+            self._write_if_changed(node, prop, value)
 
     def _apply_socket_properties(
         self,
         sockets: bpy.types.NodeInputs | bpy.types.NodeOutputs,
         socket_specs: dict[int | str, dict[str, Any]],
-        is_new: bool = True,
     ) -> None:
         for socket_id, props in socket_specs.items():
             socket = self._resolve_socket(sockets, socket_id)
             for prop, value in props.items():
-                is_flexible = isinstance(value, Flexible)
-                if is_flexible and not is_new:
-                    continue
-                self._write_if_changed(
-                    socket, prop, value.value if is_flexible else value)
+                self._write_if_changed(socket, prop, value)
 
     def _socket_by_id(
         self, node: bpy.types.Node, is_input: bool, socket_id: int | str,
@@ -1319,23 +1287,3 @@ class NodeTreeBuilder:
             self._set_loc(node, 0, x)
             self._set_loc(node, 1, y)
             y -= self._node_height(node) + V_MARGIN
-
-
-# ── Module-level helpers ─────────────────────────────────────────────
-
-_bpy_type_to_data_collection: dict[type, str] = {}
-
-
-def _get_data_collection(id_type):
-    """Return the bpy.data collection that stores objects of *id_type*, or None."""
-    if not _bpy_type_to_data_collection:
-        for prop in bpy.data.bl_rna.properties:
-            if prop.type == "COLLECTION":
-                _bpy_type_to_data_collection[prop.fixed_type] = prop.identifier
-    result = None
-    while result is None:
-        result = _bpy_type_to_data_collection.get(id_type)
-        id_type = id_type.base
-        if id_type is None:
-            return None
-    return getattr(bpy.data, result)

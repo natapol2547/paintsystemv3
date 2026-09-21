@@ -14,7 +14,7 @@ from typing import Any
 
 import bpy
 
-from ..nodes.builder import BuildStats, NodeTreeBuilder, Flexible
+from ..nodes.builder import BuildStats, NodeTreeBuilder
 
 
 SocketId = int | str
@@ -174,14 +174,11 @@ def _serialize(value: Any) -> Any:
 
 
 def _serialize_other(value: Any) -> Any:
-    """The rest of ``_serialize``: wrappers, datablocks and subclasses.
+    """The rest of ``_serialize``: datablocks and subclasses.
 
-    Flexible comes before the container checks because it wraps a value the
-    build applies only once, and an ID before them because a datablock is
+    An ID comes before the container checks because a datablock is
     identified by name rather than by its contents.
     """
-    if isinstance(value, Flexible):
-        return ["flexible", _serialize(value.value)]
     if isinstance(value, bpy.types.ID):
         return ["id", type(value).__name__, value.name_full]
     if isinstance(value, dict):
