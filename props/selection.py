@@ -170,14 +170,6 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
     transform: FloatVectorProperty(
         name="Transform", size=16, subtype='MATRIX', default=_IDENTITY)
 
-    def get_points(self) -> list[tuple[float, float]]:
-        """The outline as (x, y) pairs, empty when the op has no outline."""
-        flat = self.get(POINTS_KEY)
-        if not flat:
-            return []
-        values = list(flat)
-        return list(zip(values[0::2], values[1::2]))
-
     def set_points(self, points) -> None:
         """Store an iterable of (x, y) pairs as the op's outline."""
         flat = []
@@ -251,24 +243,12 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
 
     ops: CollectionProperty(type=PaintSystemSelectionOp)
 
-    feather: FloatProperty(
-        name="Feather",
-        description="Default width of the soft edge for new operations, in pixels",
-        default=0.0, min=0.0, max=FEATHER_MAX, soft_max=64.0,
-    )
-    antialias: BoolProperty(
-        name="Anti-Alias",
-        description="Smooth the edge of new operations over one pixel",
-        default=True,
-    )
-
-    @property
-    def is_empty(self) -> bool:
-        return len(self.ops) == 0
-
     def add_op(self, kind: str, mode: str = 'REPLACE', space: str = 'UV',
                **values) -> PaintSystemSelectionOp:
-        """Append an operation, applying the selection's own defaults.
+        """Append an operation, setting the op properties named in *values*.
+
+        A `points` value is stored with `set_points`. Properties not in
+        *values* keep the op's defaults.
 
         A `REPLACE` of a kind in `REPLACING_KINDS` drops every op before
         it: nothing earlier can show through, so keeping them would only
@@ -284,8 +264,6 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
         op.kind = kind
         op.mode = mode
         op.space = space
-        op.feather = self.feather
-        op.antialias = self.antialias
         points = values.pop('points', None)
         for name, value in values.items():
             setattr(op, name, value)
@@ -353,19 +331,6 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
             previous = digest.digest()
             out.append(previous)
         return out
-
-    def ops_hash(self) -> str:
-        """A digest of the ops that affect the mask, from `chain_start` on, in order.
-
-        Empty string when there are none. The mask is derived from exactly
-        this, so two selections with the same digest have the same mask at
-        any size, and a changed digest means the mask has to be rebuilt.
-        It passes no surface key provider, so a `VIEW` selection's mask
-        also depends on surfaces this digest does not see.
-        """
-        if not len(self.ops):
-            return ""
-        return self.prefix_digests()[-1].hex()
 
 
 classes = (

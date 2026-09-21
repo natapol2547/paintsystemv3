@@ -211,8 +211,7 @@ def test_selection_limits_the_action():
         return
     before = reset().reshape(SIZE, SIZE, 4)
     t = tree()
-    t.selection.feather = 4.0
-    t.selection.add_op('BOX', points=[(0.2, 0.3), (0.7, 0.8)])
+    t.selection.add_op('BOX', points=[(0.2, 0.3), (0.7, 0.8)], feather=4.0)
     mask = raster.get_mask(t.selection, raster.image_size(canvas()))
     coverage = mask.read_bytes().astype(np.float64) / 255.0
     check(bpy.ops.paint_system.clear_pixels() == {'FINISHED'}, "Clear runs inside the selection")
@@ -236,7 +235,6 @@ def test_selection_limits_the_action():
     worst = float(np.abs(as_bytes(after[edge]) - as_bytes(expected)).max())
     check(edge.any() and worst <= 1.0,
           f"the feathered edge matches the model within {worst:.0f} byte")
-    t.selection.feather = 0.0
 
 
 def test_a_selection_that_misses_the_layer_does_nothing():

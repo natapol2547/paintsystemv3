@@ -165,19 +165,19 @@ def steps():
         with override():
             bpy.ops.ed.undo()
         yield from wait_for(lambda: not session.current().selected)
-        check(tree().selection.is_empty, "undo restores the ops in paint mode")
+        check(not len(tree().selection.ops), "undo restores the ops in paint mode")
         check(not session.current().selected, "and undo_post resynced the session")
         with override():
             bpy.ops.ed.redo()
         yield from wait_for(lambda: session.current().active)
-        check(not tree().selection.is_empty and session.current().active, "redo restores and resyncs")
+        check(len(tree().selection.ops) and session.current().active, "redo restores and resyncs")
     else:
         # Before 5.1 undo in texture paint mode steps through image undo
         # only, so the operator pushes no step there (undo.UNDO_OPTIONS).
         skip("before 5.1, undo in texture paint mode does not restore the ops")
 
     section("a target problem shows in the section")
-    if tree().selection.is_empty:
+    if not len(tree().selection.ops):
         op(bpy.ops.paint_system.select_all, action='SELECT')
     tree().nodes[big].image = bpy.data.images.new("PS Session UI Tiled", 64, 64, tiled=True)
     session.notify()

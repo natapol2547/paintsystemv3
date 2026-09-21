@@ -396,11 +396,11 @@ def test_select_all_operator():
     run(bpy.ops.paint_system.select_all, action='INVERT')
     check([op.kind for op in t.selection.ops] == ['BOX'] and t.selection.prefix_digests(64, 64, 1001)[-1] == before,
           "inverting again drops it, back to the same digest and cached mask")
-    check(run(bpy.ops.paint_system.select_all, action='DESELECT') == {'FINISHED'} and t.selection.is_empty,
+    check(run(bpy.ops.paint_system.select_all, action='DESELECT') == {'FINISHED'} and not len(t.selection.ops),
           "deselect clears the ops")
     run(bpy.ops.paint_system.select_all, action='SELECT')
     run(bpy.ops.paint_system.select_all, action='INVERT')
-    check(t.selection.is_empty, "inverting all leaves no selection, not one that blocks all painting")
+    check(not len(t.selection.ops), "inverting all leaves no selection, not one that blocks all painting")
     properties = bpy.context.window_manager.operator_properties_last("paint_system.select_all")
     descriptions = {}
     for action in ('SELECT', 'DESELECT', 'INVERT'):
@@ -556,14 +556,14 @@ def test_undo_and_load_force_a_sync():
     check(session.current().selected, "synced with a selection")
     cancel_tick()
     bpy.ops.ed.undo()
-    check(tree().selection.is_empty, "undo restores the empty selection")
+    check(not len(tree().selection.ops), "undo restores the empty selection")
     check(pending() and session._pending_force, "undo_post schedules a forced sync")
     reaches.clear()
     session._tick()
     check(not session.current().selected and len(reaches) == 1, "which syncs the restored selection")
     cancel_tick()
     bpy.ops.ed.redo()
-    check(not tree().selection.is_empty and pending() and session._pending_force, "redo does the same")
+    check(len(tree().selection.ops) and pending() and session._pending_force, "redo does the same")
     session._tick()
     check(session.current().selected, "and the selection is live again")
 

@@ -272,7 +272,7 @@ def steps():
         with override():
             bpy.ops.ed.undo()
         yield from wait_for(user_stencil_back)
-        check(tree().selection.is_empty and user_stencil_back(),
+        check(not len(tree().selection.ops) and user_stencil_back(),
               "undoing past the selection's creation gives the user's stencil back")
         with override():
             bpy.ops.ed.redo()
@@ -284,8 +284,8 @@ def steps():
         with override():
             bpy.ops.ed.undo()
         yield 0.5
-        yield from wait_for(lambda: applied() == (not tree().selection.is_empty))
-        check(applied() == (not tree().selection.is_empty) and (not applied() or stencil_matches_mask()),
+        yield from wait_for(lambda: applied() == bool(len(tree().selection.ops)))
+        check(applied() == bool(len(tree().selection.ops)) and (not applied() or stencil_matches_mask()),
               "after undo the stencil still matches the selection")
         skip("before 5.1, undo in texture paint mode does not restore the ops")
 

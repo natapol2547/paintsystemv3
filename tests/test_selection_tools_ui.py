@@ -31,7 +31,8 @@ from bpy_extras.view3d_utils import location_3d_to_region_2d
 from mathutils import Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import check, drag, finish, import_from, register_addon, section, simulate, since, skip  # noqa: E402
+from harness import (check, drag, finish, import_from, op_points, register_addon, section, simulate,  # noqa: E402
+                     since, skip)
 
 if bpy.app.background:
     print("test_selection_tools_ui.py needs a window; run without -b")
@@ -442,7 +443,7 @@ def run_sections():
                             ({"shift": True, "ctrl": True}, 'INTERSECT')):
         yield from region_drag(low, high, **modifiers)
         expected.append(('BOX', mode, 'VIEW'))
-        points = tree().selection.ops[-1].get_points() if len(tree().selection.ops) else []
+        points = op_points(tree().selection.ops[-1]) if len(tree().selection.ops) else []
         check(ops() == expected and last_operator() == "PAINT_SYSTEM_OT_select_box" and points == corners,
               f"a drag with {sorted(modifiers) or 'no modifier'} appends a {mode} box with the dragged corners "
               f"({ops()}, {last_operator()}, {points})")
@@ -472,7 +473,7 @@ def run_sections():
         yield
         region_event(key, 'RELEASE', end)
         yield 0.2
-        points = tree().selection.ops[-1].get_points() if len(tree().selection.ops) else []
+        points = op_points(tree().selection.ops[-1]) if len(tree().selection.ops) else []
         origin = (start[0] + 0.5, start[1] + 0.5)
         if name == "shift":
             want = [origin, (origin[0] + 120, origin[1] + 120)]
@@ -504,7 +505,7 @@ def run_sections():
     yield
     region_event('LEFT_CTRL', 'RELEASE', path[-1])
     yield 0.2
-    lasso = tree().selection.ops[-1].get_points() if len(tree().selection.ops) else []
+    lasso = op_points(tree().selection.ops[-1]) if len(tree().selection.ops) else []
     check(ops()[-1:] == [('LASSO', 'SUBTRACT', 'VIEW')] and len(ops()) == 3 and len(lasso) >= 20,
           f"a Ctrl drag with Lasso Selection appends a SUBTRACT lasso ({ops()}, {len(lasso)} points)")
 

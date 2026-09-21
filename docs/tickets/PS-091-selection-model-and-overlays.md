@@ -105,9 +105,8 @@ in the 3D view and the image editor.
 The selection is document data; its mask is derived from it, the same
 way the artifact is derived from the tree.
 
-- `PaintSystemSelection` on the tree: `feather` and `antialias`
-  defaults, and `ops`, an ordered collection of operations. It stores no
-  image. The selection applies to the active layer, whichever that is,
+- `PaintSystemSelection` on the tree: `ops`, an ordered collection of
+  operations. It stores no image. The selection applies to the active layer, whichever that is,
   the way a Photoshop selection stays put while the user switches
   layers: the mask is built at the size of the active layer's image
   (`raster.image_size(image, tile)`) and sampled through that layer's

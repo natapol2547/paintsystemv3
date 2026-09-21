@@ -29,7 +29,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import selection_reference as reference  # noqa: E402
-from harness import check, finish, guarded, import_from, register_addon, section, skip  # noqa: E402
+from harness import check, finish, guarded, import_from, op_points, register_addon, section, skip  # noqa: E402
 
 register_addon()
 core = import_from("gpu_passes.core")
@@ -704,7 +704,7 @@ def test_cache():
     for op in sel.ops:
         added = other.add_op(op.kind, op.mode, feather=op.feather, antialias=op.antialias)
         if op.get("points") is not None:
-            added.set_points(op.get_points())
+            added.set_points(op_points(op))
     check(raster.get_mask(other, size=SIZE) is held and raster.stats()["passes"] == 4,
           "another tree with the same ops shares the mask")
     other.clear()

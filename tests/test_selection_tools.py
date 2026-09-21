@@ -16,7 +16,7 @@ import bpy
 from mathutils import Euler, Matrix
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import before, check, finish, guarded, import_from, register_addon, section  # noqa: E402
+from harness import before, check, finish, guarded, import_from, op_points, register_addon, section  # noqa: E402
 
 register_addon()
 tools = import_from("tools")
@@ -215,7 +215,7 @@ def test_execute():
     check(result == {'FINISHED'} and len(selection.ops) == 2, f"an ADD box is appended ({result})")
     op = selection.ops[-1]
     check((op.kind, op.mode, op.space) == ('BOX', 'ADD', 'VIEW'), f"kind, mode and space ({op.kind} {op.mode})")
-    check(close_points(op.get_points(), points), f"points in region pixels ({op.get_points()})")
+    check(close_points(op_points(op), points), f"points in region pixels ({op_points(op)})")
     check((op.feather, op.antialias, op.through) == (6.0, False, True), "feather, anti-alias and through")
     check(tuple(op.region_size) == (640, 480), f"region size ({tuple(op.region_size)})")
     object_to_view = VIEW @ cube().matrix_world
@@ -233,7 +233,7 @@ def test_execute():
     lasso = [(10.5, 10.5), (90.5, 12.5), (60.5, 80.5), (20.5, 50.5)]
     result = bpy.ops.paint_system.select_lasso('EXEC_DEFAULT', mode='SUBTRACT', **view_props(lasso))
     check(result == {'FINISHED'} and selection.ops[-1].kind == 'LASSO'
-          and close_points(selection.ops[-1].get_points(), lasso),
+          and close_points(op_points(selection.ops[-1]), lasso),
           "a lasso keeps every point")
 
     section("execute cancels what it cannot use")

@@ -218,6 +218,26 @@ def over(backdrop, layer, opacity=1.0, clip=False, blend=mix_blend):
     return tuple(sum(w * c[i] for w, c in zip(weights, colors)) / alpha for i in range(3)) + (alpha,)
 
 
+# ── Selections ───────────────────────────────────────────────────────
+
+def op_points(op):
+    """The outline of a selection op as a list of (x, y) pairs, empty when it has none."""
+    flat = op.get(import_from("props.selection").POINTS_KEY)
+    if not flat:
+        return []
+    values = list(flat)
+    return list(zip(values[0::2], values[1::2]))
+
+
+def ops_hash(selection):
+    """The hex digest of *selection*'s last op (no size, tile or surface keys), '' with no ops.
+
+    Equal digests mean the same mask at any size, for selections whose
+    ops are all drawn in UV space.
+    """
+    return selection.prefix_digests()[-1].hex() if len(selection.ops) else ""
+
+
 # ── Simulated input ──────────────────────────────────────────────────
 #
 # Blender must run with --enable-event-simulate, which also makes it

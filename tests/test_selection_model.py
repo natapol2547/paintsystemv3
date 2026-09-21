@@ -3,8 +3,8 @@
 The point of storing the ops rather than the mask is that Blender's own
 undo and its file format then cover the selection for free, the way they
 cover mesh selection. These tests hold that: ops survive undo and a save
-and reload, and `prefix_digests` and `ops_hash` change when and only when
-the mask would. The pinned digests catch an accidental change to what goes
+and reload, and `prefix_digests` change when and only when the mask
+would. The pinned digests catch an accidental change to what goes
 into them; a deliberate one updates the pins.
 """
 import os
@@ -15,7 +15,7 @@ import bpy
 from mathutils import Matrix
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import check, fail, finish, guarded, import_from, register_addon, section  # noqa: E402
+from harness import check, fail, finish, guarded, import_from, op_points, ops_hash, register_addon, section  # noqa: E402
 
 register_addon()
 selection_props = import_from("props.selection")
@@ -42,7 +42,7 @@ def fresh_selection():
 def test_ops_are_ordered_and_replace_truncates():
     section("ops keep their order and a replace drops what came before")
     sel = fresh_selection()
-    check(sel.is_empty, "a new selection has no ops")
+    check(not len(sel.ops), "a new selection has no ops")
 
     sel.add_op('BOX', 'REPLACE', points=[(0.1, 0.1), (0.5, 0.5)])
     sel.add_op('ELLIPSE', 'ADD', points=[(0.2, 0.2), (0.4, 0.4)])
@@ -79,11 +79,11 @@ def test_invert_toggles():
     check([op.kind for op in sel.ops] == ['ALL'] and sel.ops[0].mode == 'REPLACE',
           f"inverting an empty selection selects all {[op.kind for op in sel.ops]}")
     sel.invert()
-    check(sel.is_empty, "inverting all leaves no selection rather than an empty mask")
+    check(not len(sel.ops), "inverting all leaves no selection rather than an empty mask")
     sel.add_op('BOX', 'REPLACE', points=[(0.1, 0.1), (0.5, 0.5)])
     sel.add_op('ALL', 'ADD')
     sel.invert()
-    check(sel.is_empty, "so does inverting ops that end in an added ALL")
+    check(not len(sel.ops), "so does inverting ops that end in an added ALL")
     sel.add_op('BOX', 'REPLACE', points=[(0.1, 0.1), (0.5, 0.5)])
     sel.add_op('ALL', 'INTERSECT')
     sel.invert()
@@ -102,64 +102,60 @@ def test_points_round_trip():
     sel = fresh_selection()
     points = [(0.0, 0.0), (1.0, 0.25), (0.5, 1.0), (0.125, 0.75)]
     op = sel.add_op('LASSO', 'REPLACE', points=points)
-    got = op.get_points()
+    got = op_points(op)
     check(len(got) == len(points), f"{len(got)} points came back, {len(points)} went in")
     check(all(abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6
               for a, b in zip(got, points)),
           f"every coordinate survived {got}")
-    check(sel.add_op('INVERT', 'ADD').get_points() == [],
-          "an op with no outline reports an empty list, not None")
+    check(sel.add_op('INVERT', 'ADD').get(selection_props.POINTS_KEY) is None,
+          "an op with no outline stores no points")
 
 
-def test_defaults_come_from_the_selection():
-    section("new ops take the selection's feather and anti-alias")
+def test_add_op_sets_the_values_given():
+    section("add_op sets the values it is given and leaves the op defaults otherwise")
     sel = fresh_selection()
-    sel.feather = 6.5
-    sel.antialias = False
     op = sel.add_op('BOX', 'REPLACE', points=[(0, 0), (1, 1)])
-    check(abs(op.feather - 6.5) < 1e-6, f"feather came across as {op.feather}")
-    check(op.antialias is False, "anti-alias came across")
-    explicit = sel.add_op('BOX', 'ADD', points=[(0, 0), (1, 1)], feather=1.0)
-    check(abs(explicit.feather - 1.0) < 1e-6,
-          f"an explicit value wins over the default, {explicit.feather}")
-    sel.feather = 0.0
-    sel.antialias = True
+    check(op.feather == 0.0 and op.antialias is True,
+          f"without values, a hard anti-aliased edge ({op.feather}, {op.antialias})")
+    explicit = sel.add_op('BOX', 'ADD', points=[(0, 0), (1, 1)], feather=6.5, antialias=False)
+    check(abs(explicit.feather - 6.5) < 1e-6 and explicit.antialias is False,
+          f"the values given come across ({explicit.feather}, {explicit.antialias})")
 
 
 def test_hash_tracks_what_the_mask_depends_on():
-    section("ops_hash changes when, and only when, the mask would")
+    section("the last digest changes when, and only when, the mask would")
     sel = fresh_selection()
-    check(sel.ops_hash() == "", "an empty selection hashes to the empty string")
+    check(sel.prefix_digests() == [], "an empty selection has no digests")
 
     op = sel.add_op('BOX', 'REPLACE', space='UV', points=[(0.1, 0.1), (0.5, 0.5)])
-    first = sel.ops_hash()
+    first = ops_hash(sel)
     check(first != "", "a selection with an op has a hash")
-    check(sel.ops_hash() == first, "the hash is stable when nothing changes")
+    check(ops_hash(sel) == first, "the hash is stable when nothing changes")
 
     op.feather = 4.0
-    check(sel.ops_hash() != first, "changing the feather changes the hash")
+    check(ops_hash(sel) != first, "changing the feather changes the hash")
     op.feather = 0.0
-    check(sel.ops_hash() == first, "and changing it back restores it")
+    check(ops_hash(sel) == first, "and changing it back restores it")
 
     op.set_points([(0.1, 0.1), (0.6, 0.5)])
-    check(sel.ops_hash() != first, "moving a point changes the hash")
+    check(ops_hash(sel) != first, "moving a point changes the hash")
     op.set_points([(0.1, 0.1), (0.5, 0.5)])
 
     # A UV op does not care what the viewport is doing.
     op.view_matrix = [2.0] * 16
     op.region_size = (1920, 1080)
-    check(sel.ops_hash() == first,
+    check(ops_hash(sel) == first,
           "the view matrices do not touch the hash of a UV op")
 
     op.space = 'VIEW'
-    view = sel.ops_hash()
+    view = ops_hash(sel)
     check(view != first, "the same op in view space hashes differently")
     op.view_matrix = [3.0] * 16
-    check(sel.ops_hash() != view, "and now the view matrix does count")
+    check(ops_hash(sel) != view, "and now the view matrix does count")
 
     sel.clear()
     sel.add_op('BOX', 'REPLACE', space='UV', points=[(0.1, 0.1), (0.5, 0.5)])
-    check(sel.ops_hash() == first, "an identical selection rebuilt from scratch hashes the same")
+    check(ops_hash(sel) == first, "an identical selection rebuilt from scratch hashes the same")
 
 
 def test_view_ops_key_their_surface():
@@ -241,19 +237,18 @@ def test_digests_are_exact():
     section("digests see every bit of a value and ignore what a replace hides")
     sel = fresh_selection()
     op = sel.add_op('LASSO', 'REPLACE', points=[(0.1, 0.1), (0.9, 0.1), (0.5, 0.9)], feather=1.00001)
-    first = sel.ops_hash()
+    first = ops_hash(sel)
     op.feather = 1.00002
-    check(sel.ops_hash() != first, "feather 1.00001 and 1.00002 differ")
+    check(ops_hash(sel) != first, "feather 1.00001 and 1.00002 differ")
     op.feather = 1.00001
     op.set_points([(0.1, 0.1), (0.9, 0.1), (0.5, 0.9 + 1e-9)])
-    check(sel.ops_hash() != first, "a point moved by 1e-9 differs")
+    check(ops_hash(sel) != first, "a point moved by 1e-9 differs")
     op.feather = 5000.0
     check(op.feather == 1024.0, f"feather is clamped to 1024 ({op.feather})")
 
     sel.add_op('ELLIPSE', 'ADD', points=[(0.2, 0.2), (0.6, 0.6)])
     sel.add_op('INVERT')
-    check(len(sel.prefix_digests()) == 3 and sel.prefix_digests()[-1].hex() == sel.ops_hash(),
-          "one digest per op, the last of them being ops_hash")
+    check(len(sel.prefix_digests()) == 3, "one digest per op")
 
     hidden = fresh_selection()
     hidden.add_op('BOX', points=[(0.0, 0.0), (0.5, 0.5)])
@@ -317,9 +312,8 @@ def test_points_written_directly():
         check(points_view(op[key]) is None, f"{name}: points_view reports it malformed")
         try:
             digests = sel.prefix_digests(64, 64, 1001)
-            sel.ops_hash()
         except Exception as error:
-            fail(f"{name}: prefix_digests or ops_hash raised {error!r}")
+            fail(f"{name}: prefix_digests raised {error!r}")
             continue
         check(digests[-1] != well_formed[-1] and digests[-1] != bare[-1],
               f"{name}: digests unlike the well-formed points and unlike no points")
@@ -360,23 +354,23 @@ def test_order_matters_to_the_hash():
     sel = fresh_selection()
     sel.add_op('BOX', 'REPLACE', points=[(0.0, 0.0), (0.5, 0.5)])
     sel.add_op('ELLIPSE', 'SUBTRACT', points=[(0.2, 0.2), (0.8, 0.8)])
-    forward = sel.ops_hash()
+    forward = ops_hash(sel)
 
     sel.clear()
     sel.add_op('ELLIPSE', 'REPLACE', points=[(0.2, 0.2), (0.8, 0.8)])
     sel.add_op('BOX', 'SUBTRACT', points=[(0.0, 0.0), (0.5, 0.5)])
-    check(sel.ops_hash() != forward, "swapping the ops changes the hash")
+    check(ops_hash(sel) != forward, "swapping the ops changes the hash")
 
 
 def test_undo_restores_the_ops():
     section("Blender's undo covers the selection")
     sel = fresh_selection()
     sel.add_op('BOX', 'REPLACE', points=[(0.1, 0.1), (0.5, 0.5)])
-    before = sel.ops_hash()
+    before = ops_hash(sel)
     bpy.ops.ed.undo_push(message="one op")
 
     tree().selection.add_op('ELLIPSE', 'ADD', points=[(0.2, 0.2), (0.4, 0.4)])
-    after = tree().selection.ops_hash()
+    after = ops_hash(tree().selection)
     bpy.ops.ed.undo_push(message="two ops")
     check(after != before and len(tree().selection.ops) == 2, "the second op is in place")
 
@@ -387,12 +381,12 @@ def test_undo_restores_the_ops():
         return
     check(len(restored.selection.ops) == 1,
           f"undo took the second op back, {len(restored.selection.ops)} left")
-    check(restored.selection.ops_hash() == before,
+    check(ops_hash(restored.selection) == before,
           "and the selection hashes as it did before the op was added")
 
     bpy.ops.ed.redo()
     restored = bpy.data.node_groups.get(TREE)
-    check(restored is not None and restored.selection.ops_hash() == after,
+    check(restored is not None and ops_hash(restored.selection) == after,
           "redo puts it back")
 
 
@@ -404,8 +398,8 @@ def test_save_and_reload_keeps_the_ops():
                feather=3.0, through=True)
     sel.ops[0].region_size = (1920, 1080)
     sel.ops[0].view_matrix = [float(i) for i in range(16)]
-    before = sel.ops_hash()
-    points_before = sel.ops[0].get_points()
+    before = ops_hash(sel)
+    points_before = op_points(sel.ops[0])
     # In use a tree is referenced by a material; this one has no users, and
     # Blender does not write a zero-user datablock.
     tree().use_fake_user = True
@@ -423,9 +417,9 @@ def test_save_and_reload_keeps_the_ops():
     op = reloaded.selection.ops[0]
     check(op.kind == 'LASSO' and op.space == 'VIEW' and op.through,
           f"its fields came back ({op.kind}, {op.space}, through={op.through})")
-    check(op.get_points() == points_before,
-          f"the outline in the ID property came back {op.get_points()}")
-    check(reloaded.selection.ops_hash() == before,
+    check(op_points(op) == points_before,
+          f"the outline in the ID property came back {op_points(op)}")
+    check(ops_hash(reloaded.selection) == before,
           "so the mask built from the reopened file is the same mask")
 
 
@@ -433,7 +427,7 @@ for test in (test_ops_are_ordered_and_replace_truncates,
              test_invert_toggles,
              test_selection_has_no_image,
              test_points_round_trip,
-             test_defaults_come_from_the_selection,
+             test_add_op_sets_the_values_given,
              test_hash_tracks_what_the_mask_depends_on,
              test_view_ops_key_their_surface,
              test_digests_are_exact,
