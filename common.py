@@ -1,4 +1,3 @@
-import logging
 import math
 import os
 
@@ -9,8 +8,6 @@ import bpy.utils.previews
 # The add-on's module name, which keys its preferences entry: "paint_system"
 # as a legacy add-on, "bl_ext.<repository>.paint_system" as an extension.
 ADDON_ID = __package__
-
-log = logging.getLogger(__name__)
 
 
 def addon_preferences(context):
@@ -117,30 +114,3 @@ def rounded_rect(x0, y0, x1, y1, radius, segments=6):
             angle = math.pi * (start + 0.5 * step / segments)
             points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
     return points
-
-
-# Images
-
-
-def save_image(image: bpy.types.Image) -> None:
-    """Keep the unsaved pixels of *image* when the blend file is saved.
-
-    A packed image, or one without a file, is packed again from memory. An
-    image backed by a file is written to that file; when the write fails
-    (a missing or read-only directory), the image drops its path and is
-    packed instead. Images without unsaved changes are left alone.
-    """
-    if not image.is_dirty:
-        return
-    if image.packed_file is None and image.filepath:
-        try:
-            image.save()
-            return
-        except RuntimeError as error:
-            log.warning("Could not save image %r to %r, packing it instead: %s",
-                        image.name, image.filepath, error)
-            image.filepath_raw = ''
-    try:
-        image.pack()
-    except RuntimeError as error:
-        log.warning("Could not pack image %r: %s", image.name, error)

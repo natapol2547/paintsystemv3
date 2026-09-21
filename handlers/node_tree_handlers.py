@@ -1,6 +1,7 @@
+import logging
+
 import bpy
 
-from ..common import save_image
 from ..compiler.bake import PS_IMAGE_KEY
 from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty, ps_trees,
                              unblock_compile)
@@ -12,6 +13,8 @@ from ..selection import raster as selection_raster
 from ..selection import session as selection_session
 from ..selection import stencil as selection_stencil
 from ..undo import pixels
+
+log = logging.getLogger(__name__)
 
 
 def paint_system_images() -> set[bpy.types.Image]:
@@ -33,6 +36,30 @@ def paint_system_images() -> set[bpy.types.Image]:
     made = {image for image in bpy.data.images
             if image.get(PS_IMAGE_KEY) and image.get(derived.OWNER_KEY) is None}
     return made | pointed_at
+
+
+def save_image(image: bpy.types.Image) -> None:
+    """Keep the unsaved pixels of *image* when the blend file is saved.
+
+    A packed image, or one without a file, is packed again from memory. An
+    image backed by a file is written to that file; when the write fails
+    (a missing or read-only directory), the image drops its path and is
+    packed instead. Images without unsaved changes are left alone.
+    """
+    if not image.is_dirty:
+        return
+    if image.packed_file is None and image.filepath:
+        try:
+            image.save()
+            return
+        except RuntimeError as error:
+            log.warning("Could not save image %r to %r, packing it instead: %s",
+                        image.name, image.filepath, error)
+            image.filepath_raw = ''
+    try:
+        image.pack()
+    except RuntimeError as error:
+        log.warning("Could not pack image %r: %s", image.name, error)
 
 
 @bpy.app.handlers.persistent

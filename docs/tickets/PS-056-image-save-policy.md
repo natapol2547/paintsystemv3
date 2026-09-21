@@ -6,7 +6,7 @@ Epic F. Size S. Milestone M1.
 
 Done for the demo (M0 slice 6).
 
-- `common.py::save_image(image)` follows the v2 rules. It skips an image
+- `handlers/node_tree_handlers.py::save_image(image)` follows the v2 rules. It skips an image
   without unsaved changes. It packs an image that is already packed or has
   no file path. Otherwise it writes the image to its file. When that write
   raises, it logs a warning, clears `filepath_raw` and packs. A failed pack

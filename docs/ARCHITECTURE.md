@@ -190,7 +190,7 @@ result for one frame at most.
 
 Painted pixels live in memory until the file is saved. `save_pre`
 (`handlers/node_tree_handlers.py`) passes every image a Paint System node
-points at, and every image the addon created, to `common.save_image`: a
+points at, and every image the addon created, to `save_image` beside it: a
 packed image or one without a file is packed again, an image with a file
 is written to it, and a failed write drops the path and packs instead.
 Images nothing in a Paint System tree uses are left to Blender.

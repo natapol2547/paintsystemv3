@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import check, close, finish, fmt, guarded, import_from, register_addon, section  # noqa: E402
 
 register_addon()
-common = import_from("common")
+node_tree_handlers = import_from("handlers.node_tree_handlers")
 
 RED = (1.0, 0.0, 0.0, 1.0)
 GREEN = (0.0, 1.0, 0.0, 1.0)
@@ -135,11 +135,11 @@ def test_save_and_reopen():
 
     section("save")
     records = Records()
-    common.log.addHandler(records)
+    node_tree_handlers.log.addHandler(records)
     try:
         saved = bpy.ops.wm.save_as_mainfile(filepath=os.path.join(folder, "images.blend"))
     finally:
-        common.log.removeHandler(records)
+        node_tree_handlers.log.removeHandler(records)
     check(saved == {'FINISHED'}, "saving finished despite the broken image path")
 
     check(managed.packed_file is not None, "the managed image is packed")
