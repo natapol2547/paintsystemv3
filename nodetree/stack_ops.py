@@ -141,6 +141,16 @@ def alpha_partner(node, color_name: str) -> str | None:
     return channel_alpha_name(color_name)
 
 
+def socket_named(sockets, name: str):
+    """The socket in *sockets* called *name*, or None.
+
+    ``sockets[name]`` and ``sockets.get(name)`` match identifiers before
+    names. A channel socket renamed in place keeps its old name as its
+    identifier, so those lookups can return another channel's socket.
+    """
+    return next((socket for socket in sockets if socket.name == name), None)
+
+
 def paired_color_input(socket):
     """The colour input whose alpha partner is the input *socket*, or None."""
     if socket.is_output:
@@ -190,9 +200,10 @@ def producing_link(socket) -> bpy.types.NodeLink | None:
 
 def channel_slot(tree, channel_name: str):
     output = tree.get_output_node()
-    if output is None or channel_name not in output.inputs:
+    color_in = socket_named(output.inputs, channel_name) if output is not None else None
+    if color_in is None:
         return None
-    return output.inputs[channel_name], output.inputs.get(channel_alpha_name(channel_name))
+    return color_in, socket_named(output.inputs, channel_alpha_name(channel_name))
 
 
 def content_slot(folder):
@@ -207,7 +218,7 @@ def consumer_slot(node):
     """The slot *node*'s ``Color`` output feeds, or None."""
     for link in socket_links(node.outputs['Color']):
         partner = alpha_partner(link.to_node, link.to_socket.name)
-        return link.to_socket, link.to_node.inputs.get(partner) if partner else None
+        return link.to_socket, socket_named(link.to_node.inputs, partner) if partner else None
     return None
 
 
@@ -507,7 +518,7 @@ def repair_alpha_links(tree) -> int:
         for node in tree.nodes:
             for color_in in node.inputs:
                 partner = alpha_partner(node, color_in.name)
-                alpha_in = node.inputs.get(partner) if partner else None
+                alpha_in = socket_named(node.inputs, partner) if partner else None
                 if alpha_in is None:
                     continue
                 link = feeding_link(color_in)
@@ -515,7 +526,7 @@ def repair_alpha_links(tree) -> int:
                     expected = None
                 else:
                     source_partner = alpha_partner(link.from_node, link.from_socket.name)
-                    expected = link.from_node.outputs.get(source_partner) if source_partner else None
+                    expected = socket_named(link.from_node.outputs, source_partner) if source_partner else None
                     if expected is None:
                         continue
                 current = feeding_link(alpha_in)

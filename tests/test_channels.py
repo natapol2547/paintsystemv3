@@ -108,6 +108,23 @@ def test_rename():
     check(names(tree) == ["Color", "Color 1"], f"a rename to another channel's name gets a number {names(tree)}")
     check(sockets_follow(tree), "the group sockets follow")
 
+    # The renamed sockets keep "Color" as their identifier, so a new
+    # channel called "Color" has sockets with other identifiers.
+    tree = new_tree("Channels Rename Reuse")
+    layer = tree.insert_layer_node('PaintSystemSolidColorLayerNode', "Color")
+    tree.channels[0].name = "Paint"
+    ops.add_channel('EXEC_DEFAULT', name="Color")
+    check(names(tree) == ["Paint", "Color"] and sockets_follow(tree),
+          f"a new channel can take a renamed channel's old name {names(tree)}")
+    check(fed_by(tree, "Paint") == layer and fed_by(tree, "Color") == tree.get_input_node(),
+          "the renamed channel keeps its layer and the new one passes its input through")
+    check([item.node for item in tree.stack("Paint")] == [layer] and tree.stack("Color") == [],
+          "each channel's stack reads from its own socket")
+    second = tree.insert_layer_node('PaintSystemSolidColorLayerNode', "Color")
+    check(fed_by(tree, "Color") == second and fed_by(tree, "Color Alpha") == second
+          and fed_by(tree, "Paint") == layer and fed_by(tree, "Paint Alpha") == layer,
+          "a layer added to the new channel leaves the renamed one alone")
+
 
 def test_move():
     section("moving a channel")

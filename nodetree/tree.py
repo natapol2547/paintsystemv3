@@ -198,7 +198,8 @@ class PaintSystemNodeTree(NodeTree):
             output_node = self.get_output_node()
             if input_node and output_node:
                 for sock_name in (channel.name, channel_alpha_name(channel.name)):
-                    connect_sockets(input_node.outputs[sock_name], output_node.inputs[sock_name])
+                    connect_sockets(stack_ops.socket_named(input_node.outputs, sock_name),
+                                    stack_ops.socket_named(output_node.inputs, sock_name))
         return channel
 
     def can_move_active_channel(self, offset: int) -> bool:
