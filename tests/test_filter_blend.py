@@ -140,8 +140,7 @@ if available():
 
     section("release")
     blend_glsl.release()
-    check(blend_glsl._shader is None and blend_glsl._no_mask_texture is None,
-          "release drops the shader and its placeholder")
+    check(blend_glsl._shader is None, "release drops the shader")
 
 # Python's own teardown would free them after the GPU context has gone,
 # which segfaults a background Blender.

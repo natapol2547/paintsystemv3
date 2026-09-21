@@ -298,18 +298,13 @@ void main()
   ivec2 texel = ivec2(v_texel);
   vec4 prev = texelFetch(backdrop, texel, 0);
   vec4 src = texelFetch(source, texel, 0);
-  float m = opacity;
-  if (use_mask != 0) {
-    m *= clamp(texelFetch(mask, texel, 0).r, 0.0, 1.0);
-  }
-  out_color = filter_mix != 0 ? ps_filter_mix(prev, src, m, 1.0, clip)
-                              : ps_layer_blend(prev, src, m, 1.0, clip, mode);
+  out_color = filter_mix != 0 ? ps_filter_mix(prev, src, opacity, 1.0, clip)
+                              : ps_layer_blend(prev, src, opacity, 1.0, clip, mode);
 }
 """
 
 _shader = None
 _batch = None
-_no_mask_texture = None
 
 
 def blend_shader():
@@ -324,10 +319,8 @@ def blend_shader():
         info.push_constant('FLOAT', "clip")
         info.push_constant('INT', "mode")
         info.push_constant('INT', "filter_mix")
-        info.push_constant('INT', "use_mask")
         info.sampler(0, 'FLOAT_2D', "backdrop")
         info.sampler(1, 'FLOAT_2D', "source")
-        info.sampler(2, 'FLOAT_2D', "mask")
         info.vertex_in(0, 'VEC2', "position")
         info.vertex_out(interface)
         info.fragment_out(0, 'VEC4', "out_color")
@@ -338,27 +331,13 @@ def blend_shader():
     return _shader, _batch
 
 
-def _no_mask():
-    """A 1x1 texture for the mask sampler when a pass uses none.
-
-    A sampler the create-info declares has to be bound even where the
-    shader never reads it.
-    """
-    global _no_mask_texture
-    if _no_mask_texture is None:
-        _no_mask_texture = gpu.types.GPUTexture(
-            (1, 1), format='R32F', data=gpu.types.Buffer('FLOAT', 1, [1.0]))
-    return _no_mask_texture
-
-
 def blend_over(backdrop, source, target, size, *, rule=BLEND, mode='MIX',
-               opacity=1.0, clip=False, mask=None):
+               opacity=1.0, clip=False):
     """Composite *source* over *backdrop* into *target*, and return the framebuffer.
 
     All three are textures of *size*, holding straight alpha and linear
-    colour. *mask* is an `R32F` texture of the same size or None. *rule*
-    picks the layer blend or a filter layer's replacement, where *opacity*
-    is the filter's Amount and *mode* is unused.
+    colour. *rule* picks the layer blend or a filter layer's replacement,
+    where *opacity* is the filter's Amount and *mode* is unused.
 
     The framebuffer has to be held alongside its texture until the result
     is used: a `GPUFrameBuffer` does not keep its colour slot alive, and
@@ -373,17 +352,14 @@ def blend_over(backdrop, source, target, size, *, rule=BLEND, mode='MIX',
         shader.uniform_float("clip", 1.0 if clip else 0.0)
         shader.uniform_int("mode", BLEND_MODE_IDS.get(mode, 0))
         shader.uniform_int("filter_mix", 1 if rule == FILTER_MIX else 0)
-        shader.uniform_int("use_mask", 0 if mask is None else 1)
         shader.uniform_sampler("backdrop", backdrop)
         shader.uniform_sampler("source", source)
-        shader.uniform_sampler("mask", _no_mask() if mask is None else mask)
         batch.draw(shader)
     return framebuffer
 
 
 def release() -> None:
-    """Drop the shader and its placeholder before the GPU context goes."""
-    global _shader, _batch, _no_mask_texture
+    """Drop the shader before the GPU context goes."""
+    global _shader, _batch
     _shader = None
     _batch = None
-    _no_mask_texture = None
