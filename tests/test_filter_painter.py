@@ -297,6 +297,31 @@ if available():
               f"({few.mean():.1%} moved, {moved.mean():.1%} without it)")
         node.painter_edge_threshold = 0.0
 
+        section("a GPU out of memory")
+        # Failing one format at a time reaches the painter's own textures:
+        # the stamp centres it gathers at (RGBA32F) and the brush atlas
+        # (R16F). Either failure has to come back as the Refused the
+        # operators report, not as a bare RuntimeError.
+        real_texture = gpu.types.GPUTexture
+        for failing in ('RGBA32F', 'R16F'):
+            def allocate(size, *args, failing=failing, **kwargs):
+                if kwargs.get('format') == failing:
+                    raise RuntimeError("GPUTexture: texture creation failed")
+                return real_texture(size, *args, **kwargs)
+
+            # Dropping the kept atlases makes the build upload them again.
+            painter_build.release()
+            gpu.types.GPUTexture = allocate
+            try:
+                layer_build.build_layer(bpy.context, tree, node)
+                message = None
+            except filters_core.Refused as error:
+                message = str(error)
+            finally:
+                gpu.types.GPUTexture = real_texture
+            check(message is not None and "enough memory" in message,
+                  f"a failed {failing} allocation refuses by name ({message})")
+
         clear = np.zeros((SIZE, SIZE, 4), dtype=np.float32)
         source.pixels.foreach_set(clear.ravel())
         source.update()

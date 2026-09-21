@@ -35,7 +35,7 @@ from gpu_extras.batch import batch_for_shader
 
 from ...gpu_passes.core import offscreen_state, read_color
 from .. import registry
-from ..core import FilterSpec, PixelSource, run_pass
+from ..core import FilterSpec, PixelSource, new_texture, run_pass
 from . import brushes, plan
 
 log = logging.getLogger(__name__)
@@ -303,8 +303,7 @@ def _peak(field) -> float:
         width, height = ceil(width / PEAK_BLOCK), ceil(height / PEAK_BLOCK)
         source = PixelSource.from_texture(current)
         try:
-            framebuffer, current = run_pass(
-                PEAK, source, gpu.types.GPUTexture((width, height), format='RGBA32F'))
+            framebuffer, current = run_pass(PEAK, source, new_texture((width, height), 'RGBA32F'))
         finally:
             source.release()
     return float(read_color(framebuffer, 1, 1)[0, 0, 2])
@@ -323,16 +322,14 @@ def _gather(textures, x: np.ndarray, y: np.ndarray) -> list[np.ndarray]:
     positions = np.zeros((rows * columns, 4), dtype=np.float32)
     positions[:count, 0] = x
     positions[:count, 1] = y
-    where = gpu.types.GPUTexture(
-        (columns, rows), format='RGBA32F',
-        data=gpu.types.Buffer('FLOAT', positions.size, positions.ravel()))
+    where = new_texture((columns, rows), 'RGBA32F',
+                        data=gpu.types.Buffer('FLOAT', positions.size, positions.ravel()))
     results = []
     for texture in textures:
         source = PixelSource.from_texture(texture)
         try:
             framebuffer, _target = run_pass(
-                GATHER, source, gpu.types.GPUTexture((columns, rows), format='RGBA32F'),
-                second=where)
+                GATHER, source, new_texture((columns, rows), 'RGBA32F'), second=where)
             results.append(read_color(framebuffer, columns, rows).reshape(-1, 4)[:count])
         finally:
             source.release()
@@ -341,9 +338,8 @@ def _gather(textures, x: np.ndarray, y: np.ndarray) -> list[np.ndarray]:
 
 def _upload(image: np.ndarray):
     height, width = image.shape
-    return gpu.types.GPUTexture(
-        (width, height), format='R16F',
-        data=gpu.types.Buffer('FLOAT', image.size, image.ravel()))
+    return new_texture((width, height), 'R16F',
+                       data=gpu.types.Buffer('FLOAT', image.size, image.ravel()))
 
 
 def _stamp_program():
