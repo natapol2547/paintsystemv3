@@ -651,8 +651,7 @@ def test_udim_tiles():
     sel = fresh_selection()
     sel.add_op('BOX', points=[(1.25, 2.25), (1.75, 2.75)])
     mask = raster.get_mask(sel, size=(64, 64), tile=1022)
-    check(mask.tile == 1022 and mask.key == sel.prefix_digests(64, 64, 1022)[-1],
-          "the mask records its tile and its key is the tile's last prefix digest")
+    check(mask.key == sel.prefix_digests(64, 64, 1022)[-1], "the mask's key is the tile's last prefix digest")
     got = mask.read()
     check(got[32, 32] == 1.0 and got[5, 5] == 0.0 and float(got.sum()) == 32 * 32,
           f"tile 1022 holds the box shifted by (-1, -2), sum {float(got.sum())}")
@@ -682,8 +681,7 @@ def test_cache():
     first = raster.get_mask(sel, size=SIZE)
     stats = raster.stats()
     check(stats["passes"] == 3 and stats["cached"] == 2, f"three ops from scratch: 3 passes, 2 masks cached {stats}")
-    check(first.key == sel.prefix_digests(*SIZE, 1001)[-1] and first.tile == 1001,
-          "the mask's key is the last prefix digest")
+    check(first.key == sel.prefix_digests(*SIZE, 1001)[-1], "the mask's key is the last prefix digest")
 
     sel.add_op('INVERT')
     raster.get_mask(sel, size=SIZE)

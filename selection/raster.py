@@ -449,13 +449,12 @@ class SelectionMask:
     and `texture`, `read` and `read_bytes` raise `ReferenceError`.
     """
 
-    __slots__ = ('_texture', 'width', 'height', 'tile', 'key', 'alive', '_empty')
+    __slots__ = ('_texture', 'width', 'height', 'key', 'alive', '_empty')
 
-    def __init__(self, texture, width: int, height: int, tile: int, key: bytes):
+    def __init__(self, texture, width: int, height: int, key: bytes):
         self._texture = texture
         self.width = width
         self.height = height
-        self.tile = tile
         self.key = key
         self.alive = True
         self._empty = None
@@ -937,7 +936,7 @@ def render(specs, width: int, height: int, tile: int = 1001) -> np.ndarray:
     targets = [gpu.types.GPUTexture((width, height), format='R32F') for _ in range(min(len(specs), 2))]
     try:
         _run_chain(specs, None, targets, width, height, tile)
-        return SelectionMask(targets[0], width, height, tile, b"").read()
+        return SelectionMask(targets[0], width, height, b"").read()
     finally:
         # See `_run_chain`: a raised error must not keep the targets alive.
         targets = None
@@ -948,6 +947,8 @@ def render(specs, width: int, height: int, tile: int = 1001) -> np.ndarray:
 _masks: dict[bytes, SelectionMask] = {}  # insertion order is recency, oldest first
 _pool: list[tuple[tuple[int, int], gpu.types.GPUTexture]] = []
 _warned: set = set()
+# Counters for the tests, which check through `stats` how much GPU work a
+# call did. Nothing in the add-on reads them.
 _stats = dict(builds=0, passes=0, hits=0, allocations=0, evictions=0)
 
 
@@ -1249,8 +1250,8 @@ def get_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=vie
         _raise(failure, digests[last])
     _stats["passes"] += passes
     if passes >= 2:
-        _masks[digests[last - 1]] = SelectionMask(targets[1], width, height, tile, digests[last - 1])
-    result = SelectionMask(targets[0], width, height, tile, digests[last])
+        _masks[digests[last - 1]] = SelectionMask(targets[1], width, height, digests[last - 1])
+    result = SelectionMask(targets[0], width, height, digests[last])
     _masks[digests[last]] = result
     return result
 
@@ -1282,7 +1283,7 @@ def release() -> None:
 
 
 def stats() -> dict:
-    """Counters since `reset_stats`, plus what the cache holds now. For tests."""
+    """The test counters since `reset_stats`, plus what the cache holds now. Only tests call this."""
     out = dict(_stats)
     out.update(cached=len(_masks), pooled=len(_pool),
                video_memory=_cached_bytes() + sum(w * h * 4 for (w, h), _ in _pool))
