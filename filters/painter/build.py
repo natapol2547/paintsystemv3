@@ -35,7 +35,7 @@ from gpu_extras.batch import batch_for_shader
 
 from ...gpu_passes.core import offscreen_state, read_color
 from .. import registry
-from ..core import FilterSpec, PixelSource, new_texture, run_pass
+from ..core import FilterSpec, new_texture, run_pass
 from . import brushes, plan
 
 log = logging.getLogger(__name__)
@@ -263,11 +263,7 @@ def _run(pool, spec: FilterSpec, texture, params: dict | None = None, *, keep: b
     *texture* goes back to the pool afterwards unless *keep* says a later
     pass still reads it.
     """
-    source = PixelSource.from_texture(texture)
-    try:
-        _framebuffer, result = run_pass(spec, source, pool.acquire(), params=params or {})
-    finally:
-        source.release()
+    _framebuffer, result = run_pass(spec, texture, pool.acquire(), params=params or {})
     if not keep:
         pool.release(texture)
     return result
@@ -301,11 +297,7 @@ def _peak(field) -> float:
     width, height = field.width, field.height
     while width > 1 or height > 1:
         width, height = ceil(width / PEAK_BLOCK), ceil(height / PEAK_BLOCK)
-        source = PixelSource.from_texture(current)
-        try:
-            framebuffer, current = run_pass(PEAK, source, new_texture((width, height), 'RGBA32F'))
-        finally:
-            source.release()
+        framebuffer, current = run_pass(PEAK, current, new_texture((width, height), 'RGBA32F'))
     return float(read_color(framebuffer, 1, 1)[0, 0, 2])
 
 
@@ -326,13 +318,9 @@ def _gather(textures, x: np.ndarray, y: np.ndarray) -> list[np.ndarray]:
                         data=gpu.types.Buffer('FLOAT', positions.size, positions.ravel()))
     results = []
     for texture in textures:
-        source = PixelSource.from_texture(texture)
-        try:
-            framebuffer, _target = run_pass(
-                GATHER, source, new_texture((columns, rows), 'RGBA32F'), second=where)
-            results.append(read_color(framebuffer, columns, rows).reshape(-1, 4)[:count])
-        finally:
-            source.release()
+        framebuffer, _target = run_pass(
+            GATHER, texture, new_texture((columns, rows), 'RGBA32F'), second=where)
+        results.append(read_color(framebuffer, columns, rows).reshape(-1, 4)[:count])
     return results
 
 

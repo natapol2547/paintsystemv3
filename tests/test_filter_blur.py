@@ -156,13 +156,8 @@ def run_chain(values, passes):
     original = texture = upload(values)
     framebuffer = None
     for spec, params in passes:
-        source = filters_core.PixelSource.from_texture(texture)
-        try:
-            framebuffer, texture = filters_core.run_pass(
-                spec, source, second=original if spec.reads_second else None,
-                params=params)
-        finally:
-            source.release()
+        framebuffer, texture = filters_core.run_pass(
+            spec, texture, second=original if spec.reads_second else None, params=params)
     if framebuffer is None:
         return values
     return gpu_core.read_color(framebuffer, cols, rows)

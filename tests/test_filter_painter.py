@@ -80,11 +80,7 @@ def upload(values, texture_format='RGBA32F'):
 def run_spec(spec, values):
     """*values*, a ``(rows, cols, 4)`` array, through one pass of *spec*."""
     rows, cols = values.shape[:2]
-    source = filters_core.PixelSource.from_texture(upload(values))
-    try:
-        framebuffer, _texture = filters_core.run_pass(spec, source)
-    finally:
-        source.release()
+    framebuffer, _texture = filters_core.run_pass(spec, upload(values))
     return gpu_core.read_color(framebuffer, cols, rows)
 
 

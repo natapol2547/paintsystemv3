@@ -237,19 +237,12 @@ def apply_passes(passes, image, *, mask=None) -> bool:
         # One pass carries the mask itself; several compose at the end.
         inline_mask = mask if len(passes) == 1 else None
         for spec, params in passes:
-            step = core.PixelSource.from_texture(current, storage=source.storage)
-            try:
-                framebuffer, current = core.run_pass(
-                    spec, step, mask=inline_mask,
-                    second=original if spec.reads_second else None, params=params)
-            finally:
-                step.release()
+            framebuffer, current = core.run_pass(
+                spec, current, storage=source.storage, mask=inline_mask,
+                second=original if spec.reads_second else None, params=params)
         if mask is not None and inline_mask is None:
-            step = core.PixelSource.from_texture(original, storage=source.storage)
-            try:
-                framebuffer, current = core.run_pass(_COMPOSE, step, mask=mask, second=current)
-            finally:
-                step.release()
+            framebuffer, current = core.run_pass(
+                _COMPOSE, original, storage=source.storage, mask=mask, second=current)
         values = read_color(framebuffer, source.width, source.height)
         return undo_pixels.write_pixels(image, values)
     finally:

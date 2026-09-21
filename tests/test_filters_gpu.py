@@ -67,7 +67,7 @@ def run(spec, image, **kwargs):
     """Run *spec* over *image* into a plain array, without touching it."""
     source = core.PixelSource.from_image(image)
     try:
-        framebuffer, target = core.run_pass(spec, source, **kwargs)
+        framebuffer, target = core.run_pass(spec, source.texture, storage=source.storage, **kwargs)
         values = gpu_core.read_color(framebuffer, source.width, source.height).ravel()
         # `target` stays referenced until the read is done: a framebuffer
         # does not keep its colour slot alive.

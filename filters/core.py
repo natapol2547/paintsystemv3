@@ -241,15 +241,13 @@ class PixelSource:
     shares its memory rather than copying it.
     """
 
-    __slots__ = ('values', 'width', 'height', 'channels', 'storage', 'format', 'texture')
+    __slots__ = ('values', 'width', 'height', 'storage', 'texture')
 
-    def __init__(self, values, width, height, channels, storage, image_format, texture):
+    def __init__(self, values, width, height, storage, texture):
         self.values = values
         self.width = width
         self.height = height
-        self.channels = channels
         self.storage = storage
-        self.format = image_format
         self.texture = texture
 
     @classmethod
@@ -265,51 +263,31 @@ class PixelSource:
         texture = new_texture(
             (width, height), texture_format(image),
             data=gpu.types.Buffer('FLOAT', values.size, values))
-        return cls(values, width, height, channels, storage_of(image),
-                   texture_format(image), texture)
-
-    @classmethod
-    def from_texture(cls, texture: gpu.types.GPUTexture, *,
-                     storage: int = STRAIGHT) -> "PixelSource":
-        """A source the GPU already holds, such as a composited stack.
-
-        There is no array behind it: `values` exists to keep an uploaded
-        buffer alive, and nothing was uploaded. The caller owns the
-        texture -- `release` drops this reference to it and frees
-        nothing, so a pooled target goes on being pooled.
-        """
-        return cls(None, texture.width, texture.height, 4, storage,
-                   texture.format, texture)
-
-    @property
-    def size(self) -> tuple[int, int]:
-        return self.width, self.height
-
-    def new_target(self) -> gpu.types.GPUTexture:
-        """A texture a pass can draw into, in the same format as the source."""
-        return new_texture((self.width, self.height), self.format)
+        return cls(values, width, height, storage_of(image), texture)
 
     def release(self) -> None:
         self.texture = None
         self.values = None
 
 
-def run_pass(spec: FilterSpec, source: PixelSource, target=None, *, mask=None,
-             second=None,
+def run_pass(spec: FilterSpec, source: gpu.types.GPUTexture, target=None, *,
+             storage: int = STRAIGHT, mask=None, second=None,
              params: dict | None = None) -> tuple[gpu.types.GPUFrameBuffer, gpu.types.GPUTexture]:
-    """Draw *spec* from *source* into *target*, a new texture by default.
+    """Draw *spec* from the *source* texture into *target*.
 
+    *target* defaults to a new texture the size and format of *source*.
     The pass covers *target*. That is the size of the source for a
     filter; a pass that reads the source at coordinates of its own, such
     as a reduction or a gather, can draw into a smaller one, whose texels
     `apply` still sees as its own and `_MAIN` still reads the source at
     -- inside it, so long as the target is no larger.
 
-    *mask* is an `R32F` texture the size of the source, or None to cover
-    the whole image. *second* is a texture the size of the source for a
-    spec whose `reads_second` is set, such as the unsharp mask reading
-    what it started from. *params* holds a value per push constant of
-    the spec, by name.
+    *storage* is how *source* holds alpha, `STRAIGHT` or `PREMULTIPLIED`,
+    as `storage_of` reports for an image. *mask* is an `R32F` texture the
+    size of the source, or None to cover the whole image. *second* is a
+    texture the size of the source for a spec whose `reads_second` is
+    set, such as the unsharp mask reading what it started from. *params*
+    holds a value per push constant of the spec, by name.
 
     Both the framebuffer and its texture come back, and both have to be
     held until the result is read: a `GPUFrameBuffer` does not keep its
@@ -317,7 +295,7 @@ def run_pass(spec: FilterSpec, source: PixelSource, target=None, *, mask=None,
     freed gives zeroes rather than an error.
     """
     if target is None:
-        target = source.new_target()
+        target = new_texture((source.width, source.height), source.format)
     shader, batch = _shader(spec)
     kinds = dict((name, kind) for kind, name in spec.params)
     framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
@@ -327,14 +305,14 @@ def run_pass(spec: FilterSpec, source: PixelSource, target=None, *, mask=None,
             last = min(target.height, first + BAND_ROWS)
             shader.uniform_float("target_size", (float(target.width), float(target.height)))
             shader.uniform_float("rows", (float(first), float(last)))
-            shader.uniform_int("storage", source.storage)
+            shader.uniform_int("storage", storage)
             shader.uniform_int("use_mask", 0 if mask is None else 1)
             for name, value in (params or {}).items():
                 if kinds[name] == 'INT':
                     shader.uniform_int(name, value)
                 else:
                     shader.uniform_float(name, value)
-            shader.uniform_sampler("source", source.texture)
+            shader.uniform_sampler("source", source)
             shader.uniform_sampler("mask", _unused_sampler() if mask is None else mask)
             shader.uniform_sampler("second", _unused_sampler() if second is None else second)
             batch.draw(shader)

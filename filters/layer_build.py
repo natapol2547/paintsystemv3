@@ -47,7 +47,7 @@ from ..compiler.core import build_ir, mark_dirty
 from ..compiler.ir import hash_payload
 from ..gpu_passes.core import read_color_bytes
 from . import composite, derived, freshness, layer_plan
-from .core import BAND_ROWS, FilterSpec, PixelSource, Refused, new_texture, run_pass
+from .core import BAND_ROWS, FilterSpec, Refused, new_texture, run_pass
 from .layer_specs import layer_filter_kind
 from .png import RGBAStream
 from .registry import ENCODE_SRGB
@@ -219,13 +219,7 @@ def _draw(spec: FilterSpec, texture, params: dict, pool, *, second=None):
     so: reading one whose texture has been freed gives zeroes rather than
     an error.
     """
-    source = PixelSource.from_texture(texture)
-    try:
-        return run_pass(spec, source, pool.acquire(), second=second, params=params)
-    finally:
-        # The texture belongs to the pool; this only drops the reference
-        # the source was holding to it.
-        source.release()
+    return run_pass(spec, texture, pool.acquire(), second=second, params=params)
 
 
 def _encoded(texture, size):
@@ -235,12 +229,7 @@ def _encoded(texture, size):
     once, where it writes it, and `read_color_bytes` can only read a
     texture that holds bytes.
     """
-    target = new_texture(size, 'RGBA8')
-    source = PixelSource.from_texture(texture)
-    try:
-        return run_pass(ENCODE_SRGB, source, target, params={})
-    finally:
-        source.release()
+    return run_pass(ENCODE_SRGB, texture, new_texture(size, 'RGBA8'), params={})
 
 
 def commit(tree, node, plan, data, digest, size, read):
