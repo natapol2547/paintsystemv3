@@ -129,18 +129,7 @@ class IR:
 
     def apply(self, node_tree: bpy.types.NodeTree, *, arrange: bool = True) -> BuildStats:
         """Patch *node_tree* into this IR. Returns what the build changed."""
-        builder = NodeTreeBuilder(node_tree)
-        for sock in self.sockets:
-            builder.add_socket(sock.in_out, sock.socket_type, sock.name, **sock.properties)
-        for node in self.nodes.values():
-            builder.add_node(
-                node.id, node.bl_idname,
-                properties=node.properties,
-                inputs=node.inputs,
-                outputs=node.outputs,
-            )
-        for link in self.links:
-            builder.link_nodes(link.from_id, link.to_id, link.from_socket, link.to_socket)
+        builder = NodeTreeBuilder(node_tree, self)
         builder.build(arrange=arrange)
         return builder.stats
 

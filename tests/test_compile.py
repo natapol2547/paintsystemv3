@@ -98,6 +98,10 @@ try:
     after = {n.name: n.as_pointer() for n in art.nodes}
     check(fp1 == fp2, "fingerprint stable")
     check(before == after, "no node churn on unchanged recompile")
+    ir = _core.build_ir(tree)
+    ir_fp = ir.fingerprint()
+    ir.apply(art)
+    check(ir.fingerprint() == ir_fp == fp2, "applying an IR leaves it as it was")
 
     section("property change")
     img_layer.opacity = 0.5

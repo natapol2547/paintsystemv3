@@ -3,12 +3,16 @@ from __future__ import annotations
 import logging
 import struct
 from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import bpy
 
 from .profile import phase
+
+if TYPE_CHECKING:
+    # For annotations only: ir imports this module.
+    from .ir import IR, IRNode, IRSocket
 
 log = logging.getLogger(__name__)
 
@@ -112,34 +116,27 @@ class BuildStats:
     arranged: bool = False
 
 
-@dataclass
-class NodeInstruction:
-    bl_idname: str
-    properties: dict[str, Any] = field(default_factory=dict)
-    inputs: dict[int | str, dict[str, Any]] = field(default_factory=dict)
-    outputs: dict[int | str, dict[str, Any]] = field(default_factory=dict)
-
-
-@dataclass
-class SocketInstruction:
-    in_out: str  # 'INPUT' or 'OUTPUT'
-    socket_type: str
-    name: str
-    properties: dict[str, Any] = field(default_factory=dict)
-
-
 class NodeTreeBuilder:
-    def __init__(self, node_tree: bpy.types.NodeTree):
-        """Initialize the NodeTreeBuilder.
+    """Patches a node tree into the nodes, links and interface an IR declares."""
 
-        Args:
-            node_tree (bpy.types.NodeTree): The node tree to build.
+    def __init__(self, node_tree: bpy.types.NodeTree, ir: IR):
+        """*ir* is only read. Its nodes are used as they are, its links are
+        collected into a set, which also drops a link declared twice, and its
+        sockets are sorted into a copy.
         """
+        # bl_use_group_interface exists from Blender 4.3; earlier versions
+        # give every node tree an interface.
+        if ir.sockets and not getattr(node_tree, "bl_use_group_interface", True):
+            raise ValueError("Node tree does not use group interface")
         self.node_tree = node_tree
-        self._node_instructions: dict[str, NodeInstruction] = {}
-        self._link_instructions: set[tuple[str,
-                                           int | str, str, int | str]] = set()
-        self._socket_instructions: list[SocketInstruction] = []
+        self._node_instructions: dict[str, IRNode] = ir.nodes
+        self._link_instructions: set[tuple[str, int | str, str, int | str]] = {
+            (link.from_id, link.from_socket, link.to_id, link.to_socket) for link in ir.links
+        }
+        # Outputs first, as the interface lists them. A copy, because the order
+        # of the IR's own list is part of its fingerprint.
+        self._socket_instructions: list[IRSocket] = sorted(
+            ir.sockets, key=lambda sock: sock.in_out == 'OUTPUT', reverse=True)
         self._existing_nodes: dict[str, bpy.types.Node] = {}
         # Nodes whose identifier an earlier node already has. See _hydrate_existing_nodes.
         self._duplicate_nodes: list[bpy.types.Node] = []
@@ -154,68 +151,6 @@ class NodeTreeBuilder:
         self._bbox_cache: dict[int, tuple[float, float, float, float]] = {}
         self.stats = BuildStats()
         self._hydrate_existing_nodes()
-
-    # ── Instruction API (all return self for chaining) ───────────────
-
-    def add_node(
-        self,
-        identifier: str,
-        bl_idname: str,
-        *,
-        properties: dict[str, Any] | None = None,
-        inputs: dict[int | str, dict[str, Any]] | None = None,
-        outputs: dict[int | str, dict[str, Any]] | None = None,
-    ) -> NodeTreeBuilder:
-        instr = NodeInstruction(bl_idname=bl_idname)
-        if properties:
-            instr.properties = dict(properties)
-        if inputs:
-            instr.inputs = {k: dict(v) for k, v in inputs.items()}
-        if outputs:
-            instr.outputs = {k: dict(v) for k, v in outputs.items()}
-        self._node_instructions[identifier] = instr
-        return self
-
-    def add_socket(
-        self,
-        in_out: str,
-        socket_type: str,
-        name: str,
-        **kwargs: Any,
-    ) -> NodeTreeBuilder:
-        """Declare an interface socket on the node tree.
-
-        Args:
-            in_out: 'INPUT' or 'OUTPUT'.
-            socket_type: Blender socket bl_idname (e.g. 'NodeSocketFloat').
-            name: Display name of the socket.
-            **kwargs: Properties to force-apply to the socket on every build.
-        """
-        # bl_use_group_interface exists from Blender 4.3; earlier versions
-        # give every node tree an interface.
-        if not getattr(self.node_tree, "bl_use_group_interface", True):
-            raise ValueError("Node tree does not use group interface")
-        self._socket_instructions.append(
-            SocketInstruction(
-                in_out=in_out,
-                socket_type=socket_type,
-                name=name,
-                properties=dict(kwargs),
-            )
-        )
-        return self
-
-    def link_nodes(
-        self,
-        from_identifier: str,
-        to_identifier: str,
-        from_socket: int | str = 0,
-        to_socket: int | str = 0,
-    ) -> NodeTreeBuilder:
-        self._link_instructions.add(
-            (from_identifier, from_socket, to_identifier, to_socket)
-        )
-        return self
 
     # ── Build ────────────────────────────────────────────────────────
 
@@ -322,10 +257,6 @@ class NodeTreeBuilder:
 
     def _sync_interface_sockets(self) -> None:
         """Ensure the node tree interface matches _socket_instructions in order."""
-        # Sory socket instructions by in_out, Output first
-        self._socket_instructions.sort(
-            key=lambda x: x.in_out == 'OUTPUT', reverse=True)
-
         interface = self.node_tree.interface
 
         def _flat_sockets() -> list[bpy.types.NodeTreeInterfaceSocket]:
@@ -334,7 +265,7 @@ class NodeTreeBuilder:
 
         # Key: (name, in_out) — must be unique per declared socket
         SocketKey = tuple[str, str]
-        desired_keys: dict[SocketKey, SocketInstruction] = {
+        desired_keys: dict[SocketKey, IRSocket] = {
             (instr.name, instr.in_out): instr
             for instr in self._socket_instructions
         }

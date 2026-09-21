@@ -16,7 +16,7 @@ from typing import Callable
 
 import bpy
 
-from .builder import NodeTreeBuilder
+from .ir import IR
 
 
 LIBRARY_VERSION = 2
@@ -49,72 +49,68 @@ MIX_OUT_FLOAT = 0
 MIX_OUT_COLOR = 2
 
 
-def _link(b, source, to_identifier, to_socket) -> None:
-    """Link a ``(node, socket)`` pair into another node's socket."""
-    b.link_nodes(source[0], to_identifier, source[1], to_socket)
-
-
-def _math(b, identifier, operation, lhs, rhs, *, clamp=False):
+def _math(ir, identifier, operation, lhs, rhs, *, clamp=False):
     """Math node on two operands, each a ``(node, socket)`` pair or a constant."""
-    inputs = {}
-    for index, operand in enumerate((lhs, rhs)):
+    operands = list(enumerate((lhs, rhs)))
+    inputs = {index: {'default_value': operand}
+              for index, operand in operands if not isinstance(operand, tuple)}
+    ir.add_node(identifier, 'ShaderNodeMath', inputs=inputs,
+                properties={'operation': operation, 'use_clamp': clamp})
+    # Linked once the node exists: IR.link checks both ends.
+    for index, operand in operands:
         if isinstance(operand, tuple):
-            _link(b, operand, identifier, index)
-        else:
-            inputs[index] = {'default_value': operand}
-    b.add_node(identifier, 'ShaderNodeMath', inputs=inputs,
-               properties={'operation': operation, 'use_clamp': clamp})
+            ir.link(operand, identifier, index)
     return (identifier, 0)
 
 
-def _mix_interface(b, amount_name: str, color_default, alpha_default) -> None:
+def _mix_interface(ir, amount_name: str, color_default, alpha_default) -> None:
     """Declare the sockets of a mix group and add its Group Input and Output.
 
     Inputs: Prev Color, Prev Alpha, Color, Alpha, *amount_name*, Mask, Clip.
     Outputs: Color, Alpha. The groups differ only in the amount's name and
     the defaults of the source Color and Alpha.
     """
-    b.add_socket('INPUT', 'NodeSocketColor', 'Prev Color', default_value=(0.0, 0.0, 0.0, 0.0))
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Prev Alpha', default_value=0.0,
-                 min_value=0.0, max_value=1.0)
-    b.add_socket('INPUT', 'NodeSocketColor', 'Color', default_value=color_default)
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Alpha', default_value=alpha_default,
-                 min_value=0.0, max_value=1.0)
-    b.add_socket('INPUT', 'NodeSocketFloat', amount_name, default_value=1.0,
-                 min_value=0.0, max_value=1.0, subtype='FACTOR')
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Mask', default_value=1.0,
-                 min_value=0.0, max_value=1.0)
-    b.add_socket('INPUT', 'NodeSocketFloat', 'Clip', default_value=0.0,
-                 min_value=0.0, max_value=1.0, subtype='FACTOR')
-    b.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
-    b.add_socket('OUTPUT', 'NodeSocketFloat', 'Alpha')
+    ir.add_socket('INPUT', 'NodeSocketColor', 'Prev Color', default_value=(0.0, 0.0, 0.0, 0.0))
+    ir.add_socket('INPUT', 'NodeSocketFloat', 'Prev Alpha', default_value=0.0,
+                  min_value=0.0, max_value=1.0)
+    ir.add_socket('INPUT', 'NodeSocketColor', 'Color', default_value=color_default)
+    ir.add_socket('INPUT', 'NodeSocketFloat', 'Alpha', default_value=alpha_default,
+                  min_value=0.0, max_value=1.0)
+    ir.add_socket('INPUT', 'NodeSocketFloat', amount_name, default_value=1.0,
+                  min_value=0.0, max_value=1.0, subtype='FACTOR')
+    ir.add_socket('INPUT', 'NodeSocketFloat', 'Mask', default_value=1.0,
+                  min_value=0.0, max_value=1.0)
+    ir.add_socket('INPUT', 'NodeSocketFloat', 'Clip', default_value=0.0,
+                  min_value=0.0, max_value=1.0, subtype='FACTOR')
+    ir.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
+    ir.add_socket('OUTPUT', 'NodeSocketFloat', 'Alpha')
 
-    b.add_node('in', 'NodeGroupInput')
-    b.add_node('out', 'NodeGroupOutput')
+    ir.add_node('in', 'NodeGroupInput')
+    ir.add_node('out', 'NodeGroupOutput')
 
 
-def _kept(b):
+def _kept(ir):
     """Share of the source that survives: 1 unclipped, the backdrop's alpha clipped."""
-    b.add_node('kept', 'ShaderNodeMix', properties={
+    ir.add_node('kept', 'ShaderNodeMix', properties={
         'data_type': 'FLOAT', 'clamp_factor': True,
     }, inputs={MIX_IN_A_FLOAT: {'default_value': 1.0}})
-    b.link_nodes('in', 'kept', 'Clip', MIX_IN_FACTOR)
-    b.link_nodes('in', 'kept', 'Prev Alpha', MIX_IN_B_FLOAT)
+    ir.link(('in', 'Clip'), 'kept', MIX_IN_FACTOR)
+    ir.link(('in', 'Prev Alpha'), 'kept', MIX_IN_B_FLOAT)
     return ('kept', MIX_OUT_FLOAT)
 
 
-def _composite(b, source_share, source_color, alpha) -> None:
+def _composite(ir, source_share, source_color, alpha) -> None:
     """Output the backdrop colour mixed toward *source_color* by *source_share*, with *alpha*."""
-    b.add_node('composite', 'ShaderNodeMix', properties={
+    ir.add_node('composite', 'ShaderNodeMix', properties={
         'data_type': 'RGBA', 'blend_type': 'MIX',
         'clamp_factor': True, 'clamp_result': False,
     })
-    _link(b, source_share, 'composite', MIX_IN_FACTOR)
-    b.link_nodes('in', 'composite', 'Prev Color', MIX_IN_A_COLOR)
-    _link(b, source_color, 'composite', MIX_IN_B_COLOR)
+    ir.link(source_share, 'composite', MIX_IN_FACTOR)
+    ir.link(('in', 'Prev Color'), 'composite', MIX_IN_A_COLOR)
+    ir.link(source_color, 'composite', MIX_IN_B_COLOR)
 
-    b.link_nodes('composite', 'out', MIX_OUT_COLOR, 'Color')
-    _link(b, alpha, 'out', 'Alpha')
+    ir.link(('composite', MIX_OUT_COLOR), 'out', 'Color')
+    ir.link(alpha, 'out', 'Alpha')
 
 
 # -- layer blend ------------------------------------------------------
@@ -148,17 +144,15 @@ def _build_layer_blend(tree: bpy.types.NodeTree, blend_type: str) -> None:
     this is W3C source-over with a blend mode; clipped it is source-atop.
     MIX has ``B = cs`` and skips the blend nodes.
     """
-    b = NodeTreeBuilder(tree)
-    _mix_interface(b, 'Opacity', (0.0, 0.0, 0.0, 1.0), 1.0)
-
-    link = functools.partial(_link, b)
-    math = functools.partial(_math, b)
+    ir = IR()
+    _mix_interface(ir, 'Opacity', (0.0, 0.0, 0.0, 1.0), 1.0)
+    math = functools.partial(_math, ir)
 
     # es: source coverage
     es = math('source_alpha', 'MULTIPLY',
               math('opacity', 'MULTIPLY', ('in', 'Alpha'), ('in', 'Opacity')),
               ('in', 'Mask'), clamp=True)
-    kept = _kept(b)
+    kept = _kept(ir)
 
     source_weight = math('source_weight', 'MULTIPLY', es, kept)
     backdrop_weight = math('backdrop_weight', 'MULTIPLY', ('in', 'Prev Alpha'),
@@ -170,26 +164,26 @@ def _build_layer_blend(tree: bpy.types.NodeTree, blend_type: str) -> None:
 
     source_color = ('in', 'Color')
     if blend_type != 'MIX':
-        b.add_node('blend', 'ShaderNodeMix', properties={
+        ir.add_node('blend', 'ShaderNodeMix', properties={
             'data_type': 'RGBA', 'blend_type': blend_type,
             'clamp_factor': True, 'clamp_result': False,
         }, inputs={MIX_IN_FACTOR: {'default_value': 1.0}})
-        b.link_nodes('in', 'blend', 'Prev Color', MIX_IN_A_COLOR)
-        b.link_nodes('in', 'blend', 'Color', MIX_IN_B_COLOR)
+        ir.link(('in', 'Prev Color'), 'blend', MIX_IN_A_COLOR)
+        ir.link(('in', 'Color'), 'blend', MIX_IN_B_COLOR)
         # Share of the surviving source that lies over the backdrop:
         # ab unclipped, 1 clipped.
         blended_share = math('blended_share', 'DIVIDE', ('in', 'Prev Alpha'), kept)
-        b.add_node('source', 'ShaderNodeMix', properties={
+        ir.add_node('source', 'ShaderNodeMix', properties={
             'data_type': 'RGBA', 'blend_type': 'MIX',
             'clamp_factor': True, 'clamp_result': False,
         })
-        link(blended_share, 'source', MIX_IN_FACTOR)
-        b.link_nodes('in', 'source', 'Color', MIX_IN_A_COLOR)
-        b.link_nodes('blend', 'source', MIX_OUT_COLOR, MIX_IN_B_COLOR)
+        ir.link(blended_share, 'source', MIX_IN_FACTOR)
+        ir.link(('in', 'Color'), 'source', MIX_IN_A_COLOR)
+        ir.link(('blend', MIX_OUT_COLOR), 'source', MIX_IN_B_COLOR)
         source_color = ('source', MIX_OUT_COLOR)
 
-    _composite(b, source_share, source_color, alpha)
-    b.build()
+    _composite(ir, source_share, source_color, alpha)
+    ir.apply(tree)
 
 
 # -- filter mix -------------------------------------------------------
@@ -229,11 +223,11 @@ def _build_filter_mix(tree: bpy.types.NodeTree) -> None:
     output alpha down to the backdrop's instead of letting the filter add
     coverage outside the layer it is clipped to.
     """
-    b = NodeTreeBuilder(tree)
-    _mix_interface(b, 'Amount', (0.0, 0.0, 0.0, 0.0), 0.0)
-    math = functools.partial(_math, b)
+    ir = IR()
+    _mix_interface(ir, 'Amount', (0.0, 0.0, 0.0, 0.0), 0.0)
+    math = functools.partial(_math, ir)
 
-    kept = _kept(b)
+    kept = _kept(ir)
     strength = math('strength', 'MULTIPLY', ('in', 'Amount'), ('in', 'Mask'), clamp=True)
     applied = math('applied', 'MULTIPLY', strength, kept)
     source_weight = math('source_weight', 'MULTIPLY', ('in', 'Alpha'), applied)
@@ -242,5 +236,5 @@ def _build_filter_mix(tree: bpy.types.NodeTree) -> None:
     alpha = math('alpha', 'ADD', source_weight, backdrop_weight)
     source_share = math('source_share', 'DIVIDE', source_weight, alpha)
 
-    _composite(b, source_share, ('in', 'Color'), alpha)
-    b.build()
+    _composite(ir, source_share, ('in', 'Color'), alpha)
+    ir.apply(tree)
