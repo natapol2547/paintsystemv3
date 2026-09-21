@@ -14,6 +14,7 @@ from bpy.props import BoolProperty, FloatProperty
 from bpy.types import Operator
 from bpy.utils import register_classes_factory
 
+from ..common import redraw_paint_views
 from ..context import get_active_tree
 from ..filters import actions
 from ..filters.core import Refused
@@ -80,9 +81,8 @@ class PixelAction:
         if not registered:
             self.report({'WARNING'},
                         "The edit was made but could not be added to the undo history")
-        for area in context.screen.areas if context.screen else ():
-            if area.type in {'VIEW_3D', 'IMAGE_EDITOR'}:
-                area.tag_redraw()
+        # Every window, since another one can show the same layer.
+        redraw_paint_views(window_manager)
         return {'FINISHED'}
 
 

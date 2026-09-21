@@ -5,7 +5,7 @@ compares a state per sync, builds the mask once and remembers failures.
 Background Blender runs no timers, so these tests call `session.sync()`
 or `session._tick()` where the window loop would run the scheduled tick,
 and check that the tick is scheduled. A sync that reaches the consumers
-ends by tagging a redraw, so wrapping `session._tag_redraw` counts them.
+ends by tagging a redraw, so wrapping `session.redraw_paint_views` counts them.
 """
 import os
 import sys
@@ -27,15 +27,15 @@ selection_ops = import_from("ops.selection_ops")
 ps_context = import_from("context")
 
 reaches = []
-_tag_redraw = session._tag_redraw
+_redraw_paint_views = session.redraw_paint_views
 
 
-def _counting_tag_redraw(context):
+def _counting_redraw(window_manager):
     reaches.append(session._last)
-    _tag_redraw(context)
+    _redraw_paint_views(window_manager)
 
 
-session._tag_redraw = _counting_tag_redraw
+session.redraw_paint_views = _counting_redraw
 
 
 def cube():

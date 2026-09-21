@@ -45,6 +45,8 @@ import logging
 import bpy
 import numpy as np
 
+from ..common import redraw_paint_views
+
 log = logging.getLogger(__name__)
 
 UV_TOLERANCE = 1e-6
@@ -316,10 +318,7 @@ def _surfaces_changed() -> None:
     # Imported here: the selection package imports this one.
     from ..selection import session
 
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            if area.type in {'VIEW_3D', 'IMAGE_EDITOR'}:
-                area.tag_redraw()
+    redraw_paint_views(bpy.context.window_manager)
     session.notify()
 
 

@@ -38,6 +38,7 @@ from dataclasses import dataclass
 import bpy
 
 from .. import context as ps_context
+from ..common import redraw_paint_views
 from ..gpu_passes import core
 from ..gpu_passes.texel_map import resolve_uv_map
 from . import overlay, raster, stencil
@@ -84,8 +85,6 @@ NOTHING_SELECTED = "Nothing selected"
 
 GPU_ERROR_GIVEN_UP = "GPU error, change the selection to retry"
 """Label of `GPU_ERROR` once `RETRY_LIMIT` tries have run and the timer has stopped."""
-
-_REDRAW_AREAS = frozenset(('VIEW_3D', 'IMAGE_EDITOR'))
 
 
 @dataclass(frozen=True)
@@ -250,7 +249,7 @@ def sync(context=None, force: bool = False) -> State:
             # the consumers again, even with an equal state.
             log.exception("Selection could not update %s", consumer.__name__)
             _consumer_failed = True
-    _tag_redraw(context)
+    redraw_paint_views(getattr(context, 'window_manager', None))
     return state
 
 
@@ -312,11 +311,3 @@ def release() -> None:
     _pending_force = False
     _consumer_failed = False
     forget_failures()
-
-
-def _tag_redraw(context) -> None:
-    window_manager = getattr(context, 'window_manager', None)
-    for window in getattr(window_manager, 'windows', ()):
-        for area in window.screen.areas:
-            if area.type in _REDRAW_AREAS:
-                area.tag_redraw()

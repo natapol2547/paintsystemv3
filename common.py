@@ -19,6 +19,14 @@ def addon_preferences(context):
     return addon.preferences if addon is not None else None
 
 
+def redraw_paint_views(window_manager) -> None:
+    """Redraw every 3D view and image editor in every window; nothing when *window_manager* is None."""
+    for window in getattr(window_manager, 'windows', ()):
+        for area in window.screen.areas:
+            if area.type in {'VIEW_3D', 'IMAGE_EDITOR'}:
+                area.tag_redraw()
+
+
 def is_newer_than(major, minor=0, patch=0):
     return bpy.app.version >= (major, minor, patch)
 
