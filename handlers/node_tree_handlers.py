@@ -105,6 +105,7 @@ def on_load_post(*args):
     # Reading a file frees the undo stack and everything the addon pushed
     # onto it (PS-090).
     pixels.forget_undo_state()
+    derived.forget_packed()
     # Cached maps and surface keys belong to objects of the file that was
     # open (PS-092).
     texel_map.invalidate()
@@ -148,6 +149,9 @@ def on_undo_post(*args):
     mark_dirty()
     # The steps the addon pushed may no longer be on the stack (PS-090).
     pixels.forget_baselines()
+    # A filter result's packed file and stamps came back, but its decoded
+    # pixels did not (PS-057).
+    derived.free_stale_buffers()
     # An undo can restore different geometry under the same world matrix,
     # so every surface key is checked again on its next resolve. Cached
     # maps stay: the undo of a stroke restores the same surface, and the

@@ -14,6 +14,13 @@ properties survive both, so a stamp written before the pack could claim
 pixels that are no longer there. `is_built` asks for the stamp *and* for
 somewhere the pixels could still be, so the one case that slips through
 still reads as unbuilt.
+
+Undo is the other way the two can part. A memfile undo restores the
+packed file and the stamps, but Blender carries an image's decoded
+buffer and GPU texture across it, so after an undo past a rebuild the
+viewport would go on showing the newer pixels under the older stamp.
+`free_stale_buffers` compares each result's stamp with the build it
+last packed and frees the buffers of those an undo moved.
 """
 from __future__ import annotations
 
@@ -40,6 +47,13 @@ BUILD_KEY = "ps_filter_build"
 # The UV map the pixels were laid out in, which is what the compiled
 # Image Texture has to use however the layer's setting has moved since.
 UV_MAP_KEY = "ps_filter_uv_map"
+
+# The build stamp each result was given when this session last packed
+# it, by ``session_uid``. That is stable across undo and new after a file
+# read, so the table is cleared on load and never outlives its images'
+# buffers. A result it does not name has only ever decoded its own
+# packed file, so an undo cannot have moved it.
+_packed: dict[int, str] = {}
 
 
 def build_stamp(image: bpy.types.Image | None) -> str:
@@ -69,6 +83,36 @@ def is_built(image: bpy.types.Image | None) -> bool:
     if not build_stamp(image):
         return False
     return image.packed_file is not None or image.has_data
+
+
+def note_packed(image: bpy.types.Image) -> None:
+    """Record that *image*'s packed file now holds the build it is stamped with."""
+    _packed[image.session_uid] = build_stamp(image)
+
+
+def free_stale_buffers() -> int:
+    """Free the buffers of every result an undo moved to another build, and say how many.
+
+    Called from ``undo_post`` and ``redo_post``. Freeing is cheap and the
+    decode it costs happens at the next draw, but only for the results
+    whose stamp moved: freeing every one on every Ctrl+Z would decode
+    each filter layer in the file again for an undo that touched none.
+    """
+    freed = 0
+    for image in bpy.data.images:
+        stamp = build_stamp(image)
+        known = _packed.get(image.session_uid)
+        if not stamp or known is None or known == stamp:
+            continue
+        image.buffers_free()
+        _packed[image.session_uid] = stamp
+        freed += 1
+    return freed
+
+
+def forget_packed() -> None:
+    """Drop the table of packed builds, for a file read that renews every ``session_uid``."""
+    _packed.clear()
 
 
 def cleanup_orphan_derived() -> int:

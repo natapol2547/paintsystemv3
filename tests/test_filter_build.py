@@ -20,6 +20,7 @@ comes from the windowed job.
 """
 import os
 import sys
+import tempfile
 import traceback
 
 import bpy
@@ -232,6 +233,54 @@ if available():
               f"each unit says what it is doing: {labels[0]!r}")
         check((image[derived.BUILD_KEY], texel(image)) == was,
               "and stopping before the commit leaves the pixels and the stamp alone")
+        bottom.fill_color = (0.2, 0.6, 0.4, 1.0)
+        core.flush_now()
+
+        section("undo, a copy and a saved file")
+        # Each of these has to find a result's pixels in its packed file,
+        # while the stamps come along regardless, so a miss would be
+        # pixels that disagree with the stamps sitting next to them.
+        names = (tree.name, node.name, bottom.name, picture.name, image.name, picture.image.name)
+        layer_build.build_layer(bpy.context, tree, node)
+        before = texel(image)
+        bpy.ops.ed.undo_push(message="built once")
+        bottom.fill_color = (0.9, 0.1, 0.1, 1.0)
+        picture.image = None
+        core.flush_now()
+        layer_build.build_layer(bpy.context, tree, node)
+        after = texel(image)
+        bpy.ops.ed.undo_push(message="built again")
+        check(np.abs(np.asarray(before) - np.asarray(after)).max() > 0.1,
+              f"the two builds differ: {fmt(before)} then {fmt(after)}")
+
+        copy = image.copy()
+        agrees(texel(copy), after, "a copy of the result has its pixels")
+        bpy.data.images.remove(copy)
+
+        def refetch():
+            tree = bpy.data.node_groups[names[0]]
+            return (tree, tree.nodes[names[1]], tree.nodes[names[2]], tree.nodes[names[3]],
+                    bpy.data.images[names[4]])
+
+        bpy.ops.ed.undo()
+        tree, node, bottom, picture, image = refetch()
+        agrees(texel(image), before, "one undo brings back the pixels of the build before")
+        check(node.derived_image == image and derived.is_built(image),
+              "with the layer still pointing at a built image")
+        bpy.ops.ed.redo()
+        tree, node, bottom, picture, image = refetch()
+        agrees(texel(image), after, "and redo the ones after")
+
+        path = os.path.join(tempfile.mkdtemp(prefix="ps_filter_build_"), "build.blend")
+        check(bpy.ops.wm.save_as_mainfile(filepath=path, copy=True) == {'FINISHED'},
+              "a copy of the file saves")
+        with bpy.data.libraries.load(path) as (source, into):
+            into.images = [image.name]
+        loaded = into.images[0]
+        agrees(texel(loaded), after, "and the result read back out of it has its pixels")
+        bpy.data.images.remove(loaded)
+
+        picture.image = bpy.data.images[names[5]]
         bottom.fill_color = (0.2, 0.6, 0.4, 1.0)
         core.flush_now()
 

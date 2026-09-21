@@ -616,6 +616,16 @@ across a restored document. Worst case the user sees "Out of date" and
 the layer refreshes. Running a multi-second GPU or Cycles job inside
 `undo_post` is precisely the freeze this whole design exists to avoid.
 
+One thing does have to happen there. A memfile undo restores the packed
+file and the stamps, but Blender carries an image's decoded buffer and
+GPU texture across it, so after an undo past a rebuild the viewport went
+on showing the newer pixels under the older stamp. The commit records
+each result's build stamp by `session_uid`, and `on_undo_post` frees the
+buffers of every result whose stamp no longer matches the record, so it
+decodes the restored file at its next draw. Only those: freeing every
+result on every Ctrl+Z would decode each filter layer in the file again
+for an undo that touched none of them.
+
 **Fake users.** None, per `docs/ARCHITECTURE.md:20-23`. The node's
 pointer is the real user.
 

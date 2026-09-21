@@ -226,6 +226,7 @@ def commit(tree, node, plan, values, size, read):
     image[derived.FINGERPRINT_KEY] = fingerprint
     image[derived.UV_MAP_KEY] = plan.uv_map
     image[derived.BUILD_KEY] = hash_payload([fingerprint, _digest(values)])
+    derived.note_packed(image)
 
     node.derived_image = image
     # Cleared only when no stroke below has landed since the build read
