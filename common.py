@@ -1,6 +1,5 @@
 import logging
 import math
-import re
 import bpy
 import os
 
@@ -109,88 +108,3 @@ def save_image(image: bpy.types.Image) -> None:
         image.pack()
     except RuntimeError as error:
         log.warning("Could not pack image %r: %s", image.name, error)
-
-
-# Unique Name
-
-
-def get_next_unique_name(name: str, list_of_names: list[str]) -> str:
-    """
-    Finds the next unique name in a sequence from a list of strings.
-
-    Args:
-        name: The string to use as the base for the new name (e.g., 'Image 7').
-        list_of_names: A list of existing names.
-
-    Returns:
-        The next unique name in the sequence.
-    """
-    if name not in list_of_names:
-        return name
-    # Extract the non-numeric part of the name to get the base name.
-    base_name_match = re.match(r'(\D*)', name)
-    if not base_name_match:
-        # Fallback if the name has no non-numeric part, though unlikely.
-        return name + " 1"
-
-    base_name = base_name_match.group(1).strip()
-
-    # A set to store all the numbers found for this base name sequence.
-    # We add 0 to handle the case where the base name itself exists (e.g., 'Image').
-    # This implies that 'Image 1' would be the next in sequence.
-    numbers_found = {0}
-    pattern = re.compile(rf"^{re.escape(base_name)}(?: (\d+))?$")
-
-    for item in list_of_names:
-        match = pattern.match(item)
-        if match:
-            if match.group(1):
-                numbers_found.add(int(match.group(1)))
-
-    next_number = max(numbers_found) + 1
-
-    return f"{base_name} {next_number}"
-
-
-def unique_name_kwargs(set_transform):
-    """Keyword arguments for a unique-name ``StringProperty``.
-
-    ``set_transform`` exists from Blender 5.0. Older versions get no
-    transform; callers fall back to ``ensure_unique_name`` in ``update``.
-    """
-    if is_newer_than(5, 0):
-        return {'set_transform': set_transform}
-    return {}
-
-
-def ensure_unique_name(self, dataptr, propname):
-    """Rename *self* if its name clashes with a sibling (pre-5.0 fallback).
-
-    Assigning ``self.name`` re-enters the property's ``update`` once; the
-    second pass finds the name unique and stops.
-    """
-    siblings = [item.name for item in getattr(dataptr, propname) if item != self]
-    unique = get_next_unique_name(self.name, siblings)
-    if unique != self.name:
-        self.name = unique
-        return True
-    return False
-
-
-def transform_unique_name(self, dataptr, propname, new_value, curr_value, is_set):
-    """Shared `set_transform` for name properties on PaintSystemNodeTree members.
-
-    Resolves *new_value* to a name unique within ``node_tree.<collection_attr>``,
-    and—when the resolved name differs from *curr_value*—invokes
-    ``self.on_name_update(new_name, curr_value, is_set)`` if that hook is defined.
-    """
-    new_name = new_value
-    if dataptr and propname:
-        siblings = [item.name for item in getattr(dataptr, propname)
-                    if item != self]
-        new_name = get_next_unique_name(new_value, siblings)
-    if curr_value != new_name:
-        on_name_update = getattr(self, 'on_name_update', None)
-        if on_name_update:
-            on_name_update(new_name, curr_value, is_set)
-    return new_name
