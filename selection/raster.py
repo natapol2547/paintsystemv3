@@ -514,7 +514,7 @@ class SelectionMask:
         target = gpu.types.GPUTexture((self.width, self.height), format='R8')
         framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
         buffer = gpu.types.Buffer('UBYTE', self.width * self.height)
-        with _State():
+        with core.offscreen_state():
             with framebuffer.bind():
                 shader.uniform_sampler("mask", self.texture)
                 batch.draw(shader)
@@ -533,33 +533,6 @@ class SelectionMask:
         if self._empty is None:
             self.read_bytes()
         return self._empty
-
-
-class _State:
-    """Blend off, depth test off and depth write off, restored on exit.
-
-    Face culling is also turned off and colour writes on, and both stay
-    that way on exit: `gpu.state` cannot read either.
-    """
-
-    def __enter__(self):
-        self.blend = gpu.state.blend_get()
-        self.depth_test = gpu.state.depth_test_get()
-        self.depth_mask = gpu.state.depth_mask_get()
-        gpu.state.blend_set('NONE')
-        gpu.state.depth_test_set('NONE')
-        gpu.state.depth_mask_set(False)
-        # `gpu.state` has no getter for these, so they are forced and left
-        # at Blender's defaults afterwards.
-        gpu.state.face_culling_set('NONE')
-        gpu.state.color_mask_set(True, True, True, True)
-        return self
-
-    def __exit__(self, *exc):
-        gpu.state.blend_set(self.blend)
-        gpu.state.depth_test_set(self.depth_test)
-        gpu.state.depth_mask_set(self.depth_mask)
-        return False
 
 
 class OpSpec:
@@ -733,7 +706,7 @@ def _run_chain(specs, source, targets, width: int, height: int, tile: int) -> No
     """
     passes = len(specs)
     failure = None
-    with _State():
+    with core.offscreen_state():
         for step, spec in enumerate(specs):
             target = targets[(passes - 1 - step) % 2] if passes >= 2 else targets[0]
             try:

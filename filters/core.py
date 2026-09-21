@@ -42,7 +42,7 @@ import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
-from ..gpu_passes.core import read_color
+from ..gpu_passes.core import offscreen_state, read_color
 from ..undo import pixels as undo_pixels
 
 log = logging.getLogger(__name__)
@@ -57,6 +57,22 @@ STRAIGHT, PREMULTIPLIED = 0, 1
 
 class Refused(Exception):
     """A filter cannot run on what is active. `str()` is the message for the UI."""
+
+
+def new_texture(size, image_format: str, *, data=None) -> gpu.types.GPUTexture:
+    """A new GPU texture, or `Refused` when the GPU has no room for it.
+
+    Blender raises a bare `RuntimeError` when an allocation fails. The
+    operators only catch `Refused`, so this turns a large image on a small
+    GPU into a message rather than a traceback.
+    """
+    try:
+        return gpu.types.GPUTexture(size, format=image_format, data=data)
+    except RuntimeError as error:
+        log.warning("Could not allocate a %sx%s %s texture: %s",
+                    size[0], size[1], image_format, error)
+        raise Refused("The GPU could not allocate the textures for this filter; "
+                      "try a lower resolution") from error
 
 _QUAD = {"position": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
                       (0.0, 0.0), (1.0, 1.0), (0.0, 1.0))}
@@ -245,8 +261,8 @@ class PixelSource:
             raise ValueError(f"Image {image.name!r} has {channels} channels, not RGBA")
         values = np.empty(width * height * channels, dtype=np.float32)
         image.pixels.foreach_get(values)
-        texture = gpu.types.GPUTexture(
-            (width, height), format=texture_format(image),
+        texture = new_texture(
+            (width, height), texture_format(image),
             data=gpu.types.Buffer('FLOAT', values.size, values))
         return cls(values, width, height, channels, storage_of(image),
                    texture_format(image), texture)
@@ -270,7 +286,7 @@ class PixelSource:
 
     def new_target(self) -> gpu.types.GPUTexture:
         """A texture a pass can draw into, in the same format as the source."""
-        return gpu.types.GPUTexture((self.width, self.height), format=self.format)
+        return new_texture((self.width, self.height), self.format)
 
     def release(self) -> None:
         self.texture = None
@@ -305,35 +321,26 @@ def run_pass(spec: FilterSpec, source: PixelSource, target=None, *, mask=None,
     kinds = dict((name, kind) for kind, name in spec.params)
     framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
     sync = gpu.types.Buffer('FLOAT', 4)
-    blend = gpu.state.blend_get()
-    gpu.state.blend_set('NONE')
-    gpu.state.depth_test_set('NONE')
-    gpu.state.depth_mask_set(False)
-    gpu.state.face_culling_set('NONE')
-    try:
-        with framebuffer.bind():
-            for first in range(0, target.height, BAND_ROWS):
-                last = min(target.height, first + BAND_ROWS)
-                shader.uniform_float("target_size", (float(target.width), float(target.height)))
-                shader.uniform_float("rows", (float(first), float(last)))
-                shader.uniform_int("storage", source.storage)
-                shader.uniform_int("use_mask", 0 if mask is None else 1)
-                for name, value in (params or {}).items():
-                    if kinds[name] == 'INT':
-                        shader.uniform_int(name, value)
-                    else:
-                        shader.uniform_float(name, value)
-                shader.uniform_sampler("source", source.texture)
-                shader.uniform_sampler("mask", _unused_sampler() if mask is None else mask)
-                shader.uniform_sampler("second",
-                                       _unused_sampler() if second is None else second)
-                batch.draw(shader)
-                if last < target.height:
-                    # Reading one texel waits for the band, so the driver
-                    # sees a stream of short draws rather than one long one.
-                    framebuffer.read_color(0, first, 1, 1, 4, 0, 'FLOAT', data=sync)
-    finally:
-        gpu.state.blend_set(blend)
+    with offscreen_state(), framebuffer.bind():
+        for first in range(0, target.height, BAND_ROWS):
+            last = min(target.height, first + BAND_ROWS)
+            shader.uniform_float("target_size", (float(target.width), float(target.height)))
+            shader.uniform_float("rows", (float(first), float(last)))
+            shader.uniform_int("storage", source.storage)
+            shader.uniform_int("use_mask", 0 if mask is None else 1)
+            for name, value in (params or {}).items():
+                if kinds[name] == 'INT':
+                    shader.uniform_int(name, value)
+                else:
+                    shader.uniform_float(name, value)
+            shader.uniform_sampler("source", source.texture)
+            shader.uniform_sampler("mask", _unused_sampler() if mask is None else mask)
+            shader.uniform_sampler("second", _unused_sampler() if second is None else second)
+            batch.draw(shader)
+            if last < target.height:
+                # Reading one texel waits for the band, so the driver
+                # sees a stream of short draws rather than one long one.
+                framebuffer.read_color(0, first, 1, 1, 4, 0, 'FLOAT', data=sync)
     return framebuffer, target
 
 

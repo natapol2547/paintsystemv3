@@ -33,7 +33,7 @@ import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
-from ...gpu_passes.core import read_color
+from ...gpu_passes.core import offscreen_state, read_color
 from .. import registry
 from ..core import FilterSpec, PixelSource, run_pass
 from . import brushes, plan
@@ -89,16 +89,16 @@ vec4 apply(ivec2 texel, vec4 c)
 
 PEAK = FilterSpec(
     name="painter_peak",
-    apply_source="""
+    apply_source=f"const int PEAK_BLOCK = {PEAK_BLOCK};\n" + """
 /* The largest magnitude in one PEAK_BLOCK square of the level below,
    in every channel, so the next level reads it where this one did. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   ivec2 last = textureSize(source, 0) - ivec2(1);
   float peak = 0.0;
-  for (int y = 0; y < 8; y++) {
-    for (int x = 0; x < 8; x++) {
-      peak = max(peak, texelFetch(source, min(texel * 8 + ivec2(x, y), last), 0).b);
+  for (int y = 0; y < PEAK_BLOCK; y++) {
+    for (int x = 0; x < PEAK_BLOCK; x++) {
+      peak = max(peak, texelFetch(source, min(texel * PEAK_BLOCK + ivec2(x, y), last), 0).b);
     }
   }
   return vec4(peak);
@@ -379,19 +379,11 @@ def _draw_stamps(framebuffer, size, atlas, geometry) -> None:
         "position": positions, "coord": coords, "color": colors,
     }, indices=indices)
     sync = gpu.types.Buffer('FLOAT', 4)
-    blend = gpu.state.blend_get()
-    gpu.state.blend_set('ALPHA_PREMULT')
-    gpu.state.depth_test_set('NONE')
-    gpu.state.depth_mask_set(False)
-    gpu.state.face_culling_set('NONE')
-    try:
-        with framebuffer.bind():
-            shader.uniform_float("target_size", (float(size[0]), float(size[1])))
-            shader.uniform_sampler("atlas", atlas)
-            batch.draw(shader)
-            framebuffer.read_color(0, 0, 1, 1, 4, 0, 'FLOAT', data=sync)
-    finally:
-        gpu.state.blend_set(blend)
+    with offscreen_state('ALPHA_PREMULT'), framebuffer.bind():
+        shader.uniform_float("target_size", (float(size[0]), float(size[1])))
+        shader.uniform_sampler("atlas", atlas)
+        batch.draw(shader)
+        framebuffer.read_color(0, 0, 1, 1, 4, 0, 'FLOAT', data=sync)
 
 
 def release() -> None:

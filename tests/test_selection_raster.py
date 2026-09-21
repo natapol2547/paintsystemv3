@@ -618,7 +618,7 @@ def test_distance_variants():
     )
     buffer = gpu.types.Buffer('FLOAT', width * height)
     for label, op, reach in cases:
-        with raster._State():
+        with core.offscreen_state():
             raster._run_distance_pass(spec(op), target, width, height, reach)
         framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
         with framebuffer.bind():

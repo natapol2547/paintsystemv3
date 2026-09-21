@@ -13,6 +13,7 @@ coverage comes from the windowed job.
 """
 import os
 import sys
+import types
 
 import bpy
 import numpy as np
@@ -205,6 +206,38 @@ def test_float_storage_is_premultiplied():
           f"colour and alpha fall together, staying premultiplied ({after[0]})")
 
 
+def test_failed_allocation_refuses():
+    section("a texture the GPU cannot allocate refuses by name")
+    if not available():
+        return
+    import gpu
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("GPUTexture: texture creation failed")
+
+    class Output:
+        def commit(self, values):
+            raise AssertionError("nothing is committed after a failed allocation")
+
+    image = new_image("PS Filter Byte", 8, 8)
+    before = read(image)
+    # `new_texture` is the one place the filters allocate through, so
+    # swapping the module's `gpu` fails every allocation it makes.
+    real = core.gpu
+    core.gpu = types.SimpleNamespace(types=types.SimpleNamespace(
+        GPUTexture=fail, Buffer=gpu.types.Buffer))
+    try:
+        core.apply_passes([(IDENTITY, {})], image, Output())
+        message = None
+    except core.Refused as error:
+        message = str(error)
+    finally:
+        core.gpu = real
+    check(message is not None and "could not allocate" in message,
+          f"apply_passes raises Refused, which the operators report ({message})")
+    check(np.array_equal(read(image), before), "and the image is left as it was")
+
+
 def test_release():
     section("the shaders are given back")
     if not available():
@@ -221,6 +254,7 @@ for test in (test_identity_is_exact,
              test_mask_limits_the_pass,
              test_mask_matches_the_stencil,
              test_float_storage_is_premultiplied,
+             test_failed_allocation_refuses,
              test_release):
     guarded(test)
 

@@ -258,30 +258,20 @@ def _draw_texel_map(arrays: dict, width: int, height: int, tile: int, margin: in
     normal = gpu.types.GPUTexture((width, height), format='RGBA16F')
     framebuffer = gpu.types.GPUFrameBuffer(color_slots=(position, normal))
 
-    previous_blend = gpu.state.blend_get()
-    previous_depth = gpu.state.depth_test_get()
-    try:
-        # Writes must land as written: blending would mix the margin pass
-        # into the real one, and a depth test would drop coplanar
-        # fragments, since every triangle is drawn at depth 0.
-        gpu.state.blend_set('NONE')
-        gpu.state.depth_test_set('NONE')
-        # UV islands may be mirrored, which reverses their winding.
-        gpu.state.face_culling_set('NONE')
-        with framebuffer.bind():
-            framebuffer.clear(color=(0.0, 0.0, 0.0, 0.0))
-            shader.uniform_float("tile_offset", core.tile_offset(tile))
-            shader.uniform_float("texel_size", (1.0 / width, 1.0 / height))
-            # The margin first, so the real triangles cover it.
-            shader.uniform_float("margin", float(margin))
-            shader.uniform_float("coverage", MARGIN_COVERAGE)
-            batch.draw(shader)
-            shader.uniform_float("margin", 0.0)
-            shader.uniform_float("coverage", 1.0)
-            batch.draw(shader)
-    finally:
-        gpu.state.blend_set(previous_blend)
-        gpu.state.depth_test_set(previous_depth)
+    # Writes must land as written: blending would mix the margin pass into
+    # the real one, and a depth test would drop coplanar fragments, since
+    # every triangle is drawn at depth 0.
+    with core.offscreen_state(), framebuffer.bind():
+        framebuffer.clear(color=(0.0, 0.0, 0.0, 0.0))
+        shader.uniform_float("tile_offset", core.tile_offset(tile))
+        shader.uniform_float("texel_size", (1.0 / width, 1.0 / height))
+        # The margin first, so the real triangles cover it.
+        shader.uniform_float("margin", float(margin))
+        shader.uniform_float("coverage", MARGIN_COVERAGE)
+        batch.draw(shader)
+        shader.uniform_float("margin", 0.0)
+        shader.uniform_float("coverage", 1.0)
+        batch.draw(shader)
 
     return TexelMap(position, normal, framebuffer, width, height, tile, margin)
 

@@ -41,14 +41,13 @@ import hashlib
 import logging
 
 import bpy
-import gpu
 
 from ..compiler.bake import create_managed_image
 from ..compiler.core import build_ir, mark_dirty
 from ..compiler.ir import hash_payload
 from ..gpu_passes.core import read_color_bytes
 from . import composite, derived, freshness, layer_plan
-from .core import BAND_ROWS, FilterSpec, PixelSource, Refused, run_pass
+from .core import BAND_ROWS, FilterSpec, PixelSource, Refused, new_texture, run_pass
 from .layer_specs import layer_filter_kind
 from .png import RGBAStream
 from .registry import ENCODE_SRGB
@@ -129,7 +128,10 @@ def steps(context, tree, node, *, plan=None):
                 current = yield from _filtered(kind, settings, current, pool, 0.2, filtered)
             yield f"{kind.label}: filtering", filtered
             framebuffer, encoded = _encoded(current, size)
+            # Dropping the last reference is what frees the float texture,
+            # so the readback below holds only the byte target.
             pool.release(current)
+            current = None
             pool.close()
 
             # PNG rows run from the top and the framebuffer's from the
@@ -233,12 +235,7 @@ def _encoded(texture, size):
     once, where it writes it, and `read_color_bytes` can only read a
     texture that holds bytes.
     """
-    try:
-        target = gpu.types.GPUTexture(size, format='RGBA8')
-    except RuntimeError as error:
-        log.warning("Could not allocate a %sx%s result target: %s", *size, error)
-        raise Refused("The GPU could not allocate the textures for this filter; "
-                      "try a lower resolution") from error
+    target = new_texture(size, 'RGBA8')
     source = PixelSource.from_texture(texture)
     try:
         return run_pass(ENCODE_SRGB, source, target, params={})

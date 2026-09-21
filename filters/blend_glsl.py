@@ -26,6 +26,8 @@ from __future__ import annotations
 import gpu
 from gpu_extras.batch import batch_for_shader
 
+from ..gpu_passes.core import offscreen_state
+
 
 # The identifiers of ShaderNodeMix.blend_type, numbered for the shader.
 # The values are part of no file and no artifact, so they may be
@@ -365,25 +367,17 @@ def blend_over(backdrop, source, target, size, *, rule=BLEND, mode='MIX',
     """
     shader, batch = blend_shader()
     framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
-    blend = gpu.state.blend_get()
-    gpu.state.blend_set('NONE')
-    gpu.state.depth_test_set('NONE')
-    gpu.state.depth_mask_set(False)
-    gpu.state.face_culling_set('NONE')
-    try:
-        with framebuffer.bind():
-            shader.uniform_float("target_size", (float(size[0]), float(size[1])))
-            shader.uniform_float("opacity", float(opacity))
-            shader.uniform_float("clip", 1.0 if clip else 0.0)
-            shader.uniform_int("mode", BLEND_MODE_IDS.get(mode, 0))
-            shader.uniform_int("filter_mix", 1 if rule == FILTER_MIX else 0)
-            shader.uniform_int("use_mask", 0 if mask is None else 1)
-            shader.uniform_sampler("backdrop", backdrop)
-            shader.uniform_sampler("source", source)
-            shader.uniform_sampler("mask", _no_mask() if mask is None else mask)
-            batch.draw(shader)
-    finally:
-        gpu.state.blend_set(blend)
+    with offscreen_state(), framebuffer.bind():
+        shader.uniform_float("target_size", (float(size[0]), float(size[1])))
+        shader.uniform_float("opacity", float(opacity))
+        shader.uniform_float("clip", 1.0 if clip else 0.0)
+        shader.uniform_int("mode", BLEND_MODE_IDS.get(mode, 0))
+        shader.uniform_int("filter_mix", 1 if rule == FILTER_MIX else 0)
+        shader.uniform_int("use_mask", 0 if mask is None else 1)
+        shader.uniform_sampler("backdrop", backdrop)
+        shader.uniform_sampler("source", source)
+        shader.uniform_sampler("mask", _no_mask() if mask is None else mask)
+        batch.draw(shader)
     return framebuffer
 
 

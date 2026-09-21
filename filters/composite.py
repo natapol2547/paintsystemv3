@@ -34,20 +34,17 @@ A linked image is not turned away: both paths only ever read it.
 """
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 
 import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
-from ..gpu_passes.core import read_color
+from ..gpu_passes.core import offscreen_state, read_color
 from ..nodetree.stack_ops import (clip_base, feeding_link, feeds_clip_run,
                                   layers_down_from, link_index)
 from . import blend_glsl, derived
-from .core import PREMULTIPLIED, Refused, storage_of
-
-log = logging.getLogger(__name__)
+from .core import PREMULTIPLIED, Refused, new_texture, storage_of
 
 TARGET_FORMAT = 'RGBA16F'
 TRANSPARENT = (0.0, 0.0, 0.0, 0.0)
@@ -315,13 +312,7 @@ class Pool:
     def acquire(self) -> gpu.types.GPUTexture:
         if self._free:
             return self._free.pop()
-        try:
-            texture = gpu.types.GPUTexture(self.size, format=TARGET_FORMAT)
-        except RuntimeError as error:
-            log.warning("Could not allocate a %sx%s composite target: %s",
-                        self.size[0], self.size[1], error)
-            raise Refused("The GPU could not allocate the textures for this filter; "
-                          "try a lower resolution") from error
+        texture = new_texture(self.size, TARGET_FORMAT)
         self.made += 1
         return texture
 
@@ -409,20 +400,12 @@ def _draw_image(pool: Pool, image):
 def _draw_into(target, *, fill=TRANSPARENT, texture=None, premultiplied=False):
     shader, batch = source_shader()
     framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
-    blend = gpu.state.blend_get()
-    gpu.state.blend_set('NONE')
-    gpu.state.depth_test_set('NONE')
-    gpu.state.depth_mask_set(False)
-    gpu.state.face_culling_set('NONE')
-    try:
-        with framebuffer.bind():
-            shader.uniform_float("fill", fill)
-            shader.uniform_int("use_texture", 0 if texture is None else 1)
-            shader.uniform_int("premultiplied", 1 if premultiplied else 0)
-            shader.uniform_sampler("source", _no_source() if texture is None else texture)
-            batch.draw(shader)
-    finally:
-        gpu.state.blend_set(blend)
+    with offscreen_state(), framebuffer.bind():
+        shader.uniform_float("fill", fill)
+        shader.uniform_int("use_texture", 0 if texture is None else 1)
+        shader.uniform_int("premultiplied", 1 if premultiplied else 0)
+        shader.uniform_sampler("source", _no_source() if texture is None else texture)
+        batch.draw(shader)
     return target
 
 

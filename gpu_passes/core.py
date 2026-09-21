@@ -19,6 +19,7 @@ are dealt with here rather than in each pass:
   even keywords. It is never called: binding a framebuffer already sets
   the viewport to that framebuffer's size on both versions.
 """
+import contextlib
 import logging
 
 import bpy
@@ -28,6 +29,30 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 _available: bool | None = None
+
+
+@contextlib.contextmanager
+def offscreen_state(blend: str = 'NONE'):
+    """Set `gpu.state` up for a pass into an offscreen target, and restore it after.
+
+    Blending is *blend*, and depth test and depth write are off, so each
+    fragment lands as the shader wrote it. Face culling is turned off,
+    because a mirrored UV island reverses its winding, and colour writes
+    are turned on. `gpu.state` cannot read either of those two, so they
+    are left that way afterwards, which is Blender's default.
+    """
+    saved = (gpu.state.blend_get(), gpu.state.depth_test_get(), gpu.state.depth_mask_get())
+    gpu.state.blend_set(blend)
+    gpu.state.depth_test_set('NONE')
+    gpu.state.depth_mask_set(False)
+    gpu.state.face_culling_set('NONE')
+    gpu.state.color_mask_set(True, True, True, True)
+    try:
+        yield
+    finally:
+        gpu.state.blend_set(saved[0])
+        gpu.state.depth_test_set(saved[1])
+        gpu.state.depth_mask_set(saved[2])
 
 
 def gpu_available() -> bool:
