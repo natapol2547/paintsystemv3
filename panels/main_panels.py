@@ -4,7 +4,7 @@ from bpy.types import Panel, UIList
 from .brush_panels import draw_paint_sections
 from ..common import icon_kwargs
 from ..compiler.core import artifact_fingerprint
-from ..context import get_active_tree, parse_context
+from ..context import get_active_tree, get_ps_object
 from ..selection import session as selection_session
 
 
@@ -109,7 +109,8 @@ class PAINTSYSTEM_PT_main_3dview(Panel):
 
     def draw(self, context):
         layout = self.layout
-        obj = context.object
+        # An empty parented to a mesh paints that mesh, so its material shows here.
+        obj = get_ps_object(context.object)
         mat = obj.active_material if obj is not None else None
 
         if mat is None or mat.paint_system.tree is None:
@@ -125,7 +126,7 @@ class PAINTSYSTEM_PT_main_3dview(Panel):
         if tree is None:
             return
 
-        if parse_context(context).ps_object is not None:
+        if obj is not None:
             _draw_paint_mode_row(layout, context)
         layout.separator()
         layout.label(text="Channels")
