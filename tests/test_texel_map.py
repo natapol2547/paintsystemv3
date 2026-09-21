@@ -132,7 +132,7 @@ def test_texels_match_the_surface():
     if not available():
         return
     obj = cube()
-    built = build(obj,SIZE, SIZE)
+    built = build(obj, SIZE, SIZE)
     check(built is not None, "the map was built")
     if built is None:
         return
@@ -175,8 +175,8 @@ def test_margin_extends_islands():
     if not available():
         return
     obj = cube()
-    bare = build(obj,SIZE, SIZE, margin=0)
-    grown = build(obj,SIZE, SIZE, margin=texel_map.MARGIN)
+    bare = build(obj, SIZE, SIZE,margin=0)
+    grown = build(obj, SIZE, SIZE,margin=texel_map.MARGIN)
     if bare is None or grown is None:
         check(False, "both maps were built")
         return
@@ -213,10 +213,10 @@ def test_transform_is_applied():
     if not available():
         return
     obj = cube()
-    before = build(obj,SIZE, SIZE)
+    before = build(obj, SIZE, SIZE)
     obj.location = (5.0, 0.0, 0.0)
     bpy.context.view_layer.update()
-    after = build(obj,SIZE, SIZE)
+    after = build(obj, SIZE, SIZE)
     obj.location = (0.0, 0.0, 0.0)
     bpy.context.view_layer.update()
     if before is None or after is None:
@@ -284,7 +284,7 @@ def test_cache_follows_surface_content():
     bpy.context.view_layer.update()
     obj = cube()
     undone = texel_map.get_texel_map(obj, "", (64, 64))
-    fresh = build(obj,64, 64)
+    fresh = build(obj, 64, 64)
     check(undone is first, "undoing the move finds the map built before it")
     check(undone is not None and fresh is not None
           and np.array_equal(read_texel_map(undone), read_texel_map(fresh)),
@@ -400,8 +400,8 @@ def test_udim_tile():
         obj.data.update()
         bpy.context.view_layer.update()
 
-        in_tile = build(obj,SIZE, SIZE, tile=1002)
-        out_of_tile = build(obj,SIZE, SIZE, tile=1001)
+        in_tile = build(obj, SIZE, SIZE,tile=1002)
+        out_of_tile = build(obj, SIZE, SIZE,tile=1001)
         if in_tile is None or out_of_tile is None:
             check(False, "both maps were built")
             return
@@ -421,7 +421,7 @@ def test_cost():
         return
     obj = cube()
     start = time.perf_counter()
-    built = build(obj,4096, 4096)
+    built = build(obj, 4096, 4096)
     elapsed = 1000 * (time.perf_counter() - start)
     if built is None:
         check(False, "the 4K map was built")
