@@ -173,17 +173,16 @@ void main()
 _stamp_shader = None
 
 
-def build(node, texture, pool):
-    """Paint *texture*, the stack below *node*, and return the result.
+def build(settings, texture, pool):
+    """Paint *texture* with *settings*, a `plan.Settings`, and return the result.
 
     A generator of ``(label, fraction)``, for `filters.layer_build` to
     drive. *texture* is scene linear and straight, and so is the texture
     returned; both belong to *pool*, and *texture* is given back to it
     once read.
     """
-    settings = plan.Settings.of(node)
     width, height = texture.width, texture.height
-    masks = brushes.masks(node.painter_brush)
+    masks = brushes.masks(settings.brush)
     steps = plan.schedule(settings, width, height, masks)
     drawn = [plan.draws(settings, step, width, height, len(masks)) for step in steps]
 

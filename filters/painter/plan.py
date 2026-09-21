@@ -76,10 +76,13 @@ class Settings:
     hue: float = 0.0
     saturation: float = 0.0
     value: float = 0.0
+    # A `painter.brushes` identifier. The first preset, as on a new layer.
+    brush: str = 'GOUACHE_SHORT_1'
 
     @classmethod
     def of(cls, node) -> "Settings":
         return cls(
+            brush=node.painter_brush,
             density=node.painter_density,
             min_scale=node.painter_min_scale,
             max_scale=node.painter_max_scale,

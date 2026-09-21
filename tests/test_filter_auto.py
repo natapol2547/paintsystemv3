@@ -193,6 +193,122 @@ if available():
               "with no timer left behind")
         layer_job.BUDGET = budget
 
+        section("overtaken part way")
+        # A build reads the stack at its start and commits several ticks
+        # later. A stroke or a setting that moves in between must leave
+        # the layer out of date rather than under a stamp for pixels it
+        # never saw -- the Update button, which drives the same steps
+        # without any of the job's checks, included.
+        budget, layer_job.BUDGET = layer_job.BUDGET, 0.0
+        pump()
+        core.flush_now()
+
+        def begin():
+            """Start a refresh and leave it one unit in."""
+            layer_job._deadline = 0.0
+            layer_job._tick()
+            return layer_job.running_on(node)
+
+        def as_built_now():
+            """Whether the layer holds what an Update of it would build now."""
+            got = stamp(node)
+            layer_build.build_layer(bpy.context, tree, node)
+            core.flush_now()
+            return stamp(node) == got
+
+        undo_pixels.write_pixels(picture.image, [0.6, 0.3, 0.2, 1.0] * 64)
+        core.flush_now()
+        check(begin(), "a stroke below starts a refresh")
+        undo_pixels.write_pixels(picture.image, [0.2, 0.6, 0.3, 1.0] * 64)
+        core.flush_now()
+        layer_job._tick()
+        check(not layer_job.running(), "a second stroke landing part way drops it")
+        check(layer_job._builds.get(node.uuid) is None,
+              "without counting it as a build that did not settle")
+        check(pump(), "the refresh that follows runs to the end")
+        core.flush_now()
+        check(node.stale_reason == "", f"and leaves the layer up to date: {node.stale_reason!r}")
+        check(as_built_now(), "with the pixels of the second stroke")
+
+        node.invert_alpha = True
+        core.flush_now()
+        check(begin(), "a setting starts a refresh")
+        node.invert_alpha = False
+        core.flush_now()
+        layer_job._tick()
+        check(not layer_job.running(), "turning it back part way drops it")
+        check(pump() and node.stale_reason == "",
+              f"and the layer is up to date again: {node.stale_reason!r}")
+        check(as_built_now(), "with the setting it ended on")
+
+        # Past the restart limit the build is let finish, which is where
+        # the stamp has to be what was read rather than what is there.
+        layer_job._restarts[node.uuid] = layer_job.RESTART_LIMIT
+        undo_pixels.write_pixels(picture.image, [0.7, 0.7, 0.2, 1.0] * 64)
+        core.flush_now()
+        check(begin(), "a build past the restart limit starts")
+        node.invert_alpha = True
+        undo_pixels.write_pixels(picture.image, [0.1, 0.3, 0.8, 1.0] * 64)
+        core.flush_now()
+        while layer_job.running():
+            layer_job._tick()
+        check(node.derived_stale_pixels,
+              "is let finish, and the stroke it missed still marks the layer")
+        check(node.stale_reason == "the filter settings changed",
+              f"while its stamp names the setting it read: {node.stale_reason!r}")
+        check(layer_job._builds.get(node.uuid) is None,
+              "and it is not counted as a build that did not settle")
+        check(pump() and node.stale_reason == "" and not node.derived_stale_pixels,
+              f"the refresh after it catches up: {node.stale_reason!r}")
+        check(as_built_now(), "with the stroke and the setting it missed")
+
+        # The Update path: the same steps driven by hand, with no job to
+        # notice anything.
+        run = layer_build.steps(bpy.context, tree, node)
+        next(run)
+        undo_pixels.write_pixels(picture.image, [0.3, 0.1, 0.5, 1.0] * 64)
+        node.invert_alpha = False
+        for _ in run:
+            pass
+        core.flush_now()
+        check(node.derived_stale_pixels and node.stale_reason == "the filter settings changed",
+              f"an Update overtaken part way leaves the layer out of date: {node.stale_reason!r}")
+        # The settings are read with the stamp, not when the filter gets
+        # to them a unit later: the pixels are those of the setting the
+        # stamp names, which a build at that setting reproduces exactly.
+        got = stamp(node)
+        node.invert_alpha = True
+        core.flush_now()
+        layer_build.build_layer(bpy.context, tree, node)
+        core.flush_now()
+        check(stamp(node) == got, "and holds the pixels its stamp names")
+
+        # Overtaken again and again, more often than BUILD_LIMIT allows a
+        # build that cannot settle. None of them is that. The layer below
+        # is what moves, and never back to where a build left it.
+        layer_job._builds.clear()
+        picture.opacity = 0.95
+        core.flush_now()
+        rounds = layer_job.BUILD_LIMIT + 2
+        started = 0
+        for index in range(rounds):
+            if not begin():
+                break
+            started += 1
+            picture.opacity = 0.9 - 0.1 * index
+            core.flush_now()
+            while layer_job.running():
+                layer_job._tick()
+        check(started == rounds, f"every nudge started a refresh: {started} of {rounds}")
+        check(node.auto_refresh and node.derived_error == "",
+              f"being overtaken {rounds} times in a row is not a refresh that "
+              f"did not settle: {node.derived_error!r}")
+        check(pump() and node.stale_reason == "", "and the last refresh catches up")
+        check(as_built_now(), "with the stack it ended on")
+        picture.opacity = 1.0
+        core.flush_now()
+        layer_job.BUDGET = budget
+
         section("a refresh it must not attempt")
         # The auto path is hard-gated to the GPU composite. A Cycles bake
         # from a timer would lock the window for seconds with no way to

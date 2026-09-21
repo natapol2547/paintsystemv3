@@ -40,9 +40,18 @@ exactly, the walk only runs when an image is actually tagged, and a
 recorded set would be one more thing to invalidate -- while any change to
 *which* images are below is a structural change the other half already
 catches.
+
+A build in flight is the one reader the flag cannot serve on its own. The
+layer is usually marked already -- that is why it is being built -- so a
+second stroke landing partway through would change nothing, and the
+commit clearing the flag would then claim pixels the build never saw.
+`reading` covers that span: while a build of a layer is running, every
+stroke below it is counted in `changes`, marked or not, and the commit
+clears the flag only when the count is the one it started with.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 
@@ -137,6 +146,38 @@ def structure_reason(stored: str, parts: dict) -> str:
 
 # ── The pixel half ───────────────────────────────────────────────────
 
+# Node uuid to the builds of that layer in flight. More than one is
+# possible only in principle: the Update operator cancels the auto job
+# before it starts.
+_reading: dict[str, int] = {}
+# Node uuid to the strokes below that layer noticed so far. Only ever
+# compared with an earlier value of itself, so it is never reset.
+_changes: dict[str, int] = {}
+
+
+@contextlib.contextmanager
+def reading(uuid: str):
+    """Count every stroke below the layer *uuid* for as long as this is open.
+
+    Held by a build from before it reads anything until after it commits,
+    so that a stroke landing in between is seen even when the layer is
+    already marked.
+    """
+    _reading[uuid] = _reading.get(uuid, 0) + 1
+    try:
+        yield
+    finally:
+        left = _reading[uuid] - 1
+        if left:
+            _reading[uuid] = left
+        else:
+            del _reading[uuid]
+
+
+def changes(uuid: str) -> int:
+    """How many strokes below the layer *uuid* have been noticed, to compare later."""
+    return _changes.get(uuid, 0)
+
 
 def note_image_changed(uids) -> None:
     """Mark every built filter layer that reads one of *uids*.
@@ -155,14 +196,24 @@ def note_image_changed(uids) -> None:
         return
     for tree in ps_trees():
         for node in tree.nodes:
-            if getattr(node, 'ps_type', "") != 'FILTER' or node.derived_stale_pixels:
+            if getattr(node, 'ps_type', "") != 'FILTER':
+                continue
+            read = node.uuid in _reading
+            # A marked layer has nothing more to learn, unless a build of
+            # it is running: that build may have read the pixels already.
+            if node.derived_stale_pixels and not read:
                 continue
             # An unbuilt layer has no claim about pixels to lose, and the
-            # walk below is the expensive part.
-            if not derived.is_built(node.derived_image) or not uids & source_uids(node):
+            # walk below is the expensive part. One being built for the
+            # first time is about to make such a claim.
+            if not (read or derived.is_built(node.derived_image)):
                 continue
-            node.derived_stale_pixels = True
-            log.debug("%s reads an image that changed", node.name)
+            if not uids & source_uids(node):
+                continue
+            _changes[node.uuid] = _changes.get(node.uuid, 0) + 1
+            if not node.derived_stale_pixels:
+                node.derived_stale_pixels = True
+                log.debug("%s reads an image that changed", node.name)
 
 
 def source_uids(node) -> frozenset[int]:

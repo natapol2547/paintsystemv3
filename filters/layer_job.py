@@ -26,6 +26,16 @@ own build stops refreshing itself and says why, rather than rebuilding
 forever. `settled` is the signal that the cycle was genuine: a compile
 that found the layer fresh.
 
+**Restarted when what it read moves.** A setting dragged or a stroke
+finished partway through a build leaves that build filtering the past.
+It would still be correct to finish -- `filters.layer_build` stamps what
+it read, so the layer comes out still out of date -- but the time spent
+is wasted, so the job is dropped and a new one waits out the debounce.
+Neither kind of ending counts towards the bound, which is for a build
+that cannot satisfy its own check rather than one that was overtaken.
+After a few restarts in a row the build is let finish anyway, so that
+someone painting in short bursts still sees the filter catch up.
+
 Undo, redo and a file read call `cancel_all`. The generator holds the
 tree and the node it was started with, and those references do not
 survive a restore (PS-090) -- so the rule is that no job does either.
@@ -42,7 +52,7 @@ import bpy
 
 from ..compiler.core import ps_trees
 from ..gpu_passes.core import gpu_known
-from . import layer_build, layer_plan
+from . import freshness, layer_build, layer_plan
 from .core import Refused
 
 log = logging.getLogger(__name__)
@@ -57,22 +67,51 @@ BUDGET = 0.02
 # between. Real editing always produces one, so reaching this means the
 # build cannot satisfy the check that asked for it.
 BUILD_LIMIT = 3
+# Builds of one layer dropped in a row because what they read moved.
+# The next one runs to the end whatever happens meanwhile.
+RESTART_LIMIT = 2
 
 _deadline = 0.0
 _job = None
+# Whether `notify` has been called since the running job last looked.
+_poked = False
 # Node uuid to auto builds started since a compile last found that layer
 # fresh.
 _builds: dict[str, int] = {}
+# Node uuid to builds of it dropped in a row, see RESTART_LIMIT.
+_restarts: dict[str, int] = {}
 
 
 class _Job:
-    """A build in flight, and which layer it is for."""
+    """A build in flight, which layer it is for, and what it read."""
 
-    def __init__(self, tree, node, steps):
+    def __init__(self, tree, node, plan):
         self.tree_name = tree.name
         self.node_name = node.name
         self.uuid = node.uuid
-        self.steps = steps
+        # Taken in the same tick as the build's own, which is the first
+        # unit `_run` drives, so the two agree.
+        self.read = layer_build.inputs_of(tree, node, plan)
+        self.steps = layer_build.steps(bpy.context, tree, node, plan=plan)
+
+    def painted_over(self) -> bool:
+        """Whether a stroke has landed below the layer since the build started."""
+        return freshness.changes(self.uuid) != self.read[1]
+
+    def moved(self) -> bool:
+        """Whether anything the build read has changed since it started.
+
+        About a millisecond: one resolve and one IR build, no pixels.
+        """
+        node = _node_of(self)
+        if node is None:
+            return True
+        tree = node.id_data
+        try:
+            plan = layer_plan.resolve_input(bpy.context, tree, node)
+        except Refused:
+            return True
+        return layer_build.inputs_of(tree, node, plan) != self.read
 
     def close(self):
         # Raises GeneratorExit at whichever yield the build reached,
@@ -89,9 +128,12 @@ def notify() -> None:
     Called from a compile that found a filter layer out of date, which
     covers a stroke below one as well: the pixel half of
     `filters.freshness` sets the flag, and the next compile reads it.
+    It is also what tells a running job to check whether it has been
+    overtaken.
     """
-    global _deadline
+    global _deadline, _poked
     _deadline = time.monotonic() + DEBOUNCE
+    _poked = True
     if bpy.app.timers.is_registered(_tick):
         return
     try:
@@ -102,8 +144,16 @@ def notify() -> None:
 
 
 def settled(node) -> None:
-    """A compile found *node* up to date, so its build cycle was genuine."""
+    """A compile found *node* up to date, so its build cycle was genuine.
+
+    Also how a job learns that its layer went back to what it was built
+    from partway through -- a setting nudged and returned -- which leaves
+    nothing to build, so no `notify` to hear it by.
+    """
+    global _poked
     _builds.pop(node.uuid, None)
+    if running_on(node):
+        _poked = True
 
 
 def running() -> bool:
@@ -129,6 +179,7 @@ def cancel_all() -> None:
         _job.close()
         _job = None
     _builds.clear()
+    _restarts.clear()
     if bpy.app.timers.is_registered(_tick):
         bpy.app.timers.unregister(_tick)
 
@@ -137,7 +188,9 @@ def cancel_all() -> None:
 
 
 def _tick():
-    global _job
+    global _job, _poked
+    if _job is not None and _overtaken(_job):
+        _restart(_job)
     if _job is None:
         remaining = _deadline - time.monotonic()
         if remaining > 0.0:
@@ -146,7 +199,48 @@ def _tick():
         if _job is None:
             # Nothing to do. `notify` registers this again when there is.
             return None
+        _poked = False
     return _run(_job)
+
+
+def _overtaken(job) -> bool:
+    """Whether *job* is filtering pixels or settings that have since moved.
+
+    A stroke below is a count to compare, so it is looked for on every
+    tick: the addon's own pixel writes mark a layer that is already
+    marked without anything calling `notify`. A structural change costs
+    an IR build to see, and always comes through a compile that does.
+    """
+    global _poked
+    poked, _poked = _poked, False
+    if _restarts.get(job.uuid, 0) >= RESTART_LIMIT:
+        return False
+    return job.painted_over() or (poked and job.moved())
+
+
+def _restart(job) -> None:
+    """Drop *job*, which is filtering pixels or settings that have moved on.
+
+    The next pass starts it again once things have been quiet for the
+    debounce, counted from now: a stroke found by counting came with no
+    `notify` to push the deadline out.
+    """
+    global _job, _deadline
+    _job = None
+    _deadline = max(_deadline, time.monotonic() + DEBOUNCE)
+    job.close()
+    _uncount(job)
+    _restarts[job.uuid] = _restarts.get(job.uuid, 0) + 1
+    log.debug("restarting the refresh of %s: what it read has moved", job.node_name)
+
+
+def _uncount(job) -> None:
+    """Take *job* back off `_builds`: it was overtaken, not unsettled."""
+    count = _builds.get(job.uuid, 0) - 1
+    if count > 0:
+        _builds[job.uuid] = count
+    else:
+        _builds.pop(job.uuid, None)
 
 
 def _start():
@@ -179,7 +273,7 @@ def _start():
         # build's own last unit.
         _builds[node.uuid] = _builds.get(node.uuid, 0) + 1
         log.debug("refreshing %s: %s", node.name, node.stale_reason)
-        return _Job(tree, node, layer_build.steps(bpy.context, tree, node, plan=plan))
+        return _Job(tree, node, plan)
     return None
 
 
@@ -224,10 +318,17 @@ def _run(job):
             next(job.steps)
         except StopIteration as done:
             _job = None
+            _restarts.pop(job.uuid, None)
+            # Let finish past RESTART_LIMIT, or overtaken in its last
+            # unit. It committed what it read and the layer is still out
+            # of date, which says nothing about whether it can settle.
+            if job.moved():
+                _uncount(job)
             log.debug("refreshed %s", done.value.name)
             return DEBOUNCE
         except Refused as refusal:
             _job = None
+            _restarts.pop(job.uuid, None)
             _give_up(_node_of(job), str(refusal))
             return DEBOUNCE
         except Exception:
@@ -235,6 +336,7 @@ def _run(job):
             # than retried: the same build would fail the same way, and
             # the layer still shows the pixels it had.
             _job = None
+            _restarts.pop(job.uuid, None)
             job.close()
             log.exception("could not refresh filter layer '%s'", job.node_name)
             _give_up(_node_of(job), "Refreshing this layer failed; see the system console")

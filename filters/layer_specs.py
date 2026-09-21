@@ -24,9 +24,9 @@ how a blur set to zero costs nothing.
 
 A kind that is not a list of passes builds its result itself. The
 painter is one: its stamps are geometry planned per stamp on the CPU,
-not a pass over every texel. It gives `build` instead, and a
-`fingerprint_of` saying what the pixels depend on, since there are no
-passes to read that from.
+not a pass over every texel. It gives `build` instead, `settings_of` for
+what that is handed, and a `fingerprint_of` saying what the pixels
+depend on, since there are no passes to read that from.
 """
 from __future__ import annotations
 
@@ -57,11 +57,16 @@ class LayerFilterSpec:
     # Names of the node properties this kind reads, in draw order. An
     # entry may also be ``(heading, names)``, drawn as a group of its own.
     params: tuple = ()
-    # ``build(node, texture, pool)``, a generator of ``(label, fraction)``
-    # that takes the composited stack below and returns the result, both
-    # scene linear and straight, both the pool's. None for a kind whose
-    # passes are the whole build.
+    # ``build(settings, texture, pool)``, a generator of ``(label,
+    # fraction)`` that takes the composited stack below and returns the
+    # result, both scene linear and straight, both the pool's. None for a
+    # kind whose passes are the whole build.
     build: Callable | None = None
+    # What `build` is handed as *settings*, read off the node. Called
+    # when the build starts, with its fingerprint, rather than by the hook
+    # when it gets there: a setting moved in between must not reach
+    # pixels stamped as built without it.
+    settings_of: Callable[[Any], Any] | None = None
     # What a build fingerprint records for this kind, JSON-able. None to
     # record the passes, which is right for any kind that has them.
     fingerprint_of: Callable[[Any], list] | None = None
@@ -143,7 +148,7 @@ SHARPEN = LayerFilterSpec(
 def _painterly_fingerprint(node) -> list:
     # The brush by name: a preset's images ship with the add-on, and a
     # change to them comes with a `derived.FILTER_VERSION` of its own.
-    return [["painterly", {**Settings.of(node).as_dict(), "brush": node.painter_brush}]]
+    return [["painterly", Settings.of(node).as_dict()]]
 
 
 PAINTERLY = LayerFilterSpec(
@@ -160,6 +165,7 @@ PAINTERLY = LayerFilterSpec(
         'painter_seed',
     ),
     build=painter_build.build,
+    settings_of=Settings.of,
     fingerprint_of=_painterly_fingerprint,
 )
 
