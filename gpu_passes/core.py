@@ -127,41 +127,47 @@ def gpu_known() -> bool | None:
     return None
 
 
-def read_color(framebuffer: gpu.types.GPUFrameBuffer, width: int, height: int,
-               slot: int = 0, *, rows: tuple[int, int] | None = None) -> np.ndarray:
-    """A float colour slot of *framebuffer* as a `(rows, width, 4)` array.
+def _read(framebuffer, width: int, first: int, count: int, slot: int, channels: int,
+          kind: str, dtype) -> np.ndarray:
+    """Rows *first* to *first* + *count* of a colour slot, as a `(count, width, channels)` array.
 
-    Row 0 is the bottom of the image, matching `Image.pixels`. The result
-    is a copy: a `np.frombuffer` view stays backed by the `Buffer`, which
-    is freed when this returns.
-
-    *rows* is a half-open ``(first, last)`` range, defaulting to the whole
-    framebuffer. One read of 4096 rows stalls for about a second, which
-    is too long to hold a modal operator between events, so a caller that
-    has to stay responsive asks for a band at a time.
+    The result is a copy: a `np.frombuffer` view stays backed by the
+    `Buffer`, which is freed when this returns.
     """
-    first, last = (0, height) if rows is None else rows
-    count = last - first
-    buffer = gpu.types.Buffer('FLOAT', width * count * 4)
+    buffer = gpu.types.Buffer(kind, width * count * channels)
     with framebuffer.bind():
-        framebuffer.read_color(0, first, width, count, 4, slot, 'FLOAT', data=buffer)
-    return np.frombuffer(buffer, dtype=np.float32).reshape(count, width, 4).copy()
+        framebuffer.read_color(0, first, width, count, channels, slot, kind, data=buffer)
+    return np.frombuffer(buffer, dtype=dtype).reshape(count, width, channels).copy()
 
 
-def read_color_bytes(framebuffer: gpu.types.GPUFrameBuffer, width: int, height: int,
-                     slot: int = 0, *, rows: tuple[int, int] | None = None) -> np.ndarray:
-    """`read_color` for a slot that holds bytes, as a uint8 `(rows, width, 4)` array.
+def read_color(framebuffer: gpu.types.GPUFrameBuffer, width: int, height: int,
+               slot: int = 0, *, channels: int = 4) -> np.ndarray:
+    """A float colour slot of *framebuffer* as a `(height, width, channels)` array.
 
-    Only for an `RGBA8` texture. Reading a float texture as bytes returns
+    Row 0 is the bottom of the image, matching `Image.pixels`.
+
+    *channels* has to be the number of components the slot's texture
+    holds: 4 for an `RGBA16F` or `RGBA32F` target, 1 for `R32F`. Vulkan
+    writes every component of the texture's format whatever count it is
+    given, so a smaller count overruns the buffer.
+    """
+    return _read(framebuffer, width, 0, height, slot, channels, 'FLOAT', np.float32)
+
+
+def read_color_bytes(framebuffer: gpu.types.GPUFrameBuffer, width: int, first: int, last: int,
+                     *, channels: int = 4) -> np.ndarray:
+    """Rows *first* to *last* of a byte colour slot, as a uint8 `(rows, width, channels)` array.
+
+    Only for an `RGBA8` or `R8` texture, with *channels* its component
+    count as for `read_color`. Reading a float texture as bytes returns
     zeros on Vulkan, so a caller wanting bytes draws into a byte target
     first and lets the GPU round (PS-091).
+
+    It reads a band rather than the whole slot: one read of 4096 rows
+    stalls for about a second, which is too long to hold a modal
+    operator between events.
     """
-    first, last = (0, height) if rows is None else rows
-    count = last - first
-    buffer = gpu.types.Buffer('UBYTE', width * count * 4)
-    with framebuffer.bind():
-        framebuffer.read_color(0, first, width, count, 4, slot, 'UBYTE', data=buffer)
-    return np.frombuffer(buffer, dtype=np.uint8).reshape(count, width, 4).copy()
+    return _read(framebuffer, width, first, last - first, 0, channels, 'UBYTE', np.uint8)
 
 
 def tile_offset(tile: int) -> tuple[float, float]:

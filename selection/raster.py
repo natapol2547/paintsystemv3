@@ -490,10 +490,8 @@ class SelectionMask:
     def read(self) -> np.ndarray:
         """The mask as float32 `(height, width)`, exactly as the passes wrote it."""
         framebuffer = gpu.types.GPUFrameBuffer(color_slots=(self.texture,))
-        buffer = gpu.types.Buffer('FLOAT', self.width * self.height)
-        with framebuffer.bind():
-            framebuffer.read_color(0, 0, self.width, self.height, 1, 0, 'FLOAT', data=buffer)
-        return np.frombuffer(buffer, dtype=np.float32).reshape(self.height, self.width).copy()
+        values = core.read_color(framebuffer, self.width, self.height, channels=1)
+        return values.reshape(self.height, self.width)
 
     def read_bytes(self) -> np.ndarray:
         """The mask as uint8 `(height, width)`, each value `floor(v * 255 + 0.5)`.
@@ -507,13 +505,12 @@ class SelectionMask:
         shader, batch = _resources()["quantise"]
         target = gpu.types.GPUTexture((self.width, self.height), format='R8')
         framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
-        buffer = gpu.types.Buffer('UBYTE', self.width * self.height)
         with core.offscreen_state():
             with framebuffer.bind():
                 shader.uniform_sampler("mask", self.texture)
                 batch.draw(shader)
-                framebuffer.read_color(0, 0, self.width, self.height, 1, 0, 'UBYTE', data=buffer)
-        values = np.frombuffer(buffer, dtype=np.uint8).reshape(self.height, self.width).copy()
+        values = core.read_color_bytes(framebuffer, self.width, 0, self.height, channels=1)
+        values = values.reshape(self.height, self.width)
         self._empty = not values.any()
         return values
 

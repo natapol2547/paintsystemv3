@@ -144,8 +144,7 @@ def steps(context, tree, node, *, plan=None):
             digest = hashlib.blake2b(digest_size=16)
             firsts = range(0, height, READ_ROWS)
             for index, first in enumerate(reversed(firsts)):
-                band = read_color_bytes(framebuffer, width, height,
-                                        rows=(first, min(height, first + READ_ROWS)))
+                band = read_color_bytes(framebuffer, width, first, min(height, first + READ_ROWS))
                 digest.update(band)
                 png.add(band[::-1])
                 yield (f"{kind.label}: reading the result back",
