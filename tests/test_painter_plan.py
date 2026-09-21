@@ -198,8 +198,59 @@ try:
     small = plan.resize(fifty, 12)
     check(np.abs(small - small[::-1]).max() < 1e-6 and np.abs(small - small[:, ::-1]).max() < 1e-6,
           "and the rows that do not divide are trimmed evenly, so the brush stays centred")
-    check(same(plan.resize(fifty, 40), plan.resize_bilinear(fifty, 40)),
+    # Within single precision: `resize` runs the bilinear step one axis at
+    # a time, which rounds differently.
+    check(np.abs(plan.resize(fifty, 40) - plan.resize_bilinear(fifty, 40)).max() < 1e-6,
           "shrinking by less than two is the plain bilinear resize")
+    worst = 0.0
+    for side, target in ((50, 17), (107, 64), (30, 90), (1024, 409), (312, 311)):
+        mask = rng.random((side, side)).astype(np.float32)
+        factor = side // target
+        if factor >= 2:
+            kept = side // factor * factor
+            start = (side - kept) // 2
+            cells = kept // factor
+            reference = mask[start:start + kept, start:start + kept].reshape(
+                cells, factor, cells, factor).mean(axis=(1, 3))
+        else:
+            reference = mask
+        worst = max(worst, float(np.abs(plan.resize(mask, target)
+                                        - plan.resize_bilinear(reference, target)).max()))
+    check(worst < 1e-6, f"at any factor (worst {worst:.2e}), well inside a half float's step")
+
+    section("the covered area, counted without resizing")
+    presets = [mask for name in ('GOUACHE_SHORT_1', 'GOUACHE_SHORT_2', 'CIRCLE')
+               for mask in brushes.masks(name)]
+    sides = list(range(1, 65)) + [int(side) for side in rng.integers(65, 1100, 24)]
+    misses = []
+    for mask in presets:
+        inside = plan.covered(mask)
+        for side in sides:
+            want = int(np.count_nonzero(plan.resize_bilinear(mask, side) > 0))
+            got = plan.covered_area(mask, side, inside)
+            if got != want:
+                misses.append((mask.shape[0], side, got, want))
+    check(all(plan.covered(mask) is not None for mask in presets) and not misses,
+          f"every shipped brush at {len(sides)} sides counts what the resize leaves "
+          f"({len(presets) * len(sides)} pairs; first miss {misses[:1]})")
+    sparse = np.zeros((40, 40), dtype=np.float32)
+    sparse[::7, ::5] = 1.0
+    sparse[13, 21] = 1e-3
+    check(all(plan.covered_area(sparse, side, plan.covered(sparse))
+              == np.count_nonzero(plan.resize_bilinear(sparse, side) > 0) for side in range(1, 90)),
+          "and so does a brush of isolated texels, where every tap it skips shows")
+    faint = sparse.copy()
+    faint[0, 0] = 1e-30
+    check(plan.covered(faint) is None and plan.covered(-sparse) is None
+          and plan.covered(np.full((4, 4), np.nan, dtype=np.float32)) is None,
+          "a value the resize could round away, a negative one or NaN falls back to resizing")
+    check(plan.covered_area(faint, 9, None)
+          == np.count_nonzero(plan.resize_bilinear(faint, 9) > 0),
+          "which counts the resize itself")
+    areas = plan.Areas(brushes.masks('CIRCLE'))
+    check(areas.mean(12) == areas.mean(12) == plan.covered_area(
+              brushes.masks('CIRCLE')[0], 12, plan.covered(brushes.masks('CIRCLE')[0])),
+          "Areas averages the brushes' counts and keeps each side's")
 
     section("the schedule, against v2")
     worst_case = ""
@@ -207,7 +258,7 @@ try:
     for preset, folder in (('GOUACHE_SHORT_1', "gouache_short_1"),
                            ('GOUACHE_SHORT_2', "gouache_short_2"), ('CIRCLE', None)):
         v2_masks = v2_brushes(folder) if folder else [plan.circle()]
-        ours = brushes.masks(preset)
+        ours = brushes.areas(preset)
         for settings in (plan.Settings(), plan.Settings(steps=1), plan.Settings(steps=7),
                          plan.Settings(density=0.25, min_scale=0.01, max_scale=0.4, steps=5)):
             for width, height in ((1024, 1024), (2048, 2048), (4096, 4096), (2048, 1024)):
@@ -220,19 +271,21 @@ try:
                     worst_case = f"{preset} {width}x{height} {settings}: {got} != {want}"
     check(not worst_case, f"sizes, opacities and counts are v2's exactly ({matched} schedules)"
           + (f"; first miss {worst_case}" if worst_case else ""))
-    steps = plan.schedule(plan.Settings(), 2048, 2048, circle)
+    circle_areas = brushes.areas('CIRCLE')
+    steps = plan.schedule(plan.Settings(), 2048, 2048, circle_areas)
     check([step.index for step in steps] == [0, 1, 2, 3]
           and steps[0].size > steps[-1].size and steps[0].opacity < steps[-1].opacity,
           "from the largest brush to the smallest, and from First Opacity to Last")
-    tiny = plan.schedule(plan.Settings(min_scale=0.001, max_scale=0.001), 64, 64, circle)
+    tiny = plan.schedule(plan.Settings(min_scale=0.001, max_scale=0.001), 64, 64, circle_areas)
     check(all(step.size == 1 and step.count == 64 * 64 // 8 for step in tiny),
           "a brush smaller than a texel is one texel, at most one stamp per eight texels")
-    check(plan.stamp_count(0.7, 512, 512, [np.zeros((8, 8), dtype=np.float32)], 8) == 512 * 512 // 8,
+    empty = plan.Areas([np.zeros((8, 8), dtype=np.float32)])
+    check(plan.stamp_count(0.7, 512, 512, empty.mean(8)) == 512 * 512 // 8,
           "and a brush that covers nothing counts as one texel instead of dividing by zero")
 
     section("the random numbers")
     settings = plan.Settings()
-    step = plan.schedule(settings, 512, 512, circle)[0]
+    step = plan.schedule(settings, 512, 512, circle_areas)[0]
     drawn = plan.draws(settings, step, 512, 512, 3)
     again = plan.draws(settings, step, 512, 512, 3)
     streams = ('x', 'y', 'brush', 'turn', 'jitter')

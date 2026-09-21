@@ -19,8 +19,10 @@ runs in place of a list of passes. In order:
    because the build encodes whatever a kind returns.
 
 The textures in flight are the pool's, the full size of the layer; the
-small ones -- positions, gathered values, the reduction, the atlas --
-are made here and dropped with the generator's frame.
+small ones -- positions, gathered values, the reduction -- are made here
+and dropped with the generator's frame. The atlases outlive it: each
+brush keeps the ones its last build drew with, because a rebuild after
+a stroke below asks for exactly those again.
 """
 from __future__ import annotations
 
@@ -172,6 +174,14 @@ void main()
 
 _stamp_shader = None
 
+# The atlases each brush's last build drew with, by ``(cell, columns,
+# rows)``: the uploaded texture and the lower-left texel of every brush
+# in it. Building and uploading them is a tenth of a 4096 build, and one
+# build's worth per brush is a few MB of video memory at the defaults.
+# Keyed by preset name, which is enough while a preset cannot change; a
+# brush made from the user's own image would need its pixels in the key.
+_atlases: dict[str, dict[tuple, tuple]] = {}
+
 
 def build(settings, texture, pool):
     """Paint *texture* with *settings*, a `plan.Settings`, and return the result.
@@ -181,16 +191,20 @@ def build(settings, texture, pool):
     returned; both belong to *pool*, and *texture* is given back to it
     once read.
     """
+    # The composite ran in the unit before this one; planning gets its own.
+    yield "planning the strokes", 0.0
     width, height = texture.width, texture.height
     masks = brushes.masks(settings.brush)
-    steps = plan.schedule(settings, width, height, masks)
+    steps = plan.schedule(settings, width, height, brushes.areas(settings.brush))
     drawn = [plan.draws(settings, step, width, height, len(masks)) for step in steps]
 
-    yield "reading the picture", 0.0
+    yield "reading the picture", 0.01
     encoded = _run(pool, registry.ENCODE_SRGB, texture)
-    colors = _blurred(pool, encoded, settings.sigma, keep=True)
+    colors = yield from _blurred(pool, encoded, settings.sigma, keep=True,
+                                 progress=("reading the picture", 0.02))
     yield "reading the picture", 0.03
-    luma = _blurred(pool, _run(pool, LUMA, encoded, keep=True), settings.sigma, keep=False)
+    luma = yield from _blurred(pool, _run(pool, LUMA, encoded, keep=True), settings.sigma,
+                               keep=False, progress=("reading the picture", 0.04))
     canvas = _run(pool, PREMULTIPLY, encoded, keep=colors is encoded)
     yield "reading the picture", 0.06
     field = _run(pool, SOBEL, luma)
@@ -212,6 +226,7 @@ def build(settings, texture, pool):
     framebuffer = gpu.types.GPUFrameBuffer(color_slots=(canvas,))
     limit = gpu.capabilities.max_texture_size_get()
     largest = max(mask.shape[0] for mask in masks)
+    previous, used = _atlases.get(settings.brush, {}), {}
     total, done, offset = len(x), 0, 0
     for step, numbers in zip(steps, drawn):
         rows = slice(offset, offset + step.count)
@@ -220,8 +235,13 @@ def build(settings, texture, pool):
         if len(stamps):
             columns, atlas_rows, cell = plan.atlas_layout(
                 len(masks), min(step.size, largest), limit)
-            image, origins = plan.atlas(masks, cell, columns, atlas_rows)
-            atlas = _upload(image)
+            key = (cell, columns, atlas_rows)
+            entry = used.get(key) or previous.get(key)
+            if entry is None:
+                image, origins = plan.atlas(masks, cell, columns, atlas_rows)
+                entry = (_upload(image), origins)
+            used[key] = entry
+            atlas, origins = entry
             for start in range(0, len(stamps), DRAW_CHUNK):
                 yield (f"painting, step {step.index + 1} of {len(steps)}",
                        0.2 + 0.75 * (done + start) / total)
@@ -229,6 +249,9 @@ def build(settings, texture, pool):
                                       step.size, origins, cell)
                 _draw_stamps(framebuffer, (width, height), atlas, geometry)
         done += step.count
+    # Replaced rather than merged, so what is kept is only ever what one
+    # build drew with. A build abandoned before here keeps the last one's.
+    _atlases[settings.brush] = used
 
     yield "finishing", 0.95
     return _run(pool, FINISH, canvas)
@@ -250,17 +273,21 @@ def _run(pool, spec: FilterSpec, texture, params: dict | None = None, *, keep: b
     return result
 
 
-def _blurred(pool, texture, sigma: int, *, keep: bool):
+def _blurred(pool, texture, sigma: int, *, keep: bool, progress: tuple[str, float]):
     """*texture* through v2's gaussian: one pass per axis, cut off at two sigma.
 
-    A sigma of zero returns *texture* itself, which is why the caller
-    compares before giving either back.
+    A generator yielding *progress* between the two passes, each of
+    which is a unit of its own: at 4096 a pass is about 50 ms. A sigma
+    of zero returns *texture* itself, which is why the caller compares
+    before giving either back.
     """
     if sigma <= 0:
         return texture
     radius = max(1, int(sigma * 2.0))
     current = texture
-    for axis in ((1.0, 0.0), (0.0, 1.0)):
+    for index, axis in enumerate(((1.0, 0.0), (0.0, 1.0))):
+        if index:
+            yield progress
         params = {"direction": axis, "sigma": float(sigma), "radius": radius}
         current = _run(pool, registry.BLUR, current, params,
                        keep=keep and current is texture)
@@ -368,7 +395,8 @@ def _draw_stamps(framebuffer, size, atlas, geometry) -> None:
 
 
 def release() -> None:
-    """Give the stamp shader and the cached brushes back before the GPU context goes."""
+    """Give the stamp shader, the atlases and the cached brushes back before the GPU context goes."""
     global _stamp_shader
     _stamp_shader = None
+    _atlases.clear()
     brushes.release()

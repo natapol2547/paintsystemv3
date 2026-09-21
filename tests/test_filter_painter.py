@@ -256,8 +256,9 @@ if available():
               and 0.0 <= fractions[0] and fractions[-1] <= 1.0,
               f"the progress only moves forward ({len(labels)} units)")
         names = {label for label, _fraction in labels}
-        check({"Painterly: reading the picture", "Painterly: painting, step 1 of 4",
-               "Painterly: painting, step 4 of 4", "Painterly: finishing"} <= names,
+        check({"Painterly: planning the strokes", "Painterly: reading the picture",
+               "Painterly: painting, step 1 of 4", "Painterly: painting, step 4 of 4",
+               "Painterly: finishing"} <= names,
               "and says which step of the painting it is on")
         check(worst(pixels(built), flat) <= BYTE_TOL,
               "a flat picture paints to itself: every stroke picks up the colour it lands on")
@@ -266,8 +267,13 @@ if available():
         source.pixels.foreach_set(detailed.ravel())
         source.update()
         first = pixels(layer_build.build_layer(bpy.context, tree, node)).copy()
+        uploaded = {key: entry[0]
+                    for key, entry in painter_build._atlases[node.painter_brush].items()}
         second = pixels(layer_build.build_layer(bpy.context, tree, node))
         check(bool(np.array_equal(first, second)), "the same settings paint the same pixels twice")
+        kept = painter_build._atlases[node.painter_brush]
+        check(uploaded and all(kept[key][0] is texture for key, texture in uploaded.items()),
+              f"the second time with the {len(uploaded)} atlases the first one uploaded")
         moved = np.abs(first - detailed).max(axis=2) > BYTE_TOL
         check(float(moved.mean()) > 0.05,
               f"and they are painted: {moved.mean():.0%} of the texels moved off the picture")
@@ -317,7 +323,7 @@ if available():
 # Python's own teardown would free them after the GPU context has gone,
 # which segfaults a background Blender. The textures made above are
 # module globals, so they go too.
-target = framebuffer = texture = None
+target = framebuffer = texture = uploaded = kept = None
 import_from("filters.composite").release()
 import_from("filters.blend_glsl").release()
 filters_core.release()

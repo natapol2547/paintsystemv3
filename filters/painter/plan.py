@@ -43,6 +43,11 @@ MIN_STAMPS = 50
 # At most one stamp per this many texels of the image.
 TEXELS_PER_STAMP = 8
 
+# The smallest value above zero a brush may hold for `covered_area` to
+# count it without resizing. Below it a product in the resize could
+# round to zero, and the count would no longer be v2's.
+SAFE_MIN = 1e-20
+
 # A sampled colour this transparent places no stamp, as in v2.
 MIN_ALPHA = 1e-6
 # A gradient field whose strongest edge is this weak has no edges at all,
@@ -183,7 +188,8 @@ def resize_bilinear(mask: np.ndarray, side: int) -> np.ndarray:
     Point sampling: every output texel reads the two by two input texels
     nearest it and nothing else, so shrinking a brush a long way skips
     most of it. That is why `resize` filters first; the count keeps this
-    one, because it is the one v2's count was taken on.
+    one, because it is the one v2's count was taken on, and
+    `covered_area` counts what it would leave without running it.
     """
     src_h, src_w = mask.shape
     if (src_h, src_w) == (side, side):
@@ -203,6 +209,76 @@ def resize_bilinear(mask: np.ndarray, side: int) -> np.ndarray:
     return (top * (1.0 - wy) + bottom * wy).astype(np.float32)
 
 
+def covered(mask: np.ndarray) -> np.ndarray | None:
+    """``mask > 0``, for `covered_area`, or None where it cannot stand in for the resize.
+
+    That is a mask with a value that is negative, not finite, or so close
+    to zero that the resize could round it away (`SAFE_MIN`). No shipped
+    brush has one; a brush made from an arbitrary image could.
+    """
+    if not np.isfinite(mask).all() or float(mask.min()) < 0.0:
+        return None
+    inside = mask > 0
+    if inside.any() and float(mask[inside].min()) < SAFE_MIN:
+        return None
+    return inside
+
+
+def covered_area(mask: np.ndarray, side: int, inside: np.ndarray | None) -> int:
+    """How many texels `resize_bilinear(mask, side)` leaves above zero, without resizing.
+
+    Every term of that resize is a texel of *mask*, never negative, times
+    a weight that is zero only where a sample lands on a whole texel. So
+    an output texel is above zero exactly where one of the texels it
+    reads with a weight is, and the count is a gather of *inside*, what
+    `covered` returned for *mask*, on the same sample positions -- a
+    tenth of the cost of the float resize at 4K. Where *inside* is None
+    the resize itself is counted.
+    """
+    src_h, src_w = mask.shape
+    if inside is None:
+        return int(np.count_nonzero(resize_bilinear(mask, side) > 0))
+    if (src_h, src_w) == (side, side):
+        return int(np.count_nonzero(inside))
+    if side <= 1:
+        return int(np.float32(mask.mean()) > 0)
+    # The positions `resize_bilinear` samples, computed the same way.
+    y = np.linspace(0, src_h - 1, side, dtype=np.float32)
+    x = np.linspace(0, src_w - 1, side, dtype=np.float32)
+    y0 = np.floor(y).astype(np.int32)
+    x0 = np.floor(x).astype(np.int32)
+    y1 = np.minimum(y0 + 1, src_h - 1)
+    x1 = np.minimum(x0 + 1, src_w - 1)
+    rows = inside.take(y0, axis=0)
+    rows |= inside.take(y1, axis=0) & (y != y0)[:, None]
+    hit = rows.take(x0, axis=1)
+    hit |= rows.take(x1, axis=1) & (x != x0)[None, :]
+    return int(np.count_nonzero(hit))
+
+
+class Areas:
+    """The mean covered area of a set of brushes at each side, as `stamp_count` takes it.
+
+    `painter.brushes` keeps one per preset, so the masks are compared
+    once per session and a rebuild at a size already seen looks its
+    area up. The table holds one number per side asked for.
+    """
+
+    def __init__(self, masks):
+        self._masks = list(masks)
+        self._inside = [covered(mask) for mask in self._masks]
+        self._means: dict[int, float] = {}
+
+    def mean(self, side: int) -> float:
+        """The covered area at *side*, averaged over the brushes; at least one texel."""
+        area = self._means.get(side)
+        if area is None:
+            counts = [covered_area(mask, side, inside)
+                      for mask, inside in zip(self._masks, self._inside)]
+            area = self._means[side] = max(1.0, sum(counts) / len(counts))
+        return area
+
+
 def resize(mask: np.ndarray, side: int) -> np.ndarray:
     """*mask* resized to *side* for drawing, averaged first when it shrinks.
 
@@ -210,6 +286,10 @@ def resize(mask: np.ndarray, side: int) -> np.ndarray:
     that factor before the bilinear step, so every input texel counts
     towards the stamp. The rows and columns that do not divide evenly
     are trimmed from both edges alike, which keeps the brush centred.
+
+    The bilinear step is `resize_bilinear`'s, one axis at a time and in
+    single precision, which is four times as fast and differs from it by
+    less than the half float the atlas is uploaded as can hold.
     """
     src = mask.shape[0]
     factor = src // side
@@ -217,16 +297,41 @@ def resize(mask: np.ndarray, side: int) -> np.ndarray:
         kept = src // factor * factor
         start = (src - kept) // 2
         block = mask[start:start + kept, start:start + kept]
-        cells = kept // factor
-        mask = block.reshape(cells, factor, cells, factor).mean(axis=(1, 3))
-    return resize_bilinear(mask, side)
+        # Strided sums rather than a reshaped mean, which copies the
+        # block to lay it out.
+        rows = block[0::factor].copy()
+        for offset in range(1, factor):
+            rows += block[offset::factor]
+        boxed = rows[:, 0::factor].copy()
+        for offset in range(1, factor):
+            boxed += rows[:, offset::factor]
+        boxed *= np.float32(1.0 / (factor * factor))
+        mask = boxed
+    if mask.shape == (side, side):
+        return mask.astype(np.float32, copy=True)
+    if side <= 1:
+        return np.full((1, 1), float(mask.mean()), dtype=np.float32)
+    src_h, src_w = mask.shape
+    y = np.linspace(0, src_h - 1, side, dtype=np.float32)
+    x = np.linspace(0, src_w - 1, side, dtype=np.float32)
+    y0 = np.floor(y).astype(np.int32)
+    x0 = np.floor(x).astype(np.int32)
+    y1 = np.minimum(y0 + 1, src_h - 1)
+    x1 = np.minimum(x0 + 1, src_w - 1)
+    wy = (y - y0.astype(np.float32))[:, None]
+    wx = (x - x0.astype(np.float32))[None, :]
+    rows = mask[y0] * (np.float32(1.0) - wy) + mask[y1] * wy
+    return (rows[:, x0] * (np.float32(1.0) - wx) + rows[:, x1] * wx).astype(np.float32)
 
 
 # -- the schedule -------------------------------------------------------------
 
 
-def schedule(settings: Settings, width: int, height: int, masks) -> list[Step]:
-    """The steps of a build of *width* by *height*, with v2's sizes and counts."""
+def schedule(settings: Settings, width: int, height: int, areas: Areas) -> list[Step]:
+    """The steps of a build of *width* by *height*, with v2's sizes and counts.
+
+    *areas* is the `Areas` of the brushes the build stamps with.
+    """
     steps = []
     for index in range(settings.steps):
         if settings.steps == 1:
@@ -241,19 +346,19 @@ def schedule(settings: Settings, width: int, height: int, masks) -> list[Step]:
                 settings.end_opacity - settings.start_opacity) * index / last
         size = max(1, int(scale * min(width, height)))
         steps.append(Step(index=index, size=size, opacity=opacity,
-                          count=stamp_count(settings.density, width, height, masks, size)))
+                          count=stamp_count(settings.density, width, height, areas.mean(size))))
     return steps
 
 
-def stamp_count(density: float, width: int, height: int, masks, size: int) -> int:
-    """v2's `calculate_brush_area_density`, on brushes resized to *size*.
+def stamp_count(density: float, width: int, height: int, area: float) -> int:
+    """v2's `calculate_brush_area_density`, for brushes covering *area* texels on average.
 
-    The area of a brush is the number of texels it covers at all, counted
-    on v2's own resize so that the count matches v2's exactly. A brush
-    that covers nothing counts as one texel rather than dividing by zero.
+    The area of a brush is the number of texels it covers at all once
+    resized to the step's size, counted on v2's own resize so that the
+    count matches v2's exactly; `Areas.mean` is that, and never less
+    than one texel, so a brush that covers nothing does not divide by
+    zero.
     """
-    areas = [int(np.count_nonzero(resize_bilinear(mask, size) > 0)) for mask in masks]
-    area = max(1.0, sum(areas) / len(areas))
     image = width * height
     count = int(image * density / (area * OVERLAP))
     return max(MIN_STAMPS, min(count, image // TEXELS_PER_STAMP))

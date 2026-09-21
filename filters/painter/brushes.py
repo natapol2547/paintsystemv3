@@ -5,9 +5,10 @@ Two presets ship with the add-on, the two v2 did, alongside v2's default
 circle. A brush is the alpha channel of its image, centred on a square,
 as v2 read one.
 
-A preset is read from disk once per session and kept. A filter layer
-rebuilds on its own after every change below it, and loading twenty-one
-PNGs each time would cost more than the painting does.
+A preset is read from disk once per session and kept, with the
+`plan.Areas` its stamp counts are taken from. A filter layer rebuilds on
+its own after every change below it, and loading twenty-one PNGs each
+time would cost more than the painting does.
 """
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ _FOLDER = os.path.join(os.path.dirname(__file__), "presets")
 _EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
 
 _cache: dict[str, list[np.ndarray]] = {}
+_areas: dict[str, plan.Areas] = {}
 
 
 def brush_items() -> list[tuple[str, str, str]]:
@@ -46,14 +48,23 @@ def brush_items() -> list[tuple[str, str, str]]:
 
 def masks(name: str) -> list[np.ndarray]:
     """The brushes of *name*, square float32 masks with row 0 at the bottom."""
-    if name == CIRCLE:
-        return [plan.circle()]
     if name not in _cache:
-        folder = next((folder for preset, _label, folder in PRESETS if preset == name), None)
-        if folder is None:
-            raise Refused(f"There is no brush preset called {name}")
-        _cache[name] = _load_folder(os.path.join(_FOLDER, folder))
+        if name == CIRCLE:
+            _cache[name] = [plan.circle()]
+        else:
+            folder = next((folder for preset, _label, folder in PRESETS if preset == name),
+                          None)
+            if folder is None:
+                raise Refused(f"There is no brush preset called {name}")
+            _cache[name] = _load_folder(os.path.join(_FOLDER, folder))
     return _cache[name]
+
+
+def areas(name: str) -> plan.Areas:
+    """The `plan.Areas` of the brushes of *name*, made once per session."""
+    if name not in _areas:
+        _areas[name] = plan.Areas(masks(name))
+    return _areas[name]
 
 
 def _load_folder(folder: str) -> list[np.ndarray]:
@@ -106,3 +117,4 @@ def mask_of(image: bpy.types.Image) -> np.ndarray:
 
 def release() -> None:
     _cache.clear()
+    _areas.clear()
