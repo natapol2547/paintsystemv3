@@ -8,7 +8,6 @@ from bpy_extras.node_utils import connect_sockets
 from . import stack_ops
 from ..common import blender_icon
 from ..props.channel import PaintSystemChannel, channel_socket_specs, channel_alpha_name
-from ..props.collection_manager import CollectionManager
 from ..props.selection import PaintSystemSelection
 from ..compiler.core import ensure_tree_uuid, mark_dirty, ps_trees, suspend_compile, tree_updated
 
@@ -153,11 +152,6 @@ class PaintSystemNodeTree(NodeTree):
     # -- channels ---------------------------------------------------------
 
     @property
-    def channels_manager(self):
-        return CollectionManager(self, 'channels', self, 'active_channel_index',
-                                 callback=self.on_channels_changed)
-
-    @property
     def active_channel(self):
         if 0 <= self.active_channel_index < len(self.channels):
             return self.channels[self.active_channel_index]
@@ -205,11 +199,27 @@ class PaintSystemNodeTree(NodeTree):
                     connect_sockets(input_node.outputs[sock_name], output_node.inputs[sock_name])
         return channel
 
+    def can_move_active_channel(self, offset: int) -> bool:
+        """Whether the active channel can move *offset* rows and stay in the list."""
+        return self.active_channel is not None and 0 <= self.active_channel_index + offset < len(self.channels)
+
+    def move_channel(self, index: int, new_index: int):
+        """Move the channel at *index* to *new_index* and make it active."""
+        # Clamped because Blender 5.3+ raises IndexError on an out-of-range target.
+        new_index = max(0, min(new_index, len(self.channels) - 1))
+        if index != new_index:
+            self.channels.move(index, new_index)
+        self.active_channel_index = new_index
+        self.on_channels_changed()
+
     def delete_channel(self, index: int):
-        self.channels_manager.remove(index)
+        """Remove the channel at *index*; the active index stays in range, or -1 once none are left."""
+        self.channels.remove(index)
+        self.active_channel_index = min(self.active_channel_index, len(self.channels) - 1)
+        self.on_channels_changed()
 
     def delete_active_channel(self):
-        self.delete_channel(self.channels_manager.active_index)
+        self.delete_channel(self.active_channel_index)
 
     # -- node queries -----------------------------------------------------
 

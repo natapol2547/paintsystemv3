@@ -73,44 +73,35 @@ class PAINTSYSTEM_OT_remove_channel(Operator):
         return {'FINISHED'}
 
 
-class PAINTSYSTEM_OT_move_channel_up(Operator):
+class ChannelMoveOperator:
+    """Move the active channel one row; `offset` is -1 for up and 1 for down."""
+    bl_options = {'REGISTER', 'UNDO'}
+    offset = 0
+
+    @classmethod
+    def poll(cls, context):
+        tree = _get_active_tree(context)
+        return tree is not None and tree.can_move_active_channel(cls.offset)
+
+    def execute(self, context):
+        tree = _get_active_tree(context)
+        index = tree.active_channel_index
+        tree.move_channel(index, index + self.offset)
+        return {'FINISHED'}
+
+
+class PAINTSYSTEM_OT_move_channel_up(ChannelMoveOperator, Operator):
     bl_idname = "paint_system.move_channel_up"
     bl_label = "Move Channel Up"
     bl_description = "Move the active channel up"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        tree = _get_active_tree(context)
-        return tree is not None and len(tree.channels) > 1 and tree.channels_manager.is_valid_move("UP")
-
-    def execute(self, context):
-        tree = _get_active_tree(context)
-        channel_manager = tree.channels_manager
-        channel_manager.move(channel_manager.active_index,
-                             channel_manager.active_index - 1)
-        tree.sync_group_node_sockets()
-        return {'FINISHED'}
+    offset = -1
 
 
-class PAINTSYSTEM_OT_move_channel_down(Operator):
+class PAINTSYSTEM_OT_move_channel_down(ChannelMoveOperator, Operator):
     bl_idname = "paint_system.move_channel_down"
     bl_label = "Move Channel Down"
     bl_description = "Move the active channel down"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        tree = _get_active_tree(context)
-        return tree is not None and len(tree.channels) > 1 and tree.channels_manager.is_valid_move("DOWN")
-
-    def execute(self, context):
-        tree = _get_active_tree(context)
-        channel_manager = tree.channels_manager
-        channel_manager.move(channel_manager.active_index,
-                             channel_manager.active_index + 1)
-        tree.sync_group_node_sockets()
-        return {'FINISHED'}
+    offset = 1
 
 
 classes = (
