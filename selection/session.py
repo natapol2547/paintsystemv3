@@ -1,35 +1,44 @@
-"""The live selection: what it applies to, and keeping what is derived from it in step (PS-091).
+"""Track what the live selection applies to and keep derived data up to date (PS-091).
 
-The selection is document data on each tree, but only one is live at a
-time: the selection of the active object's active tree. It applies to
-the active layer, whatever that is, the way a Photoshop selection stays
-put while the user switches layers. Its mask is built at the size of that
+Each tree stores its own selection, but only one is live at a time. That
+is the selection of the active object's active tree. It applies to the
+active layer, whatever that is, the way a Photoshop selection stays put
+while the user switches layers. Its mask is built at the size of that
 layer's image and sampled through that layer's UV map.
 
-Nothing in Blender reports a change to the ops: writing them from an
-operator or a script tags no depsgraph update and notifies no message bus
-subscriber. So everything that can change what the selection shows calls
-`notify()`: the selection operators and tools after an edit,
-`context.update_active_image` when the active layer, tree, object or
-material changes, the mode and scene subscriptions, a geometry update of
-an object (a renamed or removed UV map), and the undo, redo and load
-handlers. `notify()` only schedules a timer, which makes it safe from an
-operator, a handler, a message bus callback or a draw callback, and
-coalesces a burst of calls into one sync.
+Blender reports no change to the ops. Writing them from an operator or a
+script tags no depsgraph update and notifies no message bus subscriber.
+So everything that can change what the selection shows calls `notify()`:
 
-The timer runs `sync()`. It resolves the target, compares a `State` with
-the one it last synced and stops there when nothing changed and the mask
-is still cached. Otherwise it builds the mask once, remembering a failure
-per digest so a mask that cannot be built is not tried again on every
-tick, and retrying `GPU_ERROR` a few times. A built mask that selects
-nothing, such as a box dragged over empty background, counts as no
-selection (`State.empty`) while its ops stay on the tree. A sync that
-gets past the comparison hands the state on to `stencil.sync`, then `overlay.sync`,
-and tags the 3D views and image editors for redraw. A consumer that
-raises is logged, and the next sync reaches the consumers again.
-`notify(force=True)` forgets the last state first, so that sync reaches
-everything even when the state is unchanged: undo, redo and a file read
-restore the ops and Blender's own settings independently.
+- the selection operators and tools, after an edit
+- `context.update_active_image`, when the active layer, tree, object or
+  material changes
+- the mode and scene subscriptions
+- a geometry update of an object (a renamed or removed UV map)
+- the undo, redo and load handlers
+
+`notify()` only schedules a timer. So it is safe to call from an
+operator, a handler, a message bus callback or a draw callback, and a
+burst of calls becomes one sync.
+
+The timer runs `sync()`:
+
+- It resolves the target and compares a `State` with the last one. It
+  stops there when nothing changed and the mask is still cached.
+- Otherwise it builds the mask once. A failure is remembered per digest,
+  so a mask that cannot be built is not tried again on every tick.
+  `GPU_ERROR` is retried a few times.
+- A built mask that selects nothing, such as a box dragged over empty
+  background, counts as no selection (`State.empty`). Its ops stay on
+  the tree.
+- It hands the state to `stencil.sync`, then `overlay.sync`, and tags
+  the 3D views and image editors for redraw. A consumer that raises is
+  logged, and the next sync reaches the consumers again.
+
+`notify(force=True)` forgets the last state first, so the sync reaches
+everything even when the state is unchanged. Undo, redo and a file read
+need this, because they restore the ops and Blender's own settings
+separately.
 """
 import dataclasses
 import logging
@@ -49,10 +58,10 @@ RETRY_INTERVAL = 0.25
 """Seconds before a build that hit `GPU_ERROR` is tried again."""
 
 RETRY_LIMIT = 4
-"""Tries of a transient failure for one state before the message stays up."""
+"""How many times a `GPU_ERROR` build is tried for one state before its message stays up."""
 
 FAILURE_MEMO_LIMIT = 64
-"""Failed digests remembered before the memo starts over."""
+"""How many failed digests are remembered before the memo is cleared."""
 
 NO_TREE = "NO_TREE"
 NO_LAYER = "NO_LAYER"
@@ -103,14 +112,15 @@ class Target:
 class State:
     """What the derived outputs depend on, as values that survive undo.
 
-    `selected` is True when the live tree's selection has ops. `digest`
-    is the mask's cache key, empty without a target. `reason` and
-    `message` are empty when the mask is available, else a target problem
-    (`NO_LAYER`, `NO_IMAGE`, `UDIM`, `NO_UV_MAP`) or a `MaskUnavailable`
-    reason, with its UI message. `empty` is True when the mask was built
-    and selects nothing (`SelectionMask.is_empty`): the ops stay, but it
-    counts as no selection, so painting is not clipped and nothing is
-    drawn.
+    - `selected` is True when the live tree's selection has ops.
+    - `digest` is the mask's cache key. It is empty without a target.
+    - `reason` and `message` are empty when the mask is available.
+      Otherwise they hold a target problem (`NO_LAYER`, `NO_IMAGE`,
+      `UDIM`, `NO_UV_MAP`) or a `MaskUnavailable` reason, and its UI
+      message.
+    - `empty` is True when the mask was built and selects nothing
+      (`SelectionMask.is_empty`). The ops stay, but it counts as no
+      selection, so painting is not clipped and nothing is drawn.
     """
     scene_uid: int = 0
     tree_uid: int = 0
@@ -128,7 +138,7 @@ class State:
 
     @property
     def active(self) -> bool:
-        """A selection exists, and its mask is built, cached and selects something."""
+        """True when a selection exists and its mask is built, cached and selects something."""
         return self.selected and not self.reason and not self.empty
 
 
@@ -186,11 +196,12 @@ def _state(context) -> tuple[State, Target | None]:
 
 
 def _build(state: State, target: Target) -> State:
-    """Build the mask for *state*, turning a failure into the state's reason and an empty mask into `empty`.
+    """Build the mask for *state* and return the state with the result.
 
-    Failures that depend on the objects a `VIEW` op was drawn on
-    (`raster.GEOMETRY_REASONS`) are not remembered: several object states
-    share one digest, and fixing the cause changes no op.
+    A failure becomes the state's reason. A mask that selects nothing
+    sets `empty`. Failures that depend on the objects a `VIEW` op was
+    drawn on (`raster.GEOMETRY_REASONS`) are not remembered. Several
+    object states share one digest, and fixing the cause changes no op.
     """
     if core.gpu_known() is not True:
         # Never start a background GPU context from here (see gpu_passes.core).
@@ -215,11 +226,12 @@ def _build(state: State, target: Target) -> State:
 
 
 def sync(context=None, force: bool = False) -> State:
-    """Bring everything derived from the live selection in step with it.
+    """Bring everything derived from the live selection up to date with it.
 
-    What the timer runs; tests and the save handler call it directly.
-    Cheap when nothing changed. *force* forgets the last state, so the
-    state reaches every consumer even when it is unchanged.
+    The timer runs this. Tests and the save handler call it directly. It
+    is cheap when nothing changed. *force* forgets the last state and the
+    `GPU_ERROR` retry counts, so the state reaches every consumer even
+    when it is unchanged.
     """
     global _last, _consumer_failed
     context = context or bpy.context
@@ -230,12 +242,14 @@ def sync(context=None, force: bool = False) -> State:
     built = False
     if target is not None and state.selected and not state.reason:
         if _last is not None and state.digest == _last.digest:
-            # The same digest is the same mask, so it is still as empty.
+            # The same digest means the same mask, so its `empty` flag
+            # still holds.
             state = dataclasses.replace(state, empty=_last.empty)
         if state != _last or raster.peek_mask(target.tree.selection, target.size, target.tile) is None:
             state = _build(state, target)
-            # A mask rebuilt after an eviction is news even when the state
-            # compares equal; a build that failed the same way again is not.
+            # A mask rebuilt after an eviction must reach the consumers
+            # even when the state compares equal. A build that failed the
+            # same way again need not.
             built = state.active
     if state == _last and not built and not _consumer_failed:
         return state
@@ -245,8 +259,9 @@ def sync(context=None, force: bool = False) -> State:
         try:
             consumer.sync(state, target)
         except Exception:
-            # Logged, not raised: the timer would stop. The next sync reaches
-            # the consumers again, even with an equal state.
+            # Log instead of raising, because raising would stop the
+            # timer. The next sync reaches the consumers again, even with
+            # an equal state.
             log.exception("Selection could not update %s", consumer.__name__)
             _consumer_failed = True
     redraw_paint_views(getattr(context, 'window_manager', None))
@@ -270,7 +285,7 @@ def notify(force: bool = False) -> None:
     """Schedule a sync on the next timer tick. Safe from anywhere, including draw callbacks.
 
     *force* makes that sync reach every consumer even when the state is
-    unchanged; it holds until the tick runs, whatever later calls pass.
+    unchanged. It holds until the tick runs, whatever later calls pass.
     """
     global _pending_force
     if force:
@@ -285,9 +300,10 @@ def current() -> State:
 
 
 def label(state: State) -> str:
-    """Short text for *state*'s problem that fits a sidebar line; `state.message` has the full sentence.
+    """Short text for *state*'s problem that fits on a sidebar line.
 
-    `NOTHING_SELECTED` for an empty mask, which is not a problem.
+    `state.message` has the full sentence. Returns `NOTHING_SELECTED` for
+    an empty mask, which is not a problem.
     """
     if state.empty:
         return NOTHING_SELECTED
@@ -297,13 +313,13 @@ def label(state: State) -> str:
 
 
 def forget_failures() -> None:
-    """Drop remembered failures; after a file read, with the raster cache."""
+    """Drop remembered failures. Called after a file read, along with `raster.invalidate`."""
     _failures.clear()
     _retries.clear()
 
 
 def release() -> None:
-    """Stop the timer and forget everything; on unregister."""
+    """Stop the timer and forget everything. Called on unregister."""
     global _last, _pending_force, _consumer_failed
     if bpy.app.timers.is_registered(_tick):
         bpy.app.timers.unregister(_tick)

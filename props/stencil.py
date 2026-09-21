@@ -1,16 +1,16 @@
-"""The user's Stencil Mask settings, held while a selection clips strokes (PS-091).
+"""Backups of the user's Stencil Mask settings while a selection uses them (PS-091).
 
-While a selection limits brush strokes, Blender's Stencil Mask settings
-belong to it (`selection/stencil.py`). Each backup lives where memfile
-undo treats it the same way as the setting it backs up:
+While a selection clips brush strokes, it takes over Blender's Stencil
+Mask settings (`selection/stencil.py`). Each backup is stored where
+memfile undo treats it the same way as the setting it backs up:
 
-* The image paint settings are tool settings, which undo keeps as they
-  are. Their backup is on the window manager, which undo keeps too and
-  which files do not save.
+* Image paint settings are tool settings, which undo leaves alone. Their
+  backup is on the window manager, which undo also leaves alone and which
+  is not saved to files.
 * A mesh's stencil UV map is mesh data, which undo restores. Its backup
   is on the scene (`PaintSystemSceneSettings.stencil_meshes`), which undo
-  restores too. The window manager entry of the scene keeps a copy, used
-  only when the scene is removed while the selection holds it.
+  also restores. The scene's window manager entry keeps a copy, used
+  only if the scene is removed while the selection holds it.
 """
 import bpy
 from bpy.props import BoolProperty, CollectionProperty, PointerProperty, StringProperty

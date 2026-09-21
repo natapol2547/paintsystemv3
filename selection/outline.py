@@ -1,49 +1,47 @@
-"""Lookup tables that let one fragment pass fill and feather a lasso (PS-091).
+"""CPU lookup tables that let one fragment pass fill and feather a lasso (PS-091).
 
-A lasso outline can have thousands of points, and a fragment shader
-cannot loop over all of them per texel at 4K. This module does the
-per-outline work once, on the CPU with numpy, and packs the result into
-float arrays the pass in `raster.py` uploads as textures. Nothing here
-touches `bpy` or `gpu`.
+A lasso can have thousands of points, too many for a fragment shader to
+loop over for every texel at 4K. This module does the per-outline work
+once, with numpy, and packs it into float arrays. `raster.py` uploads
+them as textures. Nothing here uses `bpy` or `gpu`.
 
-Two tables are built, both in texel space with texel centres at
-``(i + 0.5, j + 0.5)``:
+Both tables are in texel space, with texel centres at
+``(i + 0.5, j + 0.5)``.
 
-- **Parity.** For every texel row, the columns at which the outline
-  crosses the row's centre line, sorted. A texel is inside when an odd
-  number of crossings lie at or left of its column. The crossings of a
-  row are split into spans of `SPAN_WIDTH` columns, so the shader starts
-  from the span its column falls in and reads a handful of keys rather
-  than the whole row. The rule is the even-odd test of a ray to the left
-  of the texel centre, with an edge counted when its end points lie on
-  opposite sides of the centre line, one of them possibly on it.
-- **Distance.** Only a feathered or anti-aliased lasso needs it. The
-  image is divided into square cells, and each cell lists the segments
-  that can be the nearest one to some texel in it, sorted by their
-  distance from the cell centre. The shader walks the list and stops
-  once the next segment cannot be closer than the best so far. Segment
-  end points are stored relative to the cell and clipped to the cell
-  grown by the half width and a texel, which keeps them small enough
-  that float32 loses nothing that matters.
+- **Parity (fill).** For each texel row, the sorted columns where the
+  outline crosses the row's centre line. A texel is inside when an odd
+  number of crossings lie at or left of its column. This is the even-odd
+  rule with a ray going left from the texel centre. An edge counts when
+  its end points lie on opposite sides of the centre line
+  (`parity_tables` says how an end point exactly on the line counts).
+  Each row is split into spans of `SPAN_WIDTH` columns, so the shader
+  reads only the few keys in its own span, not the whole row.
+- **Distance (soft edge).** Only a feathered or anti-aliased lasso needs
+  it. The image is split into square cells. Each cell lists the segments
+  that can be the nearest one to some texel in it, sorted by distance
+  from the cell centre. The shader walks the list and stops once no later
+  segment can be closer than the best so far. Segment end points are
+  stored relative to the cell and clipped to the cell grown by the half
+  width plus one texel. That keeps them small enough for float32 to lose
+  nothing that matters.
 
-Every limit below raises `OutlineTooComplex` instead of allocating
-without bound: an outline that crosses millions of rows or cells is not
-something a selection tool produces, and failing is better than
-stalling Blender.
+Each limit below raises `OutlineTooComplex` instead of allocating without
+bound. A selection tool never makes an outline that crosses millions of
+rows or cells, and failing is better than stalling Blender.
 """
 import math
 
 import numpy as np
 
 DATA_WIDTH = 4096
-"""Width of the one-dimensional data textures (keys, entries, bounds).
-Their height grows with the data."""
+"""Width of the textures that hold one-dimensional data (keys, entries,
+bounds). Their height grows with the data."""
 
 SPAN_WIDTH = 64
 """Columns covered by one parity span."""
 
 MAX_CELL = 128
-"""Largest distance cell, in texels, used from a half width above 64."""
+"""Largest distance cell, in texels, used when the half width is above 64."""
 
 MARGIN = 0.01
 """Slack in texels on every distance comparison that prunes a segment, so
@@ -73,9 +71,9 @@ def closed_outline(points) -> tuple[np.ndarray, np.ndarray] | None:
     runs from ``a[k]`` to ``b[k]`` and the last edge closes the outline.
     Consecutive duplicate points, including a last point equal to the
     first, are dropped first. None when fewer than three points remain.
-    Points that repeat non-consecutively, such as ``(a, b, a, b)``, are
-    kept, and like any collinear outline they draw a soft line when
-    feathered or anti-aliased.
+    Points that repeat but not in a row, such as ``(a, b, a, b)``, are
+    kept. Like any collinear outline, they draw a soft line when feathered
+    or anti-aliased.
     """
     points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
     if len(points):
@@ -130,9 +128,9 @@ def parity_tables(a: np.ndarray, b: np.ndarray, width: int,
       spans before it.
     - ``keys``, float32 with a length that is a multiple of `DATA_WIDTH`:
       every row's crossing columns, rows in order and sorted within a row.
-      A crossing at x has key ``clamp(floor(x - 0.5) + 1, 0, width)``, the
-      first column whose centre lies strictly right of it, so texel ``i``
-      counts it when ``key <= i``.
+      A crossing at x has key ``clamp(floor(x - 0.5) + 1, 0, width)``.
+      That is the first column whose centre is strictly right of x, so
+      texel ``i`` counts the crossing when ``key <= i``.
 
     Row ``j`` holds a crossing of every edge with ``ceil(ymin - 0.5) <= j <
     ceil(ymax - 0.5)``. That half-open range counts a vertex exactly on a
@@ -160,8 +158,8 @@ def parity_tables(a: np.ndarray, b: np.ndarray, width: int,
     row = composite // (width + 1)
     key = composite - row * (width + 1)
 
-    # A key equal to `width` lies right of every texel and is never
-    # counted; it falls in an extra span column that is dropped below.
+    # A key equal to `width` is right of every texel and never counts. It
+    # goes into an extra span column that is dropped below.
     columns = -(-width // SPAN_WIDTH)
     slot = row * (columns + 1) + np.minimum(key // SPAN_WIDTH, columns)
     per_slot = np.bincount(slot, minlength=height * (columns + 1))
@@ -177,9 +175,9 @@ def parity_tables(a: np.ndarray, b: np.ndarray, width: int,
 def cell_size(half_width: float) -> int:
     """The distance cell size for a half width, in texels.
 
-    Small cells keep the lists short for a thin edge; large cells keep
-    their number down for a wide feather, where every cell near the
-    outline lists much the same segments anyway.
+    Small cells keep the lists short for a thin edge. Large cells keep the
+    number of cells down for a wide feather, where the cells near the
+    outline list mostly the same segments anyway.
     """
     if half_width <= 8.0:
         return 32
@@ -218,10 +216,10 @@ def distance_tables(a: np.ndarray, b: np.ndarray, width: int, height: int,
     centre is below ``min(half_width + h, nearest + 2 * h) + MARGIN``,
     where ``h`` is half the cell diagonal and ``nearest`` is the smallest
     ``d`` of any segment in that cell. No texel in the cell is further
-    than ``h`` from its centre, so a segment beyond that limit is either
+    than ``h`` from the centre. So a segment past that limit is either
     further than the half width from every texel, where coverage no
-    longer depends on the distance, or further than the nearest segment
-    is from all of them.
+    longer depends on the distance, or further from every texel than the
+    nearest segment is.
     """
     columns = -(-width // cell)
     rows = -(-height // cell)
@@ -265,18 +263,20 @@ def distance_tables(a: np.ndarray, b: np.ndarray, width: int, height: int,
     segment, cell_id, distance = segment[keep], cell_id[keep], distance[keep]
     if len(segment) > MAX_ENTRIES:
         raise OutlineTooComplex("the outline needs too many distance entries")
-    # One sort by cell, then by distance within the cell: every distance
-    # is below `reach`, so a power of two above it separates the cells.
+    # Sort by cell, then by distance within the cell, in one sort. Every
+    # distance is below `reach`, so scaling the cell id by a power of two
+    # above it keeps the cells apart.
     order = np.argsort(cell_id * 2.0 ** math.ceil(math.log2(reach + 2.0)) + distance, kind='stable')
     segment, cell_id, distance = segment[order], cell_id[order], distance[order]
 
     origin = np.stack(((cell_id % columns) * cell, (cell_id // columns) * cell), axis=1).astype(np.float64)
     start_point = a[segment] - origin
     end_point = b[segment] - origin
-    # Clip every entry to its cell grown by the half width and a texel. A
-    # point of the segment outside that box is further than the half width
-    # from every texel centre in the cell, so the distances that matter are
-    # unchanged, and the stored end points stay small enough for float32.
+    # Clip each entry to its cell grown by the half width plus one texel.
+    # Any part of the segment outside that box is further than the half
+    # width from every texel centre in the cell. So the distances that
+    # matter do not change, and the stored end points stay small enough
+    # for float32.
     box_low = -(half_width + 1.0)
     box_high = cell + half_width + 1.0
     outside = ((np.minimum(start_point, end_point) < box_low)

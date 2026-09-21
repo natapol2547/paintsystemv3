@@ -1,13 +1,14 @@
-"""The outline a selection tool draws while the user drags it (PS-093).
+"""Draw the outline of a selection drag as marching ants (PS-093).
 
-The outline is drawn as marching ants in the region the drag started in,
-with the overlay's own `overlay_shader.ANT_GLSL` and `overlay.ant_style`,
-so it crawls in step with the ants of the selection it will become. Each
-segment is a quad as wide as the overlay's line, drawn clockwise like the
-overlay's outline, since the dash direction follows the tangent.
+The ants are drawn in the region the drag started in. They use the
+overlay's own `overlay_shader.ANT_GLSL` and `overlay.ant_style`, so they
+crawl in step with the ants of the selection the drag becomes. Each
+segment is a quad as wide as the overlay's line. Segments are drawn
+clockwise like the overlay's outline, because the dash direction
+follows the tangent.
 
 The overlay's redraw timer runs only while a selection shows, so the
-preview owns a window timer; the operator's `modal` calls `tick` on its
+preview owns a window timer. The operator's `modal` calls `tick` on its
 `TIMER` events to keep the dashes moving while the mouse stays still.
 """
 import bpy
@@ -56,7 +57,7 @@ def _get_shader() -> gpu.types.GPUShader:
 
 
 def line_width(context) -> int:
-    """Width of the preview line in pixels: the overlay's ants at the current UI scale."""
+    """Width of the preview line in pixels. It matches the overlay's ants at the current UI scale."""
     return round(2.0 * overlay.LINE_HALF_WIDTH * context.preferences.system.ui_scale)
 
 
@@ -76,7 +77,7 @@ class Preview:
         self._region.tag_redraw()
 
     def tick(self) -> None:
-        """Redraw so the dashes crawl; on the timer's events."""
+        """Redraw so the dashes crawl. Called on the timer's events."""
         self._region.tag_redraw()
 
     def remove(self) -> None:
@@ -110,6 +111,6 @@ class Preview:
 
 
 def release() -> None:
-    """Free the shader while the GPU context exists; on unregister."""
+    """Free the shader while the GPU context exists. Called on unregister."""
     global _shader
     _shader = None

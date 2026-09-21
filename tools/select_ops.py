@@ -1,18 +1,18 @@
 """Rectangle, ellipse and lasso selection in the 3D view (PS-093).
 
 Each operator appends one `VIEW` op to the active tree's selection. A
-drag records its outline in region pixels together with the view it was
-drawn in: the region size, the view matrix and the window matrix. The
-op itself stores the view as object-to-view (`view_matrix @
-matrix_world`), so the selection stays on the texels it covered when the
-object moves later. The operators do no GPU work; the session's tick
-builds the mask after `execute`.
+drag records its outline in region pixels, together with the view it
+was drawn in. That is the region size, the view matrix and the window
+matrix. The op itself stores the view as object-to-view (`view_matrix @
+matrix_world`). So the selection stays on the texels it covered when
+the object moves later. The operators do no GPU work. The session's
+tick builds the mask after `execute`.
 
 The tool keymap (`workspace_tools`) picks the mode from the modifiers
-held when the drag starts. Shift and Alt pressed after that make a box
-or ellipse square or drawn from its centre; a modifier held from the
-start only counts once it has been released and pressed again, so the
-Shift of an Add drag does not also make a square.
+held when the drag starts. Shift pressed after that makes a box or
+ellipse square. Alt pressed after that draws it from its centre. A
+modifier held from the start only counts once it has been released and
+pressed again. So the Shift of an Add drag does not also make a square.
 
 `execute` works from the stored properties alone, so Adjust Last
 Operation and the tests run it without a region.
@@ -38,7 +38,7 @@ _MOVE_EVENTS = frozenset(('MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'))
 
 
 def _flat(matrix) -> list[float]:
-    """*matrix* as 16 floats, column first, the order a `subtype='MATRIX'` float vector stores."""
+    """*matrix* as 16 floats in column order, the order a `subtype='MATRIX'` float vector stores."""
     return [value for column in matrix.col for value in column]
 
 
@@ -157,8 +157,8 @@ class _ShapeSelect:
         points = [tuple(point.co) for point in self.points]
         if shapes.degenerate(self.kind, points):
             return {'CANCELLED'}
-        # The op stores the view relative to the object, which a flat
-        # object makes impossible to invert later.
+        # The op stores the view relative to the object. For a flat
+        # object, that view could not be inverted later.
         if not raster.invertible(target.object.matrix_world):
             self.report({'WARNING'}, "Can't select on an object scaled to zero")
             return {'CANCELLED'}

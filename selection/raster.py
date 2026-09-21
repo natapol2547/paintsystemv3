@@ -1,67 +1,66 @@
 """Selection masks, built on the GPU from the ops on the tree (PS-091).
 
 A mask is one `R32F` texture the size of the layer image (or of one UDIM
-tile of it), holding coverage from 0 to 1 per texel. It is derived data:
-`get_mask` builds it from `PaintSystemSelection.ops` and nothing stores
-it, so undo, redo and a reload need no mask history.
+tile), with coverage from 0 to 1 per texel. `get_mask` builds it from
+`PaintSystemSelection.ops`, and `peek_mask` returns a cached one for draw
+callbacks. Nothing stores masks, so undo, redo and a reload need no mask
+history.
 
-Every op is one full-screen pass. The fragment shader evaluates the op's
-coverage at the texel centre and combines it with the previous mask,
-which it reads with `texelFetch`, so the passes ping-pong between two
-targets and never blend:
+Building a mask:
 
-- `REPLACE` writes the coverage `c`, `ADD` writes `max(m, c)`,
-  `SUBTRACT` writes `min(m, 1 - c)` and `INTERSECT` writes `min(m, c)`.
-  `INVERT` writes `1 - m` whatever its mode says. A first op with any
-  mode other than `REPLACE` combines with an empty mask.
+- Each op is one full-screen pass. The fragment shader computes the op's
+  coverage `c` at the texel centre and combines it with the previous
+  mask `m`, read with `texelFetch`. So the passes ping-pong between two
+  targets and never blend. `REPLACE` writes `c`, `ADD` writes
+  `max(m, c)`, `SUBTRACT` writes `min(m, 1 - c)` and `INTERSECT` writes
+  `min(m, c)`. `INVERT` writes `1 - m` whatever its mode says. A first
+  op with a mode other than `REPLACE` combines with an empty mask.
 - Coverage comes from a signed distance `s` in texels, positive inside.
-  With `half_width = 0.5 * max(feather, 1 if antialias else 0)` it is
-  `s > 0` for a hard edge and the smoothstep of
-  `(s + half_width) / (2 * half_width)` otherwise, so a feathered edge
-  rises from 0 to 1 over the feather width, centred on the outline.
-  With a hard edge (no feather, anti-alias off), a box or ellipse
-  excludes texel centres that lie exactly on its outline. A lasso uses
-  the half-open even-odd rule, which counts a centre on a right or
-  bottom edge and not one on a left or top edge. The same rectangle
-  drawn as a box and as a lasso can therefore differ by one column and
-  one row when its edges pass through texel centres.
+  With `half_width = 0.5 * max(feather, 1 if antialias else 0)`, a hard
+  edge is `s > 0` and a soft edge is the smoothstep of
+  `(s + half_width) / (2 * half_width)`. So a feathered edge rises from
+  0 to 1 over the feather width, centred on the outline.
+- On a hard edge (no feather, anti-alias off), a box or ellipse leaves
+  out texel centres exactly on its outline. A lasso uses the half-open
+  even-odd rule, which counts a centre on a right or bottom edge but not
+  one on a left or top edge. So the same rectangle drawn as a box and as
+  a lasso can differ by one column and one row when its edges pass
+  through texel centres.
 - Box and ellipse distances are analytic. The ellipse uses Eberly's
-  robust distance with the root bisected in `u = s + 1`, which float32
-  resolves to within about 3e-7 of the longer radius; texels far from
-  the outline skip it. Shape parameters are split into whole and
-  fractional texels before upload: a float32 texel coordinate alone is
-  off by up to 2.4e-4 texels at 4K, which moves feathered coverage by
-  more than 1e-5.
+  robust distance, bisecting the root in `u = s + 1`, which float32
+  resolves to about 3e-7 of the longer radius. Texels far from the
+  outline skip it. Shape parameters are uploaded split into whole and
+  fractional texels. A plain float32 texel coordinate is off by up to
+  2.4e-4 texels at 4K, which moves feathered coverage by more than 1e-5.
 - Lasso fill and distance come from the tables `outline.py` builds.
-- An outlined `VIEW` op, drawn in the 3D view, is drawn by
-  `view_raster.run_view_pass` through the texel map of its object. Its
-  outline goes through the same shape and lasso shaders compiled with
-  `SIGNED_DISTANCE`, which write the clamped signed distance itself.
+- An outlined `VIEW` op (drawn in the 3D view) goes to
+  `view_raster.run_view_pass`, which draws it through its object's texel
+  map. Its outline uses the same shape and lasso shaders, compiled with
+  `SIGNED_DISTANCE` so they write the clamped signed distance instead.
+- A build draws in bands (`gpu_passes.core.draw_in_bands`) and reads one
+  texel back between bands. That limits the GPU time of each command, so
+  a slow software rasteriser or a dense lasso with a wide feather is far
+  less likely to trip a driver watchdog.
+- The passes set blend, depth test and depth write and restore them.
+  They also turn face culling off and colour writes on and leave them
+  that way, because `gpu.state` cannot read either.
 
-Masks are cached by content: the key is the digest of the op chain, the
-target size and the UDIM tile (`PaintSystemSelection.prefix_digests`),
-so an undo, a redo or a second tree with the same ops finds the mask
-already built. A `VIEW` op's part of the digest includes the content key
-of its object's surface, which `view_key` provides. A build caches the
-final mask and the one before it, which makes removing the last op, or an
-undo of an appended op, free.
-Before each build, the least recently used masks are evicted until the
-build's targets fit `CACHE_BUDGET`. The cached prefix the build resumes
-from is never evicted, so after a build the cache can hold that one
-mask over the budget. Any mask, including the one the previous call
-returned, may be evicted by the next `get_mask`. An evicted mask's
-`texture` raises `ReferenceError`, so callers must not keep masks
-across calls, redraws or timer ticks but call `get_mask` or `peek_mask`
-again.
+Caching:
 
-A build draws in bands (`gpu_passes.core.draw_in_bands`), reading one
-texel back between bands. That bounds the GPU time of any single
-command, so a slow software rasteriser or a dense lasso with a wide
-feather is far less likely to trip a driver watchdog.
-
-The passes set blend, depth test and depth write and put them back.
-They also turn face culling off and colour writes on, and leave them
-that way, because `gpu.state` cannot read either.
+- The cache key is the digest of the op chain, the target size and the
+  UDIM tile (`PaintSystemSelection.prefix_digests`). So an undo, a redo
+  or a second tree with the same ops finds the mask already built. A
+  `VIEW` op's part of the digest includes the content key of its
+  object's surface, which `view_key` provides.
+- A build caches the final mask and the one before it. That makes
+  removing the last op, or undoing an appended op, free.
+- Before each build, the least recently used masks are evicted until the
+  build's targets fit `CACHE_BUDGET`. The cached prefix the build resumes
+  from is never evicted, so the cache can end up one mask over budget.
+- The next `get_mask` may evict any mask, including the one the previous
+  call returned. An evicted mask's `texture` raises `ReferenceError`. So
+  do not keep masks across calls, redraws or timer ticks. Call
+  `get_mask` or `peek_mask` again.
 """
 import logging
 
@@ -92,15 +91,15 @@ SELF_TEST_SIZE = 64
 """Width and height of the self-test target, in texels."""
 
 SELF_TEST_WIDE_SIZE = (140, 64)
-"""Width and height of the second self-test target, in texels: three
-span columns wide, so its lasso tables use more than one."""
+"""Width and height of the second self-test target, in texels. It is
+three span columns wide, so its lasso tables use more than one."""
 
 SELF_TEST_TOLERANCE = 1e-4
 """Largest difference from the expected values the self-test accepts."""
 
 SUPPORTED_KINDS = frozenset(('BOX', 'ELLIPSE', 'LASSO', 'ALL', 'INVERT'))
-"""Op kinds this module rasterises. `FACES`, `RASTER` and `TRANSFORM`
-arrive with the tools that create them (PS-093, PS-094)."""
+"""Op kinds this module can rasterise. `FACES`, `RASTER` and `TRANSFORM`
+will be added with the tools that create them (PS-093, PS-094)."""
 
 _MODE_UNIFORMS = {'REPLACE': 0, 'ADD': 1, 'SUBTRACT': 2, 'INTERSECT': 3}
 _SHAPE_ALL, _SHAPE_BOX, _SHAPE_ELLIPSE, _SHAPE_INVERT, _SHAPE_NOTHING = range(5)
@@ -124,13 +123,15 @@ MESSAGES = {
 }
 
 GEOMETRY_REASONS = frozenset(('SURFACE', 'VIEW', 'EDIT_MODE'))
-"""Reasons that depend on the objects a selection was drawn on, not on its
-ops, so a remembered failure would outlive the cause."""
+"""Failure reasons that depend on the objects a selection was drawn on,
+not on its ops. Remembering such a failure by digest would outlive its
+cause."""
 
-# GLSL shared with view_raster's texel pass: the coverage at signed
-# distance s from an edge, how an op's coverage meets the previous mask,
-# and the previous mask's value. Both shaders declare the `mode` and
-# `use_previous` push constants and the `previous` sampler these read.
+# GLSL shared with view_raster's texel pass. `edge_profile` turns a signed
+# distance s from an edge into coverage, `combine` merges an op's coverage
+# with the previous mask, and `previous_at` reads the previous mask. Both
+# shaders declare the `mode` and `use_previous` push constants and the
+# `previous` sampler these functions read.
 COMMON_SOURCE = """
 float edge_profile(float s, float edge_half_width)
 {
@@ -163,8 +164,9 @@ float previous_at(ivec2 texel)
 
 _SHAPE_FRAGMENT_SOURCE = COMMON_SOURCE + """
 /* Eberly, "Distance from a Point to an Ellipse, an Ellipsoid, or a
-   Hyperellipsoid". The root is bracketed in u = s + 1 rather than s, so
-   the bracket never needs a value near -1 that float32 cannot hold. */
+   Hyperellipsoid". The root is bracketed in u = s + 1 instead of s, so
+   the bracket never needs a value of s near -1, which float32 cannot
+   hold precisely. */
 float ellipse_root(float r0_minus_1, float n0, float z1, float g)
 {
   float u0 = z1;
@@ -253,9 +255,9 @@ void main()
     }
     float z0 = y.x / e.x;
     float z1 = y.y / e.y;
-    /* The ellipse scaled about its centre through the texel stays at
-       least |rho - 1| * e1 from the outline, so a texel further than the
-       half width needs no distance at all. */
+    /* The ellipse scaled about its centre to pass through the texel stays
+       at least |rho - 1| * e1 from the outline. So a texel whose bound
+       reaches the half width needs no exact distance. */
     float bound = abs(length(vec2(z0, z1)) - 1.0) * e.y;
     if (bound >= half_width) {
       coverage = z0 * z0 + z1 * z1 < 1.0 ? 1.0 : 0.0;
@@ -362,7 +364,7 @@ _gpu: dict = {}
 
 
 def _mask_shader(name: str, fragment: str, lasso: bool) -> gpu.types.GPUShader:
-    """A mask pass shader. Push constants stay under Vulkan's 128 bytes."""
+    """Build a mask pass shader. Its push constants stay under Vulkan's 128 bytes."""
     interface = gpu.types.GPUStageInterfaceInfo(f"ps_selection_{name}_interface")
     interface.smooth('VEC2', "v_texel")
     info = gpu.types.GPUShaderCreateInfo()
@@ -427,17 +429,21 @@ def _resources() -> dict:
 
 
 class MaskUnavailable(RuntimeError):
-    """A mask cannot be built. `str()` is a message fit for the UI.
+    """Raised when a mask cannot be built. `str()` is a message for the UI.
 
     `reason` is one of `NO_GPU`, `NO_SIZE`, `TOO_LARGE`, `UNSUPPORTED`,
-    `TOO_COMPLEX`, `SELF_TEST`, `GPU_ERROR` and the `GEOMETRY_REASONS`.
-    `UNSUPPORTED` covers an op kind this module cannot build yet and an
-    op with malformed points. `SURFACE` means a `VIEW` op's object or UV
-    map is gone, `VIEW` that its view cannot be used, and `EDIT_MODE`
-    that its object is in Edit Mode. `GPU_ERROR` means the GPU raised while building, as
-    it does with no active context, so a later call may succeed.
+    `TOO_COMPLEX`, `SELF_TEST`, `GPU_ERROR` or one of `GEOMETRY_REASONS`.
+
+    - `UNSUPPORTED`: an op kind this module cannot build yet, or an op
+      with malformed points.
+    - `SURFACE`: a `VIEW` op's object or UV map is gone.
+    - `VIEW`: a `VIEW` op's view cannot be used.
+    - `EDIT_MODE`: a `VIEW` op's object is in Edit Mode.
+    - `GPU_ERROR`: the GPU raised while building, as it does with no
+      active context. A later call may succeed.
+
     `op_index` is the index in `selection.ops` of the op at fault, or -1
-    when no single op is.
+    when no single op is at fault.
     """
 
     def __init__(self, reason: str, message: str, op_index: int = -1):
@@ -447,7 +453,7 @@ class MaskUnavailable(RuntimeError):
 
 
 class SelectionMask:
-    """One built mask: an `R32F` texture, row 0 at the bottom like `Image.pixels`.
+    """One built mask, an `R32F` texture with row 0 at the bottom like `Image.pixels`.
 
     The cache owns the texture. Once the mask is evicted, `alive` is False
     and `texture`, `read` and `read_bytes` raise `ReferenceError`.
@@ -487,10 +493,10 @@ class SelectionMask:
         """The mask as uint8 `(height, width)`, each value `floor(v * 255 + 0.5)`.
 
         Quantised on the GPU into an `R8` target, so the read back is a
-        quarter of `read`'s. Reading an `R32F` texture as bytes directly
-        returns zeros on Vulkan. The rounding runs in float32, so a value
-        within float32 error of a half step can round the other way than
-        the same formula in float64 would.
+        quarter the size of `read`'s. Reading an `R32F` texture as bytes
+        directly returns zeros on Vulkan. The rounding runs in float32, so
+        a value within float32 error of a half step can round the other
+        way than the same formula in float64 would.
         """
         shader, batch = _resources()["quantise"]
         target = gpu.types.GPUTexture((self.width, self.height), format='R8')
@@ -505,11 +511,11 @@ class SelectionMask:
         return values
 
     def is_empty(self) -> bool:
-        """Whether no texel reaches 0.5 / 255, so nothing survives as 8 bits.
+        """True when no texel reaches 0.5 / 255, so nothing survives as 8 bits.
 
-        Such a mask selects nothing a stroke could show, and counts as no
-        selection. Read back once per mask and remembered; `read_bytes`
-        also remembers it.
+        Such a mask selects nothing a stroke could show, so it counts as no
+        selection. The answer is read back once per mask and remembered.
+        `read_bytes` also stores it.
         """
         if self._empty is None:
             self.read_bytes()
@@ -517,10 +523,10 @@ class SelectionMask:
 
 
 class OpSpec:
-    """The part of an op a pass reads, in UV coordinates.
+    """The parts of an op a pass reads, in UV coordinates.
 
-    `PaintSystemSelectionOp` is not needed to render, so tests and the
-    self-test describe ops with this instead.
+    Rendering does not need a `PaintSystemSelectionOp`, so tests and the
+    self-test describe ops with this class instead.
     """
 
     __slots__ = ('kind', 'mode', 'feather', 'antialias', 'points', 'view')
@@ -533,15 +539,15 @@ class OpSpec:
         self.antialias = bool(antialias)
         self.points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
         # A `view_raster.ViewSpec` for an outlined `VIEW` op, whose points
-        # are in region pixels; None for everything drawn in UV space.
+        # are in region pixels. None for ops drawn in UV space.
         self.view = view
 
     @classmethod
     def from_op(cls, op) -> "OpSpec":
         """The spec of a `PaintSystemSelectionOp`, reading its points without a copy per value.
 
-        Malformed points, which `get_mask` reports before it builds, read
-        as no points.
+        Malformed points read as no points. `get_mask` reports them before
+        it builds.
         """
         raw = op.get(POINTS_KEY)
         view = points_view(raw) if raw is not None else None
@@ -591,21 +597,23 @@ def _run_pass(spec: OpSpec, source, target, width: int, height: int, tile: int) 
 def _run_distance_pass(spec: OpSpec, target, width: int, height: int, reach: float) -> None:
     """Draw the signed distance to *spec*'s outline into *target*, clamped to +-*reach*.
 
-    The points are already in *target*'s pixels. Positive inside, like
-    the coverage passes' `s`. Stage A of `view_raster.run_view_pass`.
-    Raises `outline.OutlineTooComplex` for a lasso past the table limits.
+    The points are already in *target*'s pixels. The distance is positive
+    inside, like `s` in the coverage passes. This is stage A of
+    `view_raster.run_view_pass`. Raises `outline.OutlineTooComplex` for a
+    lasso past the table limits.
     """
-    # The distance variants read neither mode nor use_previous, and the GL
-    # backend strips both, so binding them would be an error.
+    # The distance variants do not read mode or use_previous. The GL
+    # backend strips both from the shader, so setting them would be an
+    # error.
     _draw_outline(spec, spec.points, float(reach), {}, None, target, width, height, distance=True)
 
 
 def _draw_outline(spec: OpSpec, texels: np.ndarray, half_width: float, ints: dict, source, target,
                   width: int, height: int, distance: bool) -> None:
-    """The draw shared by `_run_pass` and `_run_distance_pass`, *texels* in target pixels."""
+    """The draw shared by `_run_pass` and `_run_distance_pass`. *texels* are in target pixels."""
     res = _resources()
-    # Bound to every sampler the pass does not read: an unbound sampler
-    # is an error on Vulkan.
+    # Bound to every sampler the pass does not read, because an unbound
+    # sampler is an error on Vulkan.
     placeholder = core.unused_sampler()
     suffix = "_distance" if distance else ""
     floats = {"target_size": (float(width), float(height)), "half_width": half_width}
@@ -641,8 +649,8 @@ def _draw_outline(spec: OpSpec, texels: np.ndarray, half_width: float, ints: dic
             else:
                 low = high = np.zeros(2)
             if spec.kind == 'BOX':
-                # Beyond the target by more than the soft edge, a box edge
-                # changes nothing, so clamping keeps the values small.
+                # A box edge further outside the target than the soft edge
+                # changes nothing, so clamp it to keep the values small.
                 reach = half_width + 1.0
                 size = np.array((width, height), dtype=np.float64)
                 low = np.clip(low, -reach, size + reach)
@@ -679,7 +687,7 @@ def _run_chain(specs, source, targets, width: int, height: int, tile: int) -> No
 
     With two or more specs, the one before the last lands in
     ``targets[1]``. A lasso past the table limits raises `MaskUnavailable`
-    with reason `TOO_COMPLEX` and its index into *specs*, and a `VIEW` op
+    with reason `TOO_COMPLEX` and its index into *specs*. A `VIEW` op
     whose surface cannot be drawn raises `SURFACE` with its index.
     """
     passes = len(specs)
@@ -697,9 +705,9 @@ def _run_chain(specs, source, targets, width: int, height: int, tile: int) -> No
                 break
             source = target
     if failure is not None:
-        # Raised outside the except block and with the textures dropped:
-        # a traceback keeps every frame's locals alive, and a held
-        # exception would otherwise keep the textures past `release()`.
+        # Raise outside the except block, with the textures dropped. A
+        # traceback keeps every frame's locals alive, so a held exception
+        # would otherwise keep the textures alive past `release()`.
         source = target = targets = None
         raise MaskUnavailable(*failure)
 
@@ -715,14 +723,17 @@ SELF_TEST_OPS = (
     OpSpec('INVERT', 'ADD'),
     OpSpec('BOX', 'INTERSECT', 0.0, True, [(0.0, 0.0), (1.0, 0.96875)]),
 )
-"""A 64 x 64 chain: a box feathered by 8 texels, a circle feathered by 16
-that it adds, a triangle lasso feathered by 4 that it subtracts, a hard
-square lasso that it adds, an inversion and an anti-aliased box that it
-intersects. `SELF_TEST_EXPECTED` checks the soft edge profile, the
-ellipse's early out and its root, the lasso distance tables over a
-2 x 2 grid of 32-texel cells, the hard branch of the lasso pass, all four
-modes, `INVERT`, and an `ADD` of fractional coverage to a fractional
-mask, where `max` differs from a sum. Every lasso table fits in one span
+"""A 64 x 64 chain of six ops.
+
+In order: a box feathered by 8 texels, an added circle feathered by 16,
+a subtracted triangle lasso feathered by 4, an added hard square lasso,
+an inversion, and an intersected anti-aliased box.
+
+`SELF_TEST_EXPECTED` checks the soft edge profile, the ellipse's early
+out and its root, the lasso distance tables over a 2 x 2 grid of
+32-texel cells, the hard branch of the lasso pass, all four modes,
+`INVERT`, and an `ADD` of fractional coverage to a fractional mask
+(where `max` differs from a sum). Every lasso table fits in one span
 column and one data texture row."""
 
 SELF_TEST_EXPECTED = {
@@ -752,9 +763,10 @@ by `tests/selection_reference.py`. At (33, 33) the circle adds coverage
 def _self_test_comb() -> list[tuple[float, float]]:
     """The outline of the comb lasso in `SELF_TEST_WIDE_OPS`, in UV.
 
-    33 teeth 2 texels wide, one every 4 texels from x = 3.3, each running
-    from below the bottom row to above the top row and joined below the
-    target. The 133 points cross each of the 64 rows 66 times.
+    33 teeth, each 2 texels wide, one every 4 texels from x = 3.3. Each
+    tooth runs from below the bottom row to above the top row, and the
+    teeth are joined below the target. The 133 points cross each of the
+    64 rows 66 times.
     """
     width, height = SELF_TEST_WIDE_SIZE
     teeth = 33
@@ -771,14 +783,15 @@ SELF_TEST_WIDE_OPS = (
     OpSpec('BOX', 'SUBTRACT', 0.0, False, [(20.25 / 140, 10.25 / 64), (60.75 / 140, 30.75 / 64)]),
     OpSpec('LASSO', 'INTERSECT', 0.0, False, _self_test_comb()),
 )
-"""A chain on `SELF_TEST_WIDE_SIZE`: everything selected, a hard box that
-it subtracts and a hard comb lasso that it intersects.
+"""A chain on `SELF_TEST_WIDE_SIZE`: everything selected, then a
+subtracted hard box and an intersected hard comb lasso.
+
 `SELF_TEST_WIDE_EXPECTED` checks `ALL`, the hard branch of the edge
-profile, and the lasso parity tables beyond one span column and one data
-texture row: the comb's 4224 crossings fill two rows of the key texture,
-and its teeth run through all three span columns and straddle their
-boundaries, so the span column lookup and the parity carried into a span
-are both used."""
+profile, and the lasso parity tables past one span column and one data
+texture row. The comb's 4224 crossings fill two rows of the key texture.
+Its teeth run through all three span columns and straddle their
+boundaries, so both the span column lookup and the parity carried into a
+span are used."""
 
 SELF_TEST_WIDE_EXPECTED = {
     (5, 1): 0.0, (7, 1): 1.0, (29, 1): 0.0, (31, 1): 1.0, (69, 1): 0.0,
@@ -795,11 +808,13 @@ _self_test_result: bool | None = None
 
 
 def _run_self_test(name: str, chains) -> bool | None:
-    """Render *chains*, `(label, render, expected)` with *expected* mapping (x, y) to a value.
+    """Render each of *chains* and compare it with its expected texels.
 
-    True when every texel is within `SELF_TEST_TOLERANCE`, False when one
-    is not or the render raised anything but `RuntimeError`, None when it
-    raised `RuntimeError`. `MaskUnavailable` propagates.
+    Each chain is `(label, render, expected)`, with *expected* mapping
+    (x, y) to a value. Returns True when every texel is within
+    `SELF_TEST_TOLERANCE`. Returns False when one is not, or when a render
+    raised anything but `RuntimeError`. Returns None when a render raised
+    `RuntimeError`. `MaskUnavailable` propagates.
     """
     failed = {}
     try:
@@ -828,20 +843,19 @@ def _run_self_test(name: str, chains) -> bool | None:
 
 
 def self_test() -> bool | None:
-    """Whether this GPU draws masks correctly. Run once per session, on the first build.
+    """True when this GPU draws masks correctly. Runs once per session, on the first build.
 
-    Renders `SELF_TEST_OPS` and `SELF_TEST_WIDE_OPS`, and passes only when
-    both match their expected texels within `SELF_TEST_TOLERANCE`. A
-    driver that gets a path those chains check wrong fails here, and
-    every later build raises `SELF_TEST` rather than handing tools a wrong
-    mask. Neither chain checks a hard ellipse, distance cells wider than
-    32 texels, distance tables past one data texture row or a tile other
-    than 1001.
+    Renders `SELF_TEST_OPS` and `SELF_TEST_WIDE_OPS` and passes only when
+    both match their expected texels within `SELF_TEST_TOLERANCE`. If a
+    driver gets a checked path wrong, the test fails and every later build
+    raises `SELF_TEST` instead of giving tools a wrong mask. Neither chain
+    checks a hard ellipse, distance cells wider than 32 texels, distance
+    tables past one data texture row, or a tile other than 1001.
 
-    None when the self-test could not run because the GPU raised
+    Returns None when the test could not run because the GPU raised
     `RuntimeError`, as it does with no active context. None is not
-    memoised, so the next build runs the self-test again. Any other
-    exception counts as a failure.
+    remembered, so the next build runs the test again. Any other exception
+    counts as a failure.
     """
     global _self_test_result
     if _self_test_result is None:
@@ -857,8 +871,8 @@ def self_test() -> bool | None:
 def render(specs, width: int, height: int, tile: int = 1001) -> np.ndarray:
     """Run *specs* from an empty mask and read the result, float32 `(height, width)`.
 
-    Uncached and unchecked by the self-test; for the self-test itself and
-    for tests. Raises `MaskUnavailable` for `NO_GPU`, `NO_SIZE`,
+    Not cached and not gated by the self-test. Used by the self-test
+    itself and by tests. Raises `MaskUnavailable` for `NO_GPU`, `NO_SIZE`,
     `TOO_LARGE`, `UNSUPPORTED` (index into *specs*) and `TOO_COMPLEX`.
     """
     problem = _target_problem(width, height)
@@ -876,7 +890,7 @@ def render(specs, width: int, height: int, tile: int = 1001) -> np.ndarray:
         _run_chain(specs, None, targets, width, height, tile)
         return SelectionMask(targets[0], width, height, b"").read()
     finally:
-        # See `_run_chain`: a raised error must not keep the targets alive.
+        # A raised error must not keep the targets alive (see `_run_chain`).
         targets = None
 
 
@@ -885,17 +899,17 @@ def render(specs, width: int, height: int, tile: int = 1001) -> np.ndarray:
 _masks: dict[bytes, SelectionMask] = {}  # insertion order is recency, oldest first
 _pool: list[tuple[tuple[int, int], gpu.types.GPUTexture]] = []
 _warned: set = set()
-# Counters for the tests, which check through `stats` how much GPU work a
-# call did. Nothing in the add-on reads them.
+# Counters that tests read through `stats` to check how much GPU work a
+# call did. The add-on itself never reads them.
 _stats = dict(builds=0, passes=0, hits=0, allocations=0, evictions=0)
 
 
 def image_size(image, tile: int = 1001) -> tuple[int, int]:
-    """The size a mask for *image* is built at: the image's, or tile *tile*'s.
+    """The size a mask for *image* is built at.
 
-    For a tiled image that is the size of tile *tile*, which is (0, 0)
-    when the image has no such tile or the tile has no pixels. A missing
-    image file also reports (0, 0).
+    That is the image's size, or for a tiled image the size of tile
+    *tile*. It is (0, 0) when the image has no such tile, the tile has no
+    pixels, or the image file is missing.
     """
     if image.source == 'TILED':
         for image_tile in image.tiles:
@@ -911,11 +925,12 @@ def mask_size(size: tuple[int, int]) -> tuple[int, int]:
 
 
 def _target_problem(width: int, height: int, probe: bool = True) -> str | None:
-    """Why no mask can be built at this size, as a reason, or None.
+    """The reason no mask can be built at this size, or None.
 
-    With *probe* False, a background GPU context that has not been started
-    is not started for the answer. The size is then checked against
-    `MAX_TEXELS` only, because the maximum texture size needs a context.
+    With *probe* False, a background GPU context that has not started yet
+    is not started just to answer. The size is then only checked against
+    `MAX_TEXELS`, because reading the maximum texture size needs a
+    context.
     """
     ready = core.gpu_available() if probe else core.gpu_known()
     if ready is False:
@@ -930,14 +945,15 @@ def _target_problem(width: int, height: int, probe: bool = True) -> str | None:
 
 
 def view_key(op, peek: bool = False) -> bytes | None:
-    """The content key of the surface *op* was drawn on, the provider for `prefix_digests`.
+    """The content key of the surface *op* was drawn on, as the `prefix_digests` provider.
 
     Timers and operators resolve the key (`surface.resolve_key`), so a
     mask they build never uses a stale surface. Draw callbacks pass
-    *peek*: the last resolved key, with a resolve requested for the next
-    timer tick when it may be stale, so a draw shows the previous mask for
-    one frame at most. None when the op has no object or UV map, or the
-    object is not a mesh, its mesh is in Edit Mode or it has no such UV map.
+    *peek*. That returns the last resolved key and, when it may be stale,
+    requests a resolve on the next timer tick. So a draw shows the
+    previous mask for one frame at most. Returns None when the op has no
+    object or UV map, the object is not a mesh, its mesh is in Edit Mode,
+    or it has no such UV map.
     """
     obj = op.object
     if obj is None or not op.uv_map:
@@ -952,7 +968,7 @@ def view_key(op, peek: bool = False) -> bytes | None:
 
 
 def invertible(matrix) -> bool:
-    """Whether `np.linalg.inv` can invert *matrix* (4 x 4): its float64 determinant is finite and not 0.
+    """True when `np.linalg.inv` can invert the 4 x 4 *matrix* (finite, non-zero float64 determinant).
 
     The select tools call it too, so they refuse exactly the objects a
     `VIEW` op could not be drawn on.
@@ -966,17 +982,19 @@ def _view_problem(op, surface_key) -> str | None:
     obj = op.object
     if obj is None or obj.type != 'MESH':
         return 'SURFACE'
-    # An object deleted in the viewport keeps the op's pointer as a user,
-    # so it stays in `bpy.data`; it is gone from the view layer. Compared
-    # by identity: a linked object can share its name with a local one.
+    # An object deleted in the viewport stays in `bpy.data`, because the
+    # op's pointer is a user of it. It is gone from the view layer, though.
+    # Compare by identity, since a linked object can share its name with a
+    # local one.
     if obj not in bpy.context.view_layer.objects.values():
         return 'SURFACE'
     if op.uv_map not in obj.data.uv_layers:
         return 'SURFACE'
     if min(op.region_size) <= 0:
         return 'VIEW'
-    # The view block inverts both: the world matrix now, and the stored
-    # view of an object that was flat when the op was drawn.
+    # Building the view block inverts both the current world matrix and
+    # the stored view. The stored view cannot be inverted if the object
+    # was flat when the op was drawn.
     if not invertible(obj.matrix_world) or not invertible(op.view_matrix):
         return 'VIEW'
     if surface_key(op) is None:
@@ -987,10 +1005,10 @@ def _view_problem(op, surface_key) -> str | None:
 
 def _problem(selection, width: int, height: int, probe: bool = True,
              surface_key=view_key) -> tuple[str, str, int] | None:
-    """Why *selection* cannot be built at this size, as (reason, message, op index).
+    """Why *selection* cannot be built at this size, as (reason, message, op index), or None.
 
-    *probe* is passed to `_target_problem`; *surface_key* is the provider
-    that decides whether a `VIEW` op's surface exists.
+    *probe* is passed on to `_target_problem`. *surface_key* is the
+    provider that decides whether a `VIEW` op's surface exists.
     """
     reason = _target_problem(width, height, probe)
     if reason is not None:
@@ -1027,14 +1045,14 @@ def _raise(problem: tuple[str, str, int], key: bytes):
 
 
 def availability(selection, size: tuple[int, int], tile: int = 1001, surface_key=view_key) -> str:
-    """Empty when `get_mask` can build *selection*, else the reason as a UI message.
+    """An empty string when `get_mask` can build *selection*, else the reason as a UI message.
 
-    An empty selection is available. Cheap enough for a `poll` or a draw
-    callback: it builds nothing and does not run the self-test, so a GPU
-    that has not been tested yet reports available. Likewise it does not
-    start a background GPU context, so a background session of Blender
-    5.2 or later whose context has not been started yet reports available.
-    A draw callback passes the peek provider,
+    An empty selection counts as available. This is cheap enough for a
+    `poll` or a draw callback. It builds nothing and does not run the
+    self-test, so a GPU that has not been tested yet reports available.
+    It also does not start a background GPU context, so a background
+    session of Blender 5.2 or later reports available before its context
+    has started. A draw callback passes the peek provider,
     `functools.partial(view_key, peek=True)`.
     """
     if not len(selection.ops):
@@ -1096,14 +1114,14 @@ def _return_to_pool(targets, width: int, height: int) -> None:
 def peek_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=view_key) -> SelectionMask | None:
     """The cached mask of *selection*, or None. Never builds and never raises.
 
-    For draw callbacks, which must not run passes: they show what is
-    cached and a tool or timer calls `get_mask`. A draw callback passes
-    the peek provider, `functools.partial(view_key, peek=True)`.
+    Meant for draw callbacks, which must not run passes. They show what
+    is cached, and a tool or timer calls `get_mask`. A draw callback
+    passes the peek provider, `functools.partial(view_key, peek=True)`.
 
-    None as well when a `VIEW` op's object or view cannot be used now
-    (`GEOMETRY_REASONS`): an object removed from the view layer or scaled
-    to zero keeps its surface key, so the digest alone would still find
-    the mask built before.
+    Also returns None when a `VIEW` op's object or view cannot be used
+    now (`GEOMETRY_REASONS`). An object removed from the view layer or
+    scaled to zero keeps its surface key, so the digest alone would still
+    find the mask built before.
     """
     if not len(selection.ops):
         return None
@@ -1124,16 +1142,17 @@ def peek_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=vi
 def get_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=view_key) -> SelectionMask | None:
     """The mask of *selection*, built or taken from the cache.
 
-    *size* is the target image's (`image_size`); *tile* picks the UDIM
-    tile, whose UV square maps onto the mask. Returns None for an empty
-    selection and raises `MaskUnavailable` when the mask cannot be built;
-    the first failure for a given selection state is logged as a warning.
-    Ops before the last `REPLACE` of a kind in `REPLACING_KINDS` do not
-    change the cache key and cost no pass. A build with a `VIEW` op runs
-    `view_raster.view_self_test` first.
+    *size* is the target image's size (`image_size`). *tile* picks the
+    UDIM tile whose UV square maps onto the mask. Returns None for an
+    empty selection. Raises `MaskUnavailable` when the mask cannot be
+    built. The first failure for a given selection state is logged as a
+    warning. Ops before the last `REPLACE` of a kind in `REPLACING_KINDS`
+    do not change the cache key and cost no pass. A build with a `VIEW`
+    op runs `view_raster.view_self_test` first.
 
     Must be called with a GPU context, as from an operator, a timer or a
-    draw callback. Do not keep the result: the next call may evict it.
+    draw callback. Do not keep the result, because the next call may
+    evict it.
     """
     ops = selection.ops
     if not len(ops):
@@ -1182,12 +1201,12 @@ def get_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=vie
         failure = (error.reason, str(error), first + error.op_index)
     except RuntimeError as error:
         # gpu.types raises RuntimeError when no GPU context is active or an
-        # allocation fails; a later build may succeed.
+        # allocation fails. A later build may succeed.
         log.debug("Selection mask build failed: %s", str(error))
         failure = ('GPU_ERROR', MESSAGES['GPU_ERROR'], -1)
     if failure is not None:
         _return_to_pool(targets, width, height)
-        # See `_run_chain`: nothing the traceback keeps may hold a texture.
+        # Nothing the traceback keeps may hold a texture (see `_run_chain`).
         source = targets = None
         _raise(failure, digests[last])
     _stats["passes"] += passes
@@ -1199,7 +1218,7 @@ def get_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=vie
 
 
 def invalidate() -> None:
-    """Drop every cached mask and pooled texture. Held masks die."""
+    """Drop every cached mask and pooled texture. Held masks become invalid."""
     for mask in _masks.values():
         mask.alive = False
         mask._texture = None
@@ -1211,9 +1230,9 @@ def invalidate() -> None:
 def release() -> None:
     """Free every GPU object this module and `view_raster` hold, and forget both self-tests.
 
-    Called when the addon is unregistered, while the GPU context is still
-    up: in a background session Python's own teardown runs after it has
-    gone, and freeing a texture there segfaults Blender.
+    Called on unregister, while the GPU context still exists. In a
+    background session, Python's own teardown runs after the context is
+    gone, and freeing a texture then segfaults Blender.
     """
     global _self_test_result
     invalidate()

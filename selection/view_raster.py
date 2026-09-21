@@ -1,40 +1,47 @@
 """Selections drawn in the 3D view, rasterised into UV space (PS-093).
 
 A `VIEW` op holds an outline in region pixels and the view it was drawn
-in. `raster._run_pass` hands such an op to `run_view_pass`, which draws it
-into the same `R32F` mask as a `UV` op, through the texel map of the
-object it was drawn on (`gpu_passes/texel_map.py`). Three stages per op:
+in. `raster._run_pass` hands such an op to `run_view_pass`. That draws
+it into the same `R32F` mask as a `UV` op, through the texel map of the
+object it was drawn on (`gpu_passes/texel_map.py`). Each op runs three
+stages.
 
-A. The outline's signed distance at region size, from raster's shape and
-   lasso shaders compiled with `SIGNED_DISTANCE`, clamped to the soft
-   edge's half width plus `REACH_PAD` pixels.
-B. The view depth of the surface at region size, skipped with Through:
-   `q` (`-1/d` in perspective, `d` in orthographic, both linear in screen
-   space) and its screen slope, into an `RG32F` colour target with a
-   `DEPTH_COMPONENT32F` depth target. Only the painted object is drawn,
-   so only it can hide a texel.
+A. The outline's signed distance at region size. It comes from raster's
+   shape and lasso shaders compiled with `SIGNED_DISTANCE`. It is
+   clamped to the soft edge's half width plus `REACH_PAD` pixels.
+B. The view depth of the surface at region size. Through skips it. The
+   pass writes `q` and its screen slope into an `RG32F` colour target,
+   with a `DEPTH_COMPONENT32F` depth target. `q` is `-1/d` in
+   perspective and `d` in orthographic, so it is linear in screen space
+   either way. Only the painted object is drawn, so only it can hide a
+   texel.
 C. One banded pass over the mask texels. Each texel's world position is
-   projected into the region; the shape is a manual bilinear read of A,
-   the facing test uses the geometric normal of the texel map, and the
-   depth test is a 4-tap percentage-closer filter over B with a bias from
+   projected into the region. The shape is a manual bilinear read of A.
+   The facing test uses the geometric normal of the texel map. The depth
+   test is a 4-tap percentage-closer filter over B, with a bias from
    both slopes. Margin texels (coverage at most `MARGIN_ALPHA`) skip the
    depth test, so the margin next to a selected island is selected with
-   it. The result combines with the previous mask as a `UV` op's does.
-   Texels that project outside the region are 0.
+   it. Texels that project outside the region are 0. The result combines
+   with the previous mask the same way a `UV` op's does.
 
-The op stores the object-to-view matrix at commit; `ViewSpec.from_op`
-multiplies it by the inverse of the object's world matrix now, so the
-selection stays on the texels it was drawn over when the object moves.
-The eye comes from `view_eye`.
+The op stores the object-to-view matrix when it is committed.
+`ViewSpec.from_op` multiplies it by the inverse of the object's current
+world matrix. So the selection stays on the texels it was drawn over
+when the object moves. The eye comes from `view_eye`.
 
-`view_self_test` renders `self_test_chain` for the orthographic
-and perspective scenes with and without Through against float64 values
-from `tests/selection_reference.py`. It cannot catch dropping only one of
-the two depth slope terms, `REACH_PAD`, or a smooth normal used for facing
-in place of the geometric one; in perspective it also misses the `clip.w`
-in-front test, an eye vector used as the eye position for facing and a
-missing perspective divide in the texel slope. `view_eye` runs on the CPU
-and is checked by the tests instead.
+`view_self_test` renders `self_test_chain` for the orthographic and
+perspective scenes, with and without Through. It compares the result
+with float64 values from `tests/selection_reference.py`. It cannot
+catch:
+
+- dropping only one of the two depth slope terms
+- dropping `REACH_PAD`
+- using a smooth normal for facing instead of the geometric one
+- in perspective, a missing `clip.w` in-front test, an eye vector used
+  as the eye position for facing, or a missing perspective divide in
+  the texel slope
+
+`view_eye` runs on the CPU, so the tests check it instead.
 """
 import math
 
@@ -57,14 +64,15 @@ DEPTH_ABS_BIAS = 1e-6
 `-1/d`, where a fixed bias would grow with the square of the distance."""
 
 TEXEL_SLOPE_CAP = 0.03
-"""Largest texel slope term, relative to `|q|`, so a texel seen edge on
-cannot pass the depth test from behind the surface."""
+"""Cap on the texel slope term, relative to `|q|`. It stops a texel seen
+edge on from passing the depth test from behind the surface."""
 
 MARGIN_ALPHA = 0.75
 """Texel map coverage at or below which a texel is margin, not surface."""
 
 TARGET_SETS = 2
-"""Region target sets kept, one per region size, least recently used dropped."""
+"""Region target sets kept, one per region size. The least recently used
+is dropped first."""
 
 SELF_TEST_TEXELS = 32
 """Width and height of the self-test mask and texel map."""
@@ -120,8 +128,9 @@ float screen_distance(vec2 s)
   return mix(mix(d00, d10, t.x), mix(d01, d11, t.x), t.y);
 }
 
-/* Fraction of the four depth pixels around s that q is not behind. Each
-   pixel's plane is extended to s by its own slope plus the texel's. */
+/* Bilinear-weighted fraction of the four depth pixels around s that q is
+   not behind. Each pixel's plane is extended to s by its own slope plus
+   the texel's. */
 float visibility(vec2 s, float q, float texel_slope)
 {
   ivec2 size = textureSize(depth_map, 0);
@@ -146,11 +155,12 @@ float visibility(vec2 s, float q, float texel_slope)
   return result;
 }
 
-/* The world step from p to its neighbours ahead and behind along one axis,
-   preferring surface neighbours over margin ones and forward differences
-   over backward. Zero when neither neighbour is covered. When both are
-   surface, the step more nearly along the surface at p (normal n): at the
-   edge of a UV island the texel beyond may lie on another face. */
+/* The world step from p to one of its two neighbours along an axis.
+   Surface neighbours win over margin ones, and the one ahead wins over
+   the one behind. Zero when neither neighbour is covered. When both are
+   surface, pick the step that stays closer to the surface at p (normal
+   n). At the edge of a UV island, the texel beyond may lie on another
+   face. */
 vec3 surface_step(vec3 p, vec3 n, vec4 ahead, vec4 behind)
 {
   vec3 forward = ahead.xyz - p;
@@ -171,7 +181,7 @@ vec3 surface_step(vec3 p, vec3 n, vec4 ahead, vec4 behind)
   return behind.a > 0.0 ? backward : vec3(0.0);
 }
 
-/* The texel map at *texel*, uncovered outside the map. */
+/* The texel map value at texel, or all zero (uncovered) outside the map. */
 vec4 position_at(ivec2 texel)
 {
   if (any(lessThan(texel, ivec2(0))) || any(greaterThanEqual(texel, textureSize(positions, 0)))) {
@@ -215,7 +225,8 @@ float surface_slope(vec3 p, vec3 dx, vec3 dy, vec2 s, float q)
   return max(abs(gx), abs(gy));
 }
 
-/* The normal of the texel's patch, turned to the side of the smooth normal. */
+/* The normal of the texel's patch, flipped to the side of the smooth
+   normal. Falls back to the smooth normal for a degenerate patch. */
 vec3 geometric_normal(vec3 dx, vec3 dy, vec3 smooth_normal)
 {
   vec3 n = cross(dx, dy);
@@ -271,7 +282,8 @@ void main()
 """.replace("MARGIN_ALPHA", repr(MARGIN_ALPHA))
 
 _gpu: dict = {}
-# Region size -> textures for stages A and B; insertion order is recency, oldest first.
+# The textures for stages A and B, by region size. Insertion order is
+# recency, oldest first.
 _targets: dict[tuple[int, int], dict] = {}
 
 
@@ -316,18 +328,19 @@ def _shaders() -> dict:
 
 
 def is_orthographic(projection) -> bool:
-    """Whether *projection* (4 x 4, rows first) has no perspective divide."""
+    """True when *projection* (4 x 4, rows first) has no perspective divide."""
     return bool(np.allclose(np.asarray(projection, dtype=np.float64).reshape(4, 4)[3], (0.0, 0.0, 0.0, 1.0)))
 
 
 def view_eye(view, projection) -> np.ndarray:
     """Where the viewer is, as float64 `(x, y, z, w)` in world space.
 
-    In perspective the eye position with w 1: the translation of the
-    inverse view. In orthographic the unit direction towards the viewer
-    with w 0: column 2 of the inverse view. Row 2 of the view is that
-    direction only while the view's 3 x 3 part is rigid, which an object
-    scaled after the op was drawn breaks.
+    In perspective it is the eye position with w 1, which is the
+    translation of the inverse view. In orthographic it is the unit
+    direction towards the viewer with w 0, which is column 2 of the
+    inverse view. Row 2 of the view is that direction only while the
+    view's 3 x 3 part is rigid. An object scaled after the op was drawn
+    breaks that.
     """
     inverse = np.linalg.inv(np.asarray(view, dtype=np.float64).reshape(4, 4))
     if is_orthographic(projection):
@@ -371,7 +384,7 @@ class SyntheticSurface:
 
 
 class ViewSpec:
-    """The view part of a `VIEW` op: the surface, the region and the matrices at build time.
+    """The surface, region and matrices of a `VIEW` op at build time.
 
     `view` maps world space to view space and `projection` view space to
     clip space, both float64 4 x 4 with rows first.
@@ -390,8 +403,8 @@ class ViewSpec:
     def from_op(cls, op) -> "ViewSpec":
         """The spec of an outlined `VIEW` op whose object `raster._problem` accepted.
 
-        The stored object-to-view matrix times the inverse of the object's
-        world matrix now.
+        Its view matrix is the stored object-to-view matrix times the
+        inverse of the object's current world matrix.
         """
         obj = op.object
         stored = np.array(op.view_matrix, dtype=np.float64)
@@ -401,7 +414,7 @@ class ViewSpec:
 
 
 def view_block(spec: ViewSpec, half_width: float, reach: float) -> gpu.types.GPUUniformBuf:
-    """The `PSViewBlock` uniform buffer for *spec*: 176 bytes, std140."""
+    """The `PSViewBlock` uniform buffer for *spec* (176 bytes, std140)."""
     orthographic = is_orthographic(spec.projection)
     data = b"".join((
         (spec.projection @ spec.view).T.astype(np.float32).tobytes(),
@@ -417,8 +430,8 @@ def view_block(spec: ViewSpec, half_width: float, reach: float) -> gpu.types.GPU
 def _region_targets(region: tuple[int, int]) -> dict:
     """The stage A and B textures for *region*, kept for `TARGET_SETS` sizes.
 
-    Textures only: a framebuffer works only in the context that created
-    it, so each build makes its own.
+    Only textures are kept. A framebuffer works only in the context that
+    created it, so each build makes its own.
     """
     targets = _targets.pop(region, None)
     if targets is None:
@@ -494,15 +507,19 @@ def run_view_pass(spec: "raster.OpSpec", source, target, width: int, height: int
 
 
 def self_test_scene(perspective: bool) -> dict:
-    """The self-test surface and view, float64.
+    """The self-test surface and view, in float64.
 
-    Four strips of texels, each row one island: a floor tilted by
-    `FLOOR_TILT`, an occluder above the middle third of the floor, a quad
-    whose smooth normal faces away, and a margin strip (coverage 0.5)
-    under the floor and the occluder. `triangles` is the depth soup
-    (floor, occluder and the back quad). The orthographic view looks down
-    -z with the scene square filling the region; the perspective view is
-    rotated and 1.50 to 2.27 units from the islands.
+    The texels form four strips, and each row is one island:
+
+    - a floor tilted by `FLOOR_TILT`
+    - an occluder above the middle third of the floor
+    - a quad whose smooth normal faces away
+    - a margin strip (coverage 0.5) under the floor and the occluder
+
+    `triangles` is the depth soup (the floor, the occluder and the back
+    quad). The orthographic view looks down -z, with the scene square
+    filling the region. The perspective view is rotated and 1.50 to 2.27
+    units from the islands.
 
     Returns `positions` and `normals` `(32, 32, 4)` with coverage in
     alpha, `triangles` `(n, 3)`, `view`, `projection`, and `labels`, the
@@ -574,8 +591,9 @@ def self_test_scene(perspective: bool) -> dict:
 def self_test_ops() -> list[tuple]:
     """The self-test chain as (kind, mode, feather, antialias, points in region pixels).
 
-    A box feathered by 8 that runs past the region's top and bottom, an
-    anti-aliased ellipse it subtracts and a lasso feathered by 3 it adds.
+    In order: a box feathered by 8 that runs past the region's top and
+    bottom, a subtracted anti-aliased ellipse and an added lasso feathered
+    by 3.
     """
     return [
         ('BOX', 'REPLACE', 8.0, True, [(9.7, -30.0), (55.1, 80.0)]),
@@ -630,29 +648,37 @@ SELF_TEST_VIEW_EXPECTED = {
     (True, True, 1, 22): 0.907121219365551,
     (True, True, 29, 31): 0.4280356519898755,
 }
-"""(perspective, through, x, y) to the value of `self_test_chain` at texel
-(x, y), computed in float64 by `tests/selection_reference.py`. Rows 0 to
-13 are the floor, 15 to 20 the occluder, 22 to 27 the back quad and 29
-to 31 the margin. Each chain has at least two texels that a wrong
-bilinear read, smoothstep, mode, projection flip or distance sign
-changes by more than 1e-3; with Through off also a wrong facing, margin
-rule, depth tap, depth bias or slope, in perspective also `d` used for
-`-1/d` in either pass and a missing perspective divide, and with Through
-on the Through flag ignored."""
+"""The expected `self_test_chain` values, keyed by (perspective, through, x, y).
+
+Each value is the chain's value at texel (x, y), computed in float64 by
+`tests/selection_reference.py`. Rows 0 to 13 are the floor, 15 to 20
+the occluder, 22 to 27 the back quad and 29 to 31 the margin. Each chain
+has at least two texels that change by more than 1e-3 under any of
+these bugs:
+
+- a wrong bilinear read, smoothstep, mode, projection flip or distance
+  sign
+- with Through off, also a wrong facing, margin rule, depth tap, depth
+  bias or slope
+- in perspective, also `d` used for `-1/d` in either pass, or a missing
+  perspective divide
+- with Through on, the Through flag ignored
+"""
 
 _view_self_test_result: bool | None = None
 
 
 def view_self_test() -> bool | None:
-    """Whether this GPU draws `VIEW` ops correctly. Run once per session, on the first `VIEW` build.
+    """True when this GPU draws `VIEW` ops correctly. Runs once per session, on the first `VIEW` build.
 
     Renders `self_test_chain` for the orthographic and the perspective
-    scene, each with Through off and on, and compares them with
+    scene, each with Through off and on. Compares them with
     `SELF_TEST_VIEW_EXPECTED` within `raster.SELF_TEST_TOLERANCE`. A
-    failure blocks `VIEW` ops only, with `SELF_TEST`: the view passes use
-    a uniform buffer, a depth target and a depth pass that selections
-    drawn in UV space never touch. The module docstring says what it
-    cannot catch. None and exceptions as in `raster.self_test`.
+    failure blocks only `VIEW` ops, with `SELF_TEST`. That is because the
+    view passes use a uniform buffer, a depth target and a depth pass that
+    selections drawn in UV space never touch. The module docstring lists what it
+    cannot catch. None and exceptions are handled as in
+    `raster.self_test`.
     """
     global _view_self_test_result
     if _view_self_test_result is None:
@@ -670,7 +696,7 @@ def view_self_test() -> bool | None:
 
 
 def release() -> None:
-    """Free the shaders and region targets and forget the self-test result; `raster.release` calls it."""
+    """Free the shaders and region targets and forget the self-test result. Called by `raster.release`."""
     global _view_self_test_result
     _gpu.clear()
     _targets.clear()

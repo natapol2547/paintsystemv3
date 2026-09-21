@@ -1,22 +1,21 @@
-"""The selection is document data, and its mask is derived from it (PS-091).
+"""Selection data on the tree: an ordered list of operations (PS-091).
 
-A selection is an ordered list of operations - a box here, a lasso there,
-an inversion - stored on the tree. That makes selection undo Blender's own
-undo and saves the selection with the file, the way mesh selection works,
-and it means nothing has to store the mask: `selection/raster.py` rebuilds
-it from the ops, and caches it under `prefix_digests`, a digest of exactly
-what the mask depends on.
+A selection is a list of ops, such as a box, a lasso or an inversion.
+Because it is document data, Blender's own undo covers it and it is saved
+with the file, like mesh selection. The mask is never stored.
+`selection/raster.py` rebuilds it from the ops and caches it under
+`prefix_digests`, a digest of exactly what the mask depends on.
 
-Point lists live in an ID property rather than a collection of typed
-point groups. A lasso carries hundreds of points and memfile undo copies
-every step; a `CollectionProperty` would allocate one PropertyGroup per
-point and copy them all on each push, while an ID property holding a flat
-array of floats is one allocation, is written to the file, and is
-restored by undo the same way.
+Points are stored in one ID property holding a flat array of floats, not
+in a `CollectionProperty`. A lasso has hundreds of points, and memfile
+undo copies the data on every undo push. A collection would allocate and
+copy one PropertyGroup per point. The ID property is a single allocation,
+and it is saved to the file and restored by undo the same way.
 
-Digests are never written to the file or to an ID property, so changing
-what goes into them needs no versioning; `tests/test_selection_model.py`
-pins a few so the change is at least deliberate.
+Digests are never saved to the file or stored in an ID property, so
+changing what goes into them needs no versioning.
+`tests/test_selection_model.py` pins a few so that such a change is
+deliberate.
 """
 import hashlib
 import struct
@@ -57,11 +56,11 @@ FEATHER_MAX = 1024.0
 """Widest soft edge an op can carry, in pixels. The rasteriser clamps to it too."""
 
 REPLACING_KINDS = frozenset(('BOX', 'ELLIPSE', 'LASSO', 'FACES', 'RASTER', 'ALL'))
-"""Kinds that, with mode `REPLACE`, hide every op before them."""
+"""Kinds that hide every op before them when their mode is `REPLACE`."""
 
 MODELESS_KINDS = frozenset(('INVERT', 'TRANSFORM'))
-"""Kinds that act on the mask before them instead of combining a shape
-with it. Their mode means nothing; `add_op` stores `ADD`."""
+"""Kinds that change the mask before them instead of combining a shape
+with it. Their mode is ignored, and `add_op` stores `ADD`."""
 
 SPACELESS_KINDS = frozenset(('ALL', 'INVERT'))
 """Kinds whose result does not depend on the space they were made in."""
@@ -75,10 +74,10 @@ SPACE_CODES = {item[0]: index for index, item in enumerate(SELECTION_SPACES)}
 """Stable small integers for the enum items, packed into digests."""
 
 DIGEST_TAG = b"PS-091 selection mask 2"
-"""Version of the digest format; changing it gives every selection new cache keys."""
+"""Version of the digest format. Changing it gives every selection new cache keys."""
 
 NO_SURFACE_KEY = b"\xff" * 16
-"""What a `VIEW` op digests when no provider gives a surface key."""
+"""Surface key a `VIEW` op adds to its digest when no provider gives one."""
 
 DIGEST_SIZE = 20
 """Bytes in each BLAKE2b prefix digest."""
@@ -90,12 +89,12 @@ _IDENTITY = (1.0, 0.0, 0.0, 0.0,
 
 
 def _matrix_values(values) -> list[float]:
-    """*values* as a flat list of floats.
+    """Return *values* as a flat list of floats.
 
     A `subtype='MATRIX'` property reads back as a `Matrix`, which iterates
-    as four `Vector` rows rather than sixteen floats. A `Vector` is a
-    sequence without an `__iter__` of its own, so the rows are told apart
-    by what is *not* a number rather than by what iterates.
+    as four `Vector` rows, not sixteen floats. A `Vector` has no
+    `__iter__` of its own, so a row is detected by not being a number,
+    not by being iterable.
     """
     out = []
     for value in values:
@@ -109,8 +108,8 @@ def _matrix_values(values) -> list[float]:
 def points_view(points) -> memoryview | None:
     """A points ID property value as a flat numeric buffer, or None when malformed.
 
-    Well formed is an ID property array of even length. A list of pairs,
-    a string, a group, a scalar or an odd length is malformed.
+    Only an ID property array of even length is well formed. A list of
+    pairs, a string, a group, a scalar or an odd length is malformed.
     """
     try:
         view = memoryview(points)
@@ -144,13 +143,13 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
         default=False,
     )
 
-    # A VIEW op is redrawn from the view it was made in, so it survives
-    # undo, a reload and any later camera move. `view_matrix` maps the
-    # object's own space to the view as it was at commit, so the selection
-    # stays on the texels it covered when the object later moves;
-    # `projection_matrix` is the region's window matrix. `object` and
-    # `uv_map` name the surface the op was drawn on; `uv_map` holds a
-    # concrete map name, never the empty string.
+    # A VIEW op stores the view it was drawn in and is redrawn from it, so
+    # it survives undo, a reload and later camera moves. `view_matrix`
+    # maps object space to the view at commit time, so the selection stays
+    # on the same texels when the object moves later. `projection_matrix`
+    # is the region's window matrix. `object` and `uv_map` name the
+    # surface the op was drawn on. `uv_map` is always a real map name,
+    # never the empty string.
     region_size: IntVectorProperty(name="Region Size", size=2, default=(0, 0))
     view_matrix: FloatVectorProperty(
         name="View Matrix", size=16, subtype='MATRIX', default=_IDENTITY)
@@ -159,10 +158,10 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
     object: PointerProperty(name="Object", type=bpy.types.Object)
     uv_map: StringProperty(name="UV Map")
 
-    # RASTER: a write-once greyscale image, never modified, so undo only
-    # needs the pointer. It is packed right after its write, because an
-    # unpacked generated image comes back black after an undo past its
-    # creation and a redo (PS-096).
+    # RASTER: a greyscale image written once and never changed, so undo
+    # only needs the pointer. It is packed right after it is written. An
+    # unpacked generated image comes back black after undoing past its
+    # creation and then redoing (PS-096).
     raster_image: PointerProperty(name="Raster", type=bpy.types.Image)
 
     # TRANSFORM: the matrix a committed move applied, so the selection
@@ -179,21 +178,21 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
 
     def update_digest(self, digest,
                       surface_key: Callable[["PaintSystemSelectionOp"], bytes | None] | None = None) -> None:
-        """Feed everything that changes what this op rasterises to into *digest*.
+        """Add everything that affects the mask this op draws to *digest*.
 
-        Values go in at full precision, packed with `struct`; the point
-        list goes in as its float64 buffer without a copy. What cannot
-        change the mask stays out: the mode of an `INVERT` or `TRANSFORM`,
-        the space of `ALL` and `INVERT`, the outline, feather and
-        anti-alias of kinds without an outline, and the view of a `UV` op.
-        A `RASTER` op includes its image's `session_uid`, so an image
-        deleted and replaced by another of the same name is a new mask.
+        Values are packed at full precision with `struct`. The point list
+        is added as its float64 buffer, without a copy. Values that cannot
+        change the mask are left out. These are the mode of `INVERT` and
+        `TRANSFORM`, the space of `ALL` and `INVERT`, the outline, feather
+        and anti-alias of kinds without an outline, and the view of a `UV`
+        op. A `RASTER` op adds its image's `session_uid`, so an image
+        deleted and replaced by another of the same name gives a new mask.
 
         An outlined `VIEW` op also depends on the surface it was drawn on.
         It adds its UV map name and the key *surface_key* gives for it, or
-        `NO_SURFACE_KEY` without a provider or a key. The object's
-        `session_uid` stays out: the same ops on an identical surface are
-        the same mask. Only `VIEW` ops call the provider.
+        `NO_SURFACE_KEY` when there is no provider or no key. Only `VIEW`
+        ops call the provider. The object's `session_uid` is left out, so
+        the same ops on an identical surface give the same mask.
         """
         kind = self.kind
         outlined = kind not in OUTLINELESS_KINDS
@@ -208,7 +207,7 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
         view = points_view(points) if points is not None else None
         if points is not None and view is None:
             # Malformed points cannot be built (`selection/raster.py` reports
-            # the op), so a marker count is enough to key the digest.
+            # the op), so a marker count is enough for the digest.
             digest.update(struct.pack('<Q', 0xFFFFFFFFFFFFFFFF))
         else:
             count = len(view) if view is not None else 0
@@ -237,24 +236,25 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
 class PaintSystemSelection(bpy.types.PropertyGroup):
     """The selection of a tree, as the ops that built it.
 
-    It applies to the tree's active layer, whichever that is, and its mask
-    is built at the size of that layer's image (`selection/session.py`).
+    It applies to the tree's active layer, whichever layer that is. Its
+    mask is built at the size of that layer's image
+    (`selection/session.py`).
     """
 
     ops: CollectionProperty(type=PaintSystemSelectionOp)
 
     def add_op(self, kind: str, mode: str = 'REPLACE', space: str = 'UV',
                **values) -> PaintSystemSelectionOp:
-        """Append an operation, setting the op properties named in *values*.
+        """Append an op and set the op properties named in *values*.
 
         A `points` value is stored with `set_points`. Properties not in
-        *values* keep the op's defaults.
+        *values* keep their defaults.
 
-        A `REPLACE` of a kind in `REPLACING_KINDS` drops every op before
-        it: nothing earlier can show through, so keeping them would only
-        slow the rebuild down. `INVERT` and `TRANSFORM` act on what came
-        before them, so they never drop anything and are stored with mode
-        `ADD` whatever *mode* says.
+        A `REPLACE` of a kind in `REPLACING_KINDS` removes every op before
+        it. Nothing earlier can show through, so keeping them would only
+        slow down the rebuild. `INVERT` and `TRANSFORM` act on the ops
+        before them, so they never remove anything. They are stored with
+        mode `ADD` whatever *mode* says.
         """
         if kind in MODELESS_KINDS:
             mode = 'ADD'
@@ -275,14 +275,14 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
         self.ops.clear()
 
     def invert(self) -> None:
-        """Invert the selection: drop a trailing `INVERT`, else append one.
+        """Invert the selection by removing a trailing `INVERT` or appending one.
 
-        Inverting twice gives back the ops, and so the digest and the cached
-        mask, that the first inversion started from. Nothing and the whole
-        image invert to each other as ops: an empty selection becomes `ALL`,
-        and a selection ending in an `ALL` that covers everything is
-        cleared, rather than kept as a selection whose empty mask would
-        block painting with no outline to show for it.
+        Inverting twice gives back the same ops, so the digest and the
+        cached mask are the same as before too. An empty selection and the
+        whole image invert into each other as ops. An empty selection
+        becomes `ALL`. A selection ending in an `ALL` that covers
+        everything is cleared, instead of being kept as ops whose mask is
+        empty.
         """
         ops = self.ops
         if not len(ops):
@@ -298,7 +298,7 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
         """Index of the last op that replaces everything before it, or 0.
 
         Ops before it cannot show through, so the rasteriser starts there.
-        `add_op` already drops them; this covers ops added any other way.
+        `add_op` already removes them. This covers ops added any other way.
         """
         start = 0
         for index, op in enumerate(self.ops):
@@ -309,16 +309,16 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
     def prefix_digests(self, width: int = 0, height: int = 0, tile: int = 0,
                        surface_key: Callable[[PaintSystemSelectionOp], bytes | None] | None = None,
                        ) -> list[bytes]:
-        """One digest per op: of that op and everything that shows through to it.
+        """One digest per op, covering that op and every op that shows through to it.
 
-        Digest ``k`` is the mask after op ``k`` at *width* x *height* for
-        UDIM *tile*, so `selection/raster.py` uses them as cache keys and
-        finds the longest prefix it has already built. A replacing op
-        starts again from the root, which holds only the digest tag, the
-        size and the tile, so ops before it do not change any digest from
-        it on. *surface_key* gives each `VIEW` op the key of the surface
-        it was drawn on (`PaintSystemSelectionOp.update_digest`). 20-byte
-        BLAKE2b.
+        Each digest is a 20-byte BLAKE2b. Digest ``k`` identifies the mask
+        after op ``k`` at *width* x *height* for UDIM *tile*.
+        `selection/raster.py` uses the digests as cache keys and resumes
+        from the longest prefix it has already built. A replacing op starts
+        again from the root digest, which holds only the digest tag, the
+        size and the tile. So ops before it do not change its digest or
+        any later one. *surface_key* gives each `VIEW` op the key of the
+        surface it was drawn on (`PaintSystemSelectionOp.update_digest`).
         """
         root = hashlib.blake2b(DIGEST_TAG + struct.pack('<III', width, height, tile),
                                digest_size=DIGEST_SIZE).digest()

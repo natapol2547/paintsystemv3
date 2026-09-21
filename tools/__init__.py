@@ -1,21 +1,23 @@
-"""Selection tools in the 3D view: Lasso, Rectangle and Ellipse Selection (PS-093).
+"""The Lasso, Rectangle and Ellipse Selection tools in the 3D view (PS-093).
 
-`shapes` holds the outline geometry, `preview` draws a drag's outline,
-`select_ops` holds the modal operators that append `VIEW` ops, and
-`workspace_tools` puts them in the Texture Paint toolbar.
+- `shapes` holds the outline geometry.
+- `preview` draws a drag's outline.
+- `select_ops` holds the modal operators that append `VIEW` ops.
+- `workspace_tools` puts the tools in the Texture Paint toolbar.
 
 A workspace keeps the id of its active tool per mode after the tool is
-unregistered, and Blender does not reset it: the dead tool stays active,
+unregistered, and Blender does not reset it. The dead tool stays active
 with no keymap, so drags stop painting until the user picks another
-tool. `unregister` therefore sets the brush back first, in live windows
-through `wm.tool_set_by_id` and in every workspace by writing the
-Texture Paint tool id.
+tool. So `unregister` sets the brush back first. In live windows it uses
+`wm.tool_set_by_id`. In every workspace it writes the Texture Paint
+tool id.
 
 A written id takes effect when Texture Paint is next entered in that
-workspace. A workspace no window shows that is still in Texture Paint
-is not entered again when it is shown, so it shows the brush without
-its keymap until the user picks a tool or re-enters Texture Paint:
-setting up a tool in a workspace no window shows crashes Blender.
+workspace. A workspace that no window shows, but that is still in
+Texture Paint, is not entered again when it is shown. So it shows the
+brush without its keymap until the user picks a tool or re-enters
+Texture Paint. This is accepted because setting up a tool in a
+workspace no window shows crashes Blender.
 """
 import logging
 
@@ -51,10 +53,10 @@ def _reset_windows(context, brush: str) -> None:
                 continue
             if not _ours(workspace.tools.from_space_view3d_mode('PAINT_TEXTURE', create=False)):
                 continue
-            # Every window through its own 3D view, also while the context
-            # window is the Preferences window the add-on is disabled from.
-            # Only passing a temporary screen itself raises, and a window
-            # with a 3D view never shows one.
+            # Reset each window through its own 3D view. This works even
+            # when the context window is the Preferences window the add-on
+            # is disabled from. Only passing a temporary screen itself
+            # raises, and a window with a 3D view never shows one.
             area = next((a for a in window.screen.areas if a.type == 'VIEW_3D'), None)
             if area is None:
                 continue
@@ -66,12 +68,15 @@ def _reset_windows(context, brush: str) -> None:
 
 
 def reset_active_tools(context=None) -> None:
-    """Make the brush the Texture Paint tool wherever one of these tools is; before unregistering them."""
+    """Make the brush the Texture Paint tool wherever one of these tools is active.
+
+    Called before unregistering them.
+    """
     context = context or bpy.context
     brush = default_brush_tool()
     _reset_windows(context, brush)
-    # Windows in another mode, and workspaces no window shows, keep the id
-    # until Texture Paint is entered there, so write it directly.
+    # Windows in another mode and workspaces no window shows keep the id
+    # until Texture Paint is entered there. So write the id directly.
     for workspace in getattr(bpy.data, 'workspaces', ()):
         try:
             ref = workspace.tools.from_space_view3d_mode('PAINT_TEXTURE', create=False)

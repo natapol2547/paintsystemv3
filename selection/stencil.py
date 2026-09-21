@@ -1,38 +1,40 @@
 """Clip native brush strokes in the 3D view to the selection (PS-091, slice 3).
 
-Blender's texture paint Stencil Mask protects the canvas wherever its
-image is white, sampled through the mesh's stencil UV map. With
-`invert_stencil` on it lets paint through in proportion to the image's
-value instead, which is what a selection mask is: 1 selected, 0 not,
-feathered in between. So while there is a selection in texture paint
-mode, the scene's stencil settings belong to it:
+Blender's texture paint Stencil Mask protects the canvas where its image
+is white, sampled through the mesh's stencil UV map. With
+`invert_stencil` on, it lets paint through in proportion to the image's
+value instead. A selection mask holds exactly that. It is 1 where
+selected, 0 where not, and feathered in between. So while there is a
+selection in texture paint mode, the scene's stencil settings belong to
+it.
 
-* the stencil image is `.PS Selection Stencil`, a Non-Color PNG read from
-  the session temporary directory. A generated image would be dirty after
-  every write, and Blender then packs it on "Save All Images" and asks to
-  save it on quit; clearing the flag by packing costs up to a second at
-  4K. A file image is never dirty, and is named after the mask digest, so
-  an undo step that restores an older file path restores the matching
-  pixels too. Automatically Pack Resources and Pack Resources still pack
-  it, and a packed image reloads its packed copy, so it is unpacked
-  before it is pointed at another file.
-* when a selection exists but its mask cannot be used, the stencil image
-  is a single black pixel, which blocks painting altogether rather than
-  letting it land outside the selection. When not even that file can be
-  written, `.PS Selection Block`, a generated black image, blocks instead:
-  it holds no pixels of its own, so it is never dirty either.
-* the user's settings from before are backed up (`props/stencil.py`) and
-  restored when the selection stops applying, before a file is saved and
-  when the add-on is unregistered. User edits made while the selection
-  holds them are set back on the next sync. A scene copied from one the
-  selection holds copies the selection's settings, not the user's, so
-  its backup is Blender's defaults.
+- The stencil image is `.PS Selection Stencil`, a Non-Color PNG read
+  from the session temporary directory. A generated image would be dirty
+  after every write. Blender then packs it on "Save All Images" and asks
+  to save it on quit. Clearing the flag by packing costs up to a second
+  at 4K. A file image is never dirty.
+- Each file is named after the mask digest. So an undo step that
+  restores an older file path restores the matching pixels too.
+- Automatically Pack Resources and Pack Resources still pack the image.
+  A packed image reloads its packed copy, so it is unpacked before it is
+  pointed at another file.
+- When a selection exists but its mask cannot be used, the stencil image
+  is a single black pixel. This blocks painting altogether instead of
+  letting paint land outside the selection. When not even that file can
+  be written, `.PS Selection Block`, a generated black image, blocks
+  instead. It holds no pixels of its own, so it is never dirty either.
+- The user's settings from before are backed up (`props/stencil.py`).
+  They are restored when the selection stops applying, before a file is
+  saved and when the add-on is unregistered. User edits made while the
+  selection holds the settings are overwritten again on the next sync.
+- A scene copied from one the selection holds gets the selection's
+  settings, not the user's. So its backup is Blender's defaults.
 
-`selection.session` decides when: its tick calls `sync` with the state
-it resolved, and `handlers.node_tree_handlers` calls `restore_all`,
+`selection.session` decides when. Its tick calls `sync` with the state
+it resolved. `handlers.node_tree_handlers` calls `restore_all`,
 `on_file_loaded` and a forced session sync around saving and loading.
-The message bus subscriptions here only cover the settings this module
-owns. Writes only happen where a value differs, so the notifications
+The message bus subscriptions here cover only the settings this module
+owns. Values are only written when they differ, so the notifications
 they cause settle after one more sync.
 """
 import logging
@@ -56,11 +58,11 @@ BLOCK_NAME = ".PS Selection Block"
 FILE_DIR = "paint_system_selection"
 BLOCK_FILE = "block.png"
 FILE_BUDGET = 256 << 20
-"""Bytes of mask files kept in the temporary directory before the oldest go."""
+"""Bytes of mask files kept in the temporary directory before the oldest are deleted."""
 
 _msgbus_owner = object()
-# File path the pixels of each stencil image were last loaded from, by
-# `session_uid`. Undo restores `Image.filepath` but not the pixels.
+# The file path each stencil image's pixels were last loaded from, keyed
+# by `session_uid`. Undo restores `Image.filepath` but not the pixels.
 _loaded: dict[int, str] = {}
 
 
@@ -103,13 +105,14 @@ def _prune(keep: str) -> None:
 
 
 def _mask_file(selection, size: tuple[int, int], tile: int) -> str | None:
-    """The PNG of the selection's mask, written if missing, or `_block_file()` when it cannot be.
+    """The path of the selection's mask PNG, written if missing.
 
+    Returns `_block_file()` when the mask cannot be built or written, and
     None when not even the block file can be written.
     """
     width, height = raster.mask_size(size)
-    # Named by the digest with surface keys, so a VIEW selection gets a new
-    # file when the surface it was drawn on changes.
+    # The name uses the digest with surface keys, so a `VIEW` selection
+    # gets a new file when the surface it was drawn on changes.
     digest = selection.prefix_digests(width, height, tile, surface_key=raster.view_key)[-1]
     path = os.path.join(_file_dir(), digest.hex() + ".png")
     if os.path.exists(path):
@@ -130,7 +133,10 @@ def _mask_file(selection, size: tuple[int, int], tile: int) -> str | None:
 
 
 def _block_file() -> str | None:
-    """A 1x1 black PNG: with the stencil inverted, nothing gets painted. None when it cannot be written."""
+    """The path of a 1x1 black PNG, or None when it cannot be written.
+
+    With the stencil inverted, black lets no paint through.
+    """
     path = os.path.join(_file_dir(), BLOCK_FILE)
     if not os.path.exists(path):
         try:
@@ -194,7 +200,10 @@ def _settings():
 
 
 def _hold(scene, mesh) -> None:
-    """Back up the settings the selection is about to take, once per holding."""
+    """Back up the scene's and *mesh*'s stencil settings before the selection takes them.
+
+    Each is backed up only once while the selection holds it.
+    """
     settings = _settings()
     index = settings.find_scene(scene)
     if index < 0:
@@ -202,7 +211,8 @@ def _hold(scene, mesh) -> None:
         entry = settings.stencil_scenes.add()
         entry.scene = scene
         # A scene copied while the selection held its source carries the
-        # selection's settings; the entry's defaults are Blender's.
+        # selection's settings. Skip them, so the entry keeps its
+        # defaults, which are Blender's.
         if not _is_selection_image(image_paint.stencil_image):
             entry.use_stencil_layer = image_paint.use_stencil_layer
             entry.invert_stencil = image_paint.invert_stencil
@@ -217,8 +227,9 @@ def _hold(scene, mesh) -> None:
         backup.mesh = mesh
         stencil_uv = mesh.uv_layer_stencil
         backup.uv_name = stencil_uv.name if stencil_uv is not None else ""
-    # The scene's backup is the one undo restores along with the mesh. The
-    # window manager keeps a copy for when the scene is removed while it holds.
+    # Undo restores the scene's backup along with the mesh. The window
+    # manager keeps a copy for when the scene is removed while the
+    # selection holds it.
     kept = settings.stencil_scenes[index].meshes
     if not any(entry.mesh == mesh for entry in kept):
         entry = kept.add()
@@ -227,7 +238,7 @@ def _hold(scene, mesh) -> None:
 
 
 def is_applied(scene) -> bool:
-    """Whether the scene's stencil settings currently belong to the selection. Safe from draw code."""
+    """True when the scene's stencil settings belong to the selection now. Safe from draw code."""
     return _settings().find_scene(scene) >= 0
 
 
@@ -266,17 +277,17 @@ def _forget_removed_scenes() -> None:
 
 
 def restore_all() -> None:
-    """Give every scene's stencil settings back; before a save and on unregister."""
+    """Give every scene's stencil settings back. Called before a save and on unregister."""
     _forget_removed_scenes()
     for scene in bpy.data.scenes:
         restore(scene)
 
 
 def _recover(scene) -> None:
-    """Undo what a file saved without `restore_all`, as an autosave, still holds.
+    """Undo what a file saved without `restore_all`, such as an autosave, still holds.
 
-    The user's settings went with the session, so the stencil goes back to
-    Blender's defaults.
+    The user's settings were lost with the old session, so the stencil
+    goes back to Blender's defaults.
     """
     image_paint = scene.tool_settings.image_paint
     if not _is_selection_image(image_paint.stencil_image):
@@ -291,13 +302,14 @@ def sync(state, target) -> None:
     """Make the stencil settings match the session's *state*.
 
     *target* is the `session.Target` *state* was resolved from, or None.
-    The selection applies in texture paint mode: through its mask file
-    when the mask is available, blocking all paint when `state.reason`
-    says why it is not. A mask that selects nothing (`state.empty`) is no
-    selection, so the user's settings come back.
+    The selection applies in texture paint mode. It uses its mask file
+    when the mask is available. It blocks all paint when `state.reason`
+    says why the mask is not available. A mask that selects nothing
+    (`state.empty`) counts as no selection, so the user's settings come
+    back.
     """
     scene = bpy.context.scene
-    # Tool settings are per scene: another scene keeps nothing of the selection's.
+    # Tool settings are per scene. Give every other scene its settings back.
     _forget_removed_scenes()
     scenes = _settings().stencil_scenes
     for index in reversed(range(len(scenes))):
@@ -324,7 +336,7 @@ def sync(state, target) -> None:
 
 
 def on_file_loaded() -> None:
-    """Forget the previous file's stencil and release what a new one still holds; on load."""
+    """Forget the previous file's stencil and release what the new file still holds. Called on load."""
     _loaded.clear()
     _settings().stencil_scenes.clear()
     for scene in bpy.data.scenes:
@@ -341,14 +353,19 @@ def draw_image_header(self, context) -> None:
 
 
 def _on_settings_changed(*args) -> None:
-    # Imported here: the session imports this module. A forced sync sets
-    # the settings back even though the session's state is unchanged.
+    # Imported here because the session imports this module. A forced
+    # sync sets the settings back even though the session's state is
+    # unchanged.
     from . import session
     session.notify(force=True)
 
 
 def subscribe() -> None:
-    """(Re)subscribe to the settings the selection owns; the message bus forgets subscribers on file load."""
+    """Subscribe to the settings the selection owns, replacing any earlier subscription.
+
+    The message bus forgets subscribers on file load, so this runs again
+    then.
+    """
     bpy.msgbus.clear_by_owner(_msgbus_owner)
     keys = (
         (bpy.types.ImagePaint, "use_stencil_layer"),

@@ -1,32 +1,32 @@
-"""Draw the live selection over the 3D view and the image editor (PS-091).
+"""Draw the live selection in the 3D view and the image editor (PS-091).
 
-The overlay only draws. It never touches a material, never builds a mask
-and never changes the selection: each draw callback reads the state the
-session last synced (`session.current()`), peeks the cached mask and
-draws it, or draws nothing. When what it would draw no longer matches
-the state, it calls `session.notify()` and the next tick catches up.
-That is the safety net for a writer that forgot to notify, and the only
-thing that sees an image resized with `Image.scale`, which reports no
-event.
+The overlay only draws. It never touches a material, builds a mask or
+changes the selection. Each draw callback reads the state the session
+last synced (`session.current()`), peeks at the cached mask and draws it,
+or draws nothing. If what it would draw no longer matches the state, it
+calls `session.notify()` and the next tick catches up. This is a safety
+net for code that forgot to notify. It is also the only thing that
+notices an image resized with `Image.scale`, which sends no event.
 
-- The 3D view shows the selection in Texture Paint mode only, on the
+- The 3D view shows the selection only in Texture Paint mode, on the
   object the selection applies to, while `show_selection_3d` is on. The
-  mesh is drawn twice (see `overlay_shader`): coverage into an offscreen
-  buffer the size of the region, then a screen pass with a small clip
-  depth offset so it does not fight the surface.
+  mesh is drawn twice (see `overlay_shader`). The first pass writes
+  coverage into an offscreen buffer the size of the region. The second
+  draws on screen with a small clip depth offset, so it does not z-fight
+  the surface.
 - The image editor shows it over the image the selection applies to, in
   View and Paint mode.
-- While either is visible, an 8 Hz timer tags just those areas for redraw
-  so the ants march. It stops on the first tick that finds nothing to
-  show.
+- While either is visible, an 8 Hz timer tags just those areas for
+  redraw so the ants march. It stops on the first tick that finds
+  nothing to show.
 
 The mesh batch is cached per object in local space, so moving the object
-costs nothing, together with the surface key it was built from
-(`gpu_passes.surface`). A draw only peeks at the key. While the key is not
-fresh, after a geometry update, an undo or a frame change, the draw uses
-the cached batch and requests a resolve; the batch is rebuilt once the
-resolved key differs. A texture paint stroke, which reports a geometry
-update on 5.3, therefore rebuilds nothing, and a real surface change
+costs nothing. It is stored with the surface key it was built from
+(`gpu_passes.surface`). A draw only peeks at the key. When the key is not
+fresh (after a geometry update, an undo or a frame change), the draw uses
+the cached batch and requests a resolve. The batch is rebuilt only once
+the resolved key differs. So a texture paint stroke, which reports a
+geometry update on Blender 5.3, rebuilds nothing. A real surface change
 shows the previous batch for one frame. `handlers.node_tree_handlers`
 drops every batch when a file is read.
 """
@@ -59,7 +59,7 @@ LINE_HALF_WIDTH = 1.0
 """Half the width of the ants, in pixels at a UI scale of 1."""
 
 DEPTH_OFFSET = 1.0
-"""Distance handed to the polygon offset; Blender's own edit overlays use 1."""
+"""Polygon offset distance. Blender's own edit overlays use 1."""
 
 DEFAULTS = {
     "show_selection_3d": True,
@@ -80,17 +80,17 @@ _handles: list[tuple[type, object]] = []
 _shaders: dict[str, gpu.types.GPUShader] = {}
 # Region pointer -> the coverage buffer of that region.
 _offscreens: dict[int, gpu.types.GPUOffScreen] = {}
-# (object session_uid, UV map, per slot whether it uses the tree) -> (surface key or None, batch or None
-# without triangles).
+# (object session_uid, UV map, whether each material slot uses the tree)
+# -> (surface key or None, batch or None when no triangles are left).
 _batches: dict[tuple, tuple[bytes | None, gpu.types.GPUBatch | None]] = {}
 
 
 def srgb_to_linear(color) -> tuple[float, float, float]:
-    """The first three channels of display colour *color* as the linear values a shader must write.
+    """The RGB of sRGB display colour *color* as the linear values a shader must write.
 
-    The viewport and the image editor treat what a `GPUShaderCreateInfo`
-    shader writes as linear and encode it to sRGB, so a preference colour
-    drawn as is would come out lighter than its swatch.
+    The viewport and the image editor treat the output of a
+    `GPUShaderCreateInfo` shader as linear and encode it to sRGB. A
+    preference colour written as is would look lighter than its swatch.
     """
     return tuple(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in color[:3])
 
@@ -111,11 +111,12 @@ def _ant_style(prefs: dict, scale: float):
 
 
 def ant_style(context) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float]]:
-    """The `ant_a` and `ant_b` push constants for `overlay_shader.ANT_GLSL`, as of now.
+    """The `ant_a` and `ant_b` push constants for `overlay_shader.ANT_GLSL` at this moment.
 
-    Linear RGB plus the dash phase, and linear RGB plus the dash length,
-    both in pixels scaled by the UI scale. A shader that draws its own
-    ants with these crawls in step with the overlay.
+    `ant_a` is linear RGB plus the dash phase. `ant_b` is linear RGB plus
+    the dash length. Both are in pixels, scaled by the UI scale. A shader
+    that draws its own ants with these values crawls in step with the
+    overlay.
     """
     return _ant_style(settings(context), context.preferences.system.ui_scale)
 
@@ -137,16 +138,20 @@ def clip_offset(rv3d, distance: float) -> float:
 
 
 def invalidate_all() -> None:
-    """Drop every batch and coverage buffer; after a file read, whose objects and regions are new."""
+    """Drop every batch and coverage buffer.
+
+    Called after a file read, which brings new objects and regions.
+    """
     _batches.clear()
     _offscreens.clear()
 
 
 def sync(state, target) -> None:
-    """Follow a new session state: keep only the batches of its object and march the ants if visible.
+    """Follow a new session state: drop other objects' batches, start the ants if visible.
 
-    Called by the session after each sync that changed something; *target*
-    is unused and there for the consumer contract.
+    The session calls this after each sync that changed something.
+    *target* is unused. It is there because every session consumer takes
+    the same arguments.
     """
     for key in [key for key in _batches if key[0] != state.object_uid]:
         del _batches[key]
@@ -174,13 +179,13 @@ def _shader(name: str) -> gpu.types.GPUShader:
 # ── What to draw ─────────────────────────────────────────────────────
 
 def _target_mask(tree, state, image) -> raster.SelectionMask | None:
-    """The cached mask to draw over *image*, or None; notifies the session when it is out of step.
+    """The cached mask to draw over *image*, or None.
 
     *tree* is the active tree where the draw happens. Nothing is drawn
-    unless the state is active and names that tree and image. An image
-    whose size no longer matches the state (`Image.scale` reports nothing)
-    and a mask that is missing or was built for other ops both schedule a
-    sync.
+    unless the state is active and names that tree and image. The session
+    is notified when it is out of step. That happens when the image size
+    no longer matches the state (`Image.scale` sends no event), or when
+    the mask is missing or was built for other ops.
     """
     from . import session
 
@@ -191,8 +196,8 @@ def _target_mask(tree, state, image) -> raster.SelectionMask | None:
     if raster.image_size(image, state.tile) != state.size:
         session.notify()
         return None
-    # peek_mask looks the mask up by the digest of the ops as they are now,
-    # with the surface keys a draw may read without resolving them.
+    # Look the mask up by the digest of the ops as they are now. With
+    # `peek=True`, `view_key` reads each surface key without resolving it.
     mask = raster.peek_mask(tree.selection, state.size, state.tile,
                             surface_key=functools.partial(raster.view_key, peek=True))
     if mask is None or mask.key != state.digest:
@@ -207,10 +212,10 @@ def _slot_uses(obj, tree) -> tuple[bool, ...]:
 
 
 def _mesh_batch(obj, uv_map: str, tree, depsgraph) -> gpu.types.GPUBatch | None:
-    """The evaluated mesh of *obj* in local space, the faces whose material uses *tree* only.
+    """A local-space batch of the faces of *obj*'s evaluated mesh whose material uses *tree*.
 
-    Triangles with `position` and `uv` from *uv_map*. None when nothing is
-    left to draw or the map is missing.
+    Triangles with `position`, and `uv` from *uv_map*. None when no faces
+    are left or the map is missing.
     """
     arrays = texel_map.local_triangles(obj, uv_map, depsgraph, normals=False)
     if arrays is None:
@@ -229,10 +234,11 @@ def _mesh_batch(obj, uv_map: str, tree, depsgraph) -> gpu.types.GPUBatch | None:
 def _cached_batch(obj, uv_map: str, tree, depsgraph) -> gpu.types.GPUBatch | None:
     """The mesh batch to draw now, built at most once per surface key.
 
-    A cached batch whose key is not fresh is drawn as it is while the
-    timer resolves the key, also when the key is None or its entry was
-    dropped. A fresh key equal to the cached one, None included, draws the
-    cached batch. Anything else resolves the key and builds.
+    If the surface key is not fresh, the cached batch is drawn as it is
+    while the timer resolves the key. This also holds when the key is None
+    or its surface entry was dropped. If the fresh key equals the cached
+    one (None included), the cached batch is drawn. Otherwise the key is
+    resolved and the batch is rebuilt.
     """
     key = (obj.session_uid, uv_map, _slot_uses(obj, tree))
     cached = _batches.get(key)
@@ -243,7 +249,8 @@ def _cached_batch(obj, uv_map: str, tree, depsgraph) -> gpu.types.GPUBatch | Non
             return cached[1]
         if cached[0] == surface_key:
             return cached[1]
-    # A miss builds in the draw; resolving the key costs little next to it.
+    # A miss builds the batch in the draw, so resolving the key costs
+    # little in comparison.
     surface_key = surface.resolve_key(obj, uv_map, depsgraph)
     _batches[key] = (surface_key, _mesh_batch(obj, uv_map, tree, depsgraph))
     return _batches[key][1]
@@ -347,8 +354,9 @@ def _draw_image_editor() -> None:
         return
     ensure_timer()
     view2d = context.region.view2d
-    # region_to_view returns floats, where view_to_region rounds to whole
-    # pixels. View coordinates are UV units, also for a non-square image.
+    # Use region_to_view, which returns floats. view_to_region rounds to
+    # whole pixels. View coordinates are UV units, even for a non-square
+    # image.
     x0, y0 = view2d.region_to_view(0.0, 0.0)
     x1, y1 = view2d.region_to_view(1000.0, 1000.0)
     sx, sy = 1000.0 / (x1 - x0), 1000.0 / (y1 - y0)

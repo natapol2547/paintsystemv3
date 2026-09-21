@@ -6,7 +6,8 @@ Screen y points up, as in `Event.mouse_region_y`.
 import math
 
 LASSO_MAX_POINTS = 4096
-"""Points a lasso keeps while it is drawn; past it every other point is dropped and the step doubles."""
+"""Most points a lasso keeps while it is drawn. Past it, every other point
+is dropped and the step doubles."""
 
 
 def box_corners(start, end, square: bool, centre: bool) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -41,12 +42,12 @@ def ellipse_outline(low, high, segments: int = 64) -> list[tuple[float, float]]:
 
 
 def lasso_append(points: list, point, step: float) -> float:
-    """Append *point* to a lasso when it is at least *step* from the last point; the step for the next one.
+    """Append *point* to a lasso if it is at least *step* from the last point, and return the next step.
 
-    Past `LASSO_MAX_POINTS` every other point is dropped, keeping the
-    first and the one just appended, so a long drag stays cheap to draw
-    and to rasterise at a coarser spacing. The returned step is then
-    doubled, so later points are spaced like the kept ones and the start
+    Past `LASSO_MAX_POINTS`, every other point is dropped, keeping the
+    first and the one just appended. So a long drag stays cheap to draw
+    and to rasterise, at a coarser spacing. The returned step is then
+    doubled. So later points are spaced like the kept ones, and the start
     of the lasso is not thinned again on every later overflow.
     """
     point = (float(point[0]), float(point[1]))
@@ -63,7 +64,7 @@ def lasso_append(points: list, point, step: float) -> float:
 
 
 def degenerate(kind: str, points) -> bool:
-    """Whether an outline of *kind* encloses no area.
+    """True when an outline of *kind* encloses no area.
 
     A box or ellipse needs two corners with a non-zero width and height.
     A lasso needs three distinct points that are not all on one line.
@@ -83,7 +84,7 @@ def degenerate(kind: str, points) -> bool:
 
 
 def signed_area(points) -> float:
-    """Shoelace area of a closed outline: positive when it runs counter-clockwise with y up."""
+    """Shoelace area of a closed outline. Positive when it runs counter-clockwise with y up."""
     points = list(points)
     return 0.5 * sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(points, points[1:] + points[:1]))
 
@@ -101,7 +102,7 @@ def clockwise(points) -> list[tuple[float, float]]:
 
 
 def quad_strip(points, width: float) -> tuple[list, list]:
-    """TRIS vertices for a closed outline drawn *width* pixels wide: positions and per-vertex tangents.
+    """TRIS vertices for a closed outline drawn *width* pixels wide, as positions and per-vertex tangents.
 
     The last point joins back to the first. Each segment is a quad along
     its unit tangent, extended by half the width at both ends so corners
