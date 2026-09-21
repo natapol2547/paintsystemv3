@@ -122,7 +122,6 @@ class NodeInstruction:
     properties: dict[str, Any] = field(default_factory=dict)
     inputs: dict[int | str, dict[str, Any]] = field(default_factory=dict)
     outputs: dict[int | str, dict[str, Any]] = field(default_factory=dict)
-    specials: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -168,7 +167,6 @@ class NodeTreeBuilder:
         properties: dict[str, Any] | None = None,
         inputs: dict[int | str, dict[str, Any]] | None = None,
         outputs: dict[int | str, dict[str, Any]] | None = None,
-        specials: dict[str, dict[str, Any]] | None = None,
     ) -> NodeTreeBuilder:
         instr = NodeInstruction(bl_idname=bl_idname)
         if properties:
@@ -177,35 +175,7 @@ class NodeTreeBuilder:
             instr.inputs = {k: dict(v) for k, v in inputs.items()}
         if outputs:
             instr.outputs = {k: dict(v) for k, v in outputs.items()}
-        if specials:
-            instr.specials = {k: dict(v) for k, v in specials.items()}
         self._node_instructions[identifier] = instr
-        return self
-
-    def set_node_property(
-        self, identifier: str, prop: str, value: Any
-    ) -> NodeTreeBuilder:
-        self._node_instructions[identifier].properties[prop] = value
-        return self
-
-    def set_node_input(
-        self, identifier: str, socket_id: int | str, **props: Any
-    ) -> NodeTreeBuilder:
-        instr = self._node_instructions[identifier]
-        instr.inputs.setdefault(socket_id, {}).update(props)
-        return self
-
-    def set_node_output(
-        self, identifier: str, socket_id: int | str, **props: Any
-    ) -> NodeTreeBuilder:
-        instr = self._node_instructions[identifier]
-        instr.outputs.setdefault(socket_id, {}).update(props)
-        return self
-
-    def set_node_special(
-        self, identifier: str, attr_name: str, props: dict[str, Any]
-    ) -> NodeTreeBuilder:
-        self._node_instructions[identifier].specials[attr_name] = dict(props)
         return self
 
     def add_socket(
@@ -288,13 +258,6 @@ class NodeTreeBuilder:
                 self._apply_node_properties(node, instr.properties, is_new)
                 self._apply_socket_properties(node.inputs, instr.inputs, is_new)
                 self._apply_socket_properties(node.outputs, instr.outputs, is_new)
-
-                for attr_name, props in instr.specials.items():
-                    sub_obj = getattr(node, attr_name, None)
-                    if sub_obj is not None:
-                        self._apply_props_recursive(sub_obj, props, is_new)
-                    else:
-                        log.warning("special %s not found on node %s", attr_name, node.name)
 
         with phase("links", self.node_tree):
             self._sync_links()
@@ -512,67 +475,6 @@ class NodeTreeBuilder:
                     continue
                 self._write_if_changed(
                     socket, prop, value.value if is_flexible else value)
-
-    def _apply_props_recursive(
-        self, idblock: Any, prop_dict: dict[str, Any],
-        is_new: bool = True,
-    ) -> None:
-        for key, value in prop_dict.items():
-            is_flexible = isinstance(value, Flexible)
-            if is_flexible and not is_new:
-                continue
-            actual_value = value.value if is_flexible else value
-
-            prop = idblock.bl_rna.properties.get(key)
-            if prop is None:
-                continue
-
-            if not prop.is_readonly:
-                if prop.type == "POINTER" and isinstance(actual_value, str):
-                    collection = _get_data_collection(prop.fixed_type)
-                    if collection:
-                        ptr = collection.get(actual_value)
-                        if ptr is not None:
-                            self._write_if_changed(idblock, key, ptr)
-                else:
-                    self._write_if_changed(idblock, key, actual_value)
-
-            elif prop.type == "COLLECTION":
-                if not isinstance(actual_value, list):
-                    continue
-                collection = getattr(idblock, key)
-
-                if hasattr(collection, "new"):
-                    new_fn = collection.bl_rna.functions.get("new")
-                    new_params = new_fn.parameters if new_fn else ()
-                    if hasattr(collection, "clear"):
-                        collection.clear()
-
-                    for i, item in enumerate(actual_value):
-                        used_keys: set[str] = set()
-                        if i >= len(collection):
-                            params = []
-                            for p in new_params:
-                                np = item.get(p.identifier)
-                                if np is None:
-                                    break
-                                params.append(np)
-                                used_keys.add(p.identifier)
-                            obj = collection.new(*params)
-                        else:
-                            obj = collection[i]
-
-                        # No comparison here: the collection was just cleared,
-                        # so every element is new and every value is a change.
-                        for k, v in item.items():
-                            if k not in used_keys:
-                                self._write(obj, k, v)
-                else:
-                    for i, item in enumerate(actual_value):
-                        if i < len(collection):
-                            self._apply_props_recursive(
-                                collection[i], item, is_new
-                            )
 
     def _socket_by_id(
         self, node: bpy.types.Node, is_input: bool, socket_id: int | str,

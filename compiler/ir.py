@@ -37,7 +37,6 @@ class IRNode:
     properties: dict[str, Any] = field(default_factory=dict)
     inputs: dict[SocketId, dict[str, Any]] = field(default_factory=dict)
     outputs: dict[SocketId, dict[str, Any]] = field(default_factory=dict)
-    specials: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -70,7 +69,6 @@ class IR:
         properties: dict[str, Any] | None = None,
         inputs: dict[SocketId, dict[str, Any]] | None = None,
         outputs: dict[SocketId, dict[str, Any]] | None = None,
-        specials: dict[str, dict[str, Any]] | None = None,
     ) -> IRNode:
         if identifier in self.nodes:
             raise ValueError(f"IR node identifier already used: {identifier}")
@@ -80,7 +78,6 @@ class IR:
             properties=dict(properties or {}),
             inputs={k: dict(v) for k, v in (inputs or {}).items()},
             outputs={k: dict(v) for k, v in (outputs or {}).items()},
-            specials={k: dict(v) for k, v in (specials or {}).items()},
         )
         self.nodes[identifier] = node
         return node
@@ -116,7 +113,6 @@ class IR:
                     _serialize(n.properties),
                     _serialize(n.inputs),
                     _serialize(n.outputs),
-                    _serialize(n.specials),
                 ]
                 for nid, n in sorted(self.nodes.items())
             },
@@ -142,7 +138,6 @@ class IR:
                 properties=node.properties,
                 inputs=node.inputs,
                 outputs=node.outputs,
-                specials=node.specials,
             )
         for link in self.links:
             builder.link_nodes(link.from_id, link.to_id, link.from_socket, link.to_socket)
