@@ -6,7 +6,7 @@ from bpy.props import (BoolProperty, EnumProperty, FloatProperty, IntProperty,
                        PointerProperty, StringProperty)
 from bpy.utils import register_classes_factory
 
-from .base_layer_node import PaintSystemLayerNode, emit_image_texture, update_painting
+from .base_layer_node import PaintSystemLayerNode, emit_image_texture, emit_mix_group, update_painting
 from ..base_node import mark_tree_dirty
 from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
@@ -426,19 +426,8 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             layer_job.settled(self)
 
     def emit_blend(self, ctx, color, alpha, *, clip=False):
-        fmix = ctx.emit_node(self, 'fmix', 'ShaderNodeGroup', properties={
-            'node_tree': filter_mix_group(),
-        })
-        ctx.connect_input(self.inputs['Color'], fmix, 'Prev Color')
-        ctx.connect_input(self.inputs['Alpha'], fmix, 'Prev Alpha')
-        ctx.connect_input(self.inputs['Mask'], fmix, 'Mask')
-        ctx.link_or_set(color, fmix, 'Color')
-        ctx.link_or_set(alpha, fmix, 'Alpha')
-        ctx.ir.set_input(fmix, 'Amount', default_value=self.amount)
-        # Always set: the artifact reuses nodes by id and keeps the values
-        # of inputs the IR leaves out.
-        ctx.ir.set_input(fmix, 'Clip', default_value=1.0 if clip else 0.0)
-        return (fmix, 'Color'), (fmix, 'Alpha')
+        return emit_mix_group(ctx, self, 'fmix', filter_mix_group(), 'Amount', self.amount,
+                              color, alpha, clip=clip)
 
 
 classes = (

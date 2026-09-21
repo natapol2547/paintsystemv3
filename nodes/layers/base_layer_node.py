@@ -40,6 +40,27 @@ def emit_image_texture(ctx, node, role: str, image, uv_map: str = ""):
     return (tid, 'Color'), (tid, 'Alpha')
 
 
+def emit_mix_group(ctx, node, role: str, group, amount_socket: str, amount: float,
+                   color, alpha, *, clip: bool):
+    """Emit *group*, a library mix group, putting (color, alpha) over *node*'s stack.
+
+    The group reads the stack below from *node*'s ``Color``/``Alpha`` inputs
+    and its ``Mask`` input, and takes *amount* on *amount_socket*. Returns
+    the result's colour and alpha refs. *clip* keeps the backdrop's alpha.
+    """
+    mix = ctx.emit_node(node, role, 'ShaderNodeGroup', properties={'node_tree': group})
+    ctx.connect_input(node.inputs['Color'], mix, 'Prev Color')
+    ctx.connect_input(node.inputs['Alpha'], mix, 'Prev Alpha')
+    ctx.connect_input(node.inputs['Mask'], mix, 'Mask')
+    ctx.link_or_set(color, mix, 'Color')
+    ctx.link_or_set(alpha, mix, 'Alpha')
+    ctx.ir.set_input(mix, amount_socket, default_value=amount)
+    # Always set: the artifact reuses nodes by id and keeps the values of
+    # inputs the IR leaves out.
+    ctx.ir.set_input(mix, 'Clip', default_value=1.0 if clip else 0.0)
+    return (mix, 'Color'), (mix, 'Alpha')
+
+
 class PaintSystemLayerNode(PaintSystemBaseNode):
     """A layer: takes the previous stack (Color/Alpha), produces a new stack.
 
@@ -231,17 +252,6 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         Uses this layer's blend mode, opacity and mask, and returns the
         result's colour and alpha refs. *clip* keeps the backdrop's alpha.
         """
-        blend = ctx.emit_node(self, 'blend', 'ShaderNodeGroup', properties={
-            'node_tree': layer_blend_group(self.blend_mode),
-        })
-        ctx.connect_input(self.inputs['Color'], blend, 'Prev Color')
-        ctx.connect_input(self.inputs['Alpha'], blend, 'Prev Alpha')
-        ctx.connect_input(self.inputs['Mask'], blend, 'Mask')
-        ctx.link_or_set(color, blend, 'Color')
-        ctx.link_or_set(alpha, blend, 'Alpha')
-        ctx.ir.set_input(blend, 'Opacity',
-                         default_value=self.opacity if self.enabled else 0.0)
-        # Always set: the artifact reuses nodes by id and keeps the values of
-        # inputs the IR leaves out.
-        ctx.ir.set_input(blend, 'Clip', default_value=1.0 if clip else 0.0)
-        return (blend, 'Color'), (blend, 'Alpha')
+        return emit_mix_group(ctx, self, 'blend', layer_blend_group(self.blend_mode),
+                              'Opacity', self.opacity if self.enabled else 0.0,
+                              color, alpha, clip=clip)
