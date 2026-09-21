@@ -1,7 +1,6 @@
 from bpy.utils import register_submodule_factory
 
 submodules = (
-    "header_draw",
     "io",
     "layers",
 )

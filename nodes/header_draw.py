@@ -9,18 +9,14 @@ afterwards. A rounded backdrop drawn here leaves its color in the header.
 Collapsed nodes draw their whole body here, before Blender draws the
 outline and controls. Explicit Node.label values bypass this callback.
 """
-import math
-
 import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
-
-_shader = None
+from ..common import rounded_rect
 
 
 def draw_header(node):
-    global _shader
     context = bpy.context
     if (bpy.app.background or not node.use_custom_color
             or node.header_color is None):
@@ -56,36 +52,16 @@ def draw_header(node):
             2 if bpy.app.version < (5, 0, 0) else 4 * scale
         corner_radius += padding
     right, bottom = left + width + 2 * padding, top - height - 2 * padding
-    radius = min(corner_radius, (right - left) / 2, (top - bottom) / 2)
-    vertices = []
-    for cx, cy, start in (
-        (left + radius, top - radius, math.pi),
-        (right - radius, top - radius, math.pi / 2),
-        (right - radius, bottom + radius, 0),
-        (left + radius, bottom + radius, -math.pi / 2),
-    ):
-        for step in range(7):
-            angle = start - step * math.pi / 12
-            vertices.append((cx + math.cos(angle) * radius,
-                            cy + math.sin(angle) * radius))
+    vertices = rounded_rect(left, bottom, right, top, corner_radius)
 
-    if _shader is None:
-        _shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-    batch = batch_for_shader(_shader, 'TRI_FAN', {'pos': vertices})
+    # from_builtin returns Blender's own cached shader, so there is nothing to keep here.
+    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+    batch = batch_for_shader(shader, 'TRI_FAN', {'pos': vertices})
     blend = gpu.state.blend_get()
     try:
         gpu.state.blend_set('ALPHA')
-        _shader.bind()
-        _shader.uniform_float('color', (*node.header_color, 1.0))
-        batch.draw(_shader)
+        shader.bind()
+        shader.uniform_float('color', (*node.header_color, 1.0))
+        batch.draw(shader)
     finally:
         gpu.state.blend_set(blend)
-
-
-def register():
-    pass
-
-
-def unregister():
-    global _shader
-    _shader = None

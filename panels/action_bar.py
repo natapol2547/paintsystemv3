@@ -18,8 +18,6 @@ The poll has to check `SpaceView3D.show_gizmo`: gizmos that are not drawn
 are still picked, so without it a hidden bar would go on swallowing
 clicks over its own rectangle.
 """
-import math
-
 import bpy
 import gpu
 from bpy.types import Gizmo, GizmoGroup, Menu
@@ -27,7 +25,7 @@ from bpy.utils import register_class, unregister_class
 from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix
 
-from ..common import ADDON_ID, blender_icon, icon_kwargs
+from ..common import ADDON_ID, blender_icon, icon_kwargs, rounded_rect
 from ..context import get_active_tree
 from ..selection import session as selection_session
 
@@ -139,19 +137,6 @@ def bar_layout(visible, count: int, scale: float) -> dict:
             "centers": centers, "radius": size / 2, "scale": scale}
 
 
-def _rounded_rect(x0, y0, x1, y1, radius, segments=6):
-    """Outline of a rounded rectangle, counter-clockwise from the right edge."""
-    radius = max(0.0, min(radius, (x1 - x0) / 2, (y1 - y0) / 2))
-    corners = ((x1 - radius, y1 - radius, 0.0), (x0 + radius, y1 - radius, 0.5),
-               (x0 + radius, y0 + radius, 1.0), (x1 - radius, y0 + radius, 1.5))
-    points = []
-    for cx, cy, start in corners:
-        for step in range(segments + 1):
-            angle = math.pi * (start + 0.5 * step / segments)
-            points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
-    return points
-
-
 # Label and (red, green, blue, alpha) for each entry of the Invert menu.
 INVERT_CHOICES = (
     ("Colors", (True, True, True, False)),
@@ -222,7 +207,7 @@ class PAINTSYSTEM_GT_action_backdrop(Gizmo):
         x0, y0, x1, y1 = self.rect
         if x1 <= x0 or y1 <= y0:
             return
-        outline = _rounded_rect(x0, y0, x1, y1, self.corner)
+        outline = rounded_rect(x0, y0, x1, y1, self.corner)
         fan = [((x0 + x1) / 2, (y0 + y1) / 2)] + outline + [outline[0]]
         indices = [(0, index, index + 1) for index in range(1, len(fan) - 1)]
         shader = gpu.shader.from_builtin('UNIFORM_COLOR')
