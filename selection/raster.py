@@ -564,7 +564,7 @@ def _half_width(feather: float, antialias: bool) -> float:
 def _float_texture(values: np.ndarray, fmt: str, width: int) -> gpu.types.GPUTexture:
     """A float texture *width* texels wide holding *values* row by row."""
     flat = np.ascontiguousarray(values, dtype=np.float32).ravel()
-    channels = {'R32F': 1, 'RG32F': 2, 'RGBA32F': 4}[fmt]
+    channels = {'R32F': 1, 'RG32F': 2, 'RGBA32F': 4, 'RGBA16F': 4}[fmt]
     height = len(flat) // (width * channels)
     return gpu.types.GPUTexture((width, height), format=fmt, data=gpu.types.Buffer('FLOAT', len(flat), flat))
 

@@ -382,13 +382,9 @@ class SyntheticSurface:
     __slots__ = ('position', 'normal', 'triangles')
 
     def __init__(self, positions: np.ndarray, normals: np.ndarray, triangles: np.ndarray):
-        height, width = positions.shape[:2]
-        flat = np.ascontiguousarray(positions, dtype=np.float32).ravel()
-        self.position = gpu.types.GPUTexture((width, height), format='RGBA32F',
-                                             data=gpu.types.Buffer('FLOAT', len(flat), flat))
-        flat = np.ascontiguousarray(normals, dtype=np.float32).ravel()
-        self.normal = gpu.types.GPUTexture((width, height), format='RGBA16F',
-                                           data=gpu.types.Buffer('FLOAT', len(flat), flat))
+        width = positions.shape[1]
+        self.position = raster._float_texture(positions, 'RGBA32F', width)
+        self.normal = raster._float_texture(normals, 'RGBA16F', width)
         self.triangles = np.ascontiguousarray(triangles, dtype=np.float32).reshape(-1, 3)
 
     def texel_map(self, width: int, height: int, tile: int):
