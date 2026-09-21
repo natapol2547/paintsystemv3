@@ -50,9 +50,6 @@ class PaintSystemBaseNode:
         # Called on the new node with the source node; the copy needs its own identity.
         self.uuid = str(uuid.uuid4())
 
-    def free(self):
-        pass
-
     def draw_label(self):
         draw_header(self)
         return self.bl_label
