@@ -1,28 +1,28 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The painter's build: GPU passes around the numpy planning (PS-053).
 
-`build` is the Painterly kind's build hook, which `filters.layer_build`
-runs in place of a list of passes. In order:
+`build` is the Painterly kind's build hook. `filters.layer_build` runs it
+instead of a list of passes. The steps are:
 
-1. the stack below is encoded to sRGB, because v2 painted stored byte
-   values and its look depends on it -- the blur, the luma the gradient
-   is taken on, and the edge of every "over";
-2. the colour the stamps pick up is blurred with v2's kernel, and a Sobel
-   pass over the blurred luma gives the gradient field, whose peak is
-   found by reduction when the threshold needs it;
-3. one small pass reads both at every stamp centre `plan.draws` picked,
-   which is the only readback before the result;
-4. `plan.stamps` decides which land and how, and each step's stamps are
-   drawn as turned quads into a premultiplied copy of the picture, from
-   one atlas of that step's brushes;
-5. the canvas is un-premultiplied and decoded back to scene linear,
-   because the build encodes whatever a kind returns.
+1. Encode the stack below to sRGB. v2 painted stored byte values, and
+   its look depends on that: the blur, the luma the gradient is taken
+   on, and the edge of every "over" blend.
+2. Blur the colour the stamps pick up, with v2's kernel. A Sobel pass
+   over the blurred luma gives the gradient field. Its peak is found by
+   a reduction, only when the edge threshold needs it.
+3. Read both at every stamp centre `plan.draws` picked, in one small
+   pass. This is the only readback before the result.
+4. `plan.stamps` decides which stamps land and how. Each step's stamps
+   are drawn as rotated quads into a premultiplied copy of the picture,
+   from one atlas of that step's brushes.
+5. Un-premultiply the canvas and decode it back to scene linear, because
+   the layer build encodes whatever a kind returns.
 
-The textures in flight are the pool's, the full size of the layer; the
-small ones -- positions, gathered values, the reduction -- are made here
-and dropped with the generator's frame. The atlases outlive it: each
-brush keeps the ones its last build drew with, because a rebuild after
-a stroke below asks for exactly those again.
+The full-size textures come from the pool. The small ones (positions,
+gathered values, the reduction) are made here and are freed when the
+generator ends. The atlases are kept after it: each brush keeps the ones
+its last build drew with, because a rebuild after a stroke below asks
+for exactly those again.
 """
 from __future__ import annotations
 
@@ -40,21 +40,24 @@ from . import brushes, plan
 
 log = logging.getLogger(__name__)
 
-# The widest side of one gather. A chunk of this many squared stamps is
-# two readbacks of 4 MB, and the default settings at 4096 need one chunk
-# of a few thousand.
+# Largest side of one gather target. One chunk gathers up to
+# `GATHER_SIDE` squared stamps, which is two readbacks (colour and
+# gradient) of 4 MB each. The default settings at 4096 need only one
+# chunk, of a few thousand stamps.
 GATHER_SIDE = 512
-# Stamps per draw. Each is a unit of the build, and the one-texel read
-# after it keeps the driver's queue short, as `run_pass` does in bands.
+# Stamps per draw call. Each draw is one unit of the build, and the
+# one-texel read after it keeps the driver's queue short, like the bands
+# of `run_pass`.
 DRAW_CHUNK = 32768
-# Texels per side that one reduction pass takes the peak of.
+# Side of the texel square that one reduction pass reduces to one texel.
 PEAK_BLOCK = 8
 
 LUMA = FilterSpec(
     name="painter_luma",
     apply_source="""
-/* The picture the stroke direction is taken from: v2's luma of the
-   straight colour, opaque so that the blur after it is a plain one. */
+/* The image the stroke direction is taken from: v2's luma of the
+   straight colour. Alpha is 1, so the blur after it is not weighted by
+   alpha. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
@@ -71,8 +74,9 @@ float ps_luma_at(ivec2 texel, int dx, int dy, ivec2 last)
   return texelFetch(source, clamp(texel + ivec2(dx, dy), ivec2(0), last), 0).r;
 }
 
-/* v2's Sobel, with the edge clamped as its padding did, and y up: rows
-   run bottom-up here, so `gy` is the row above minus the row below. */
+/* v2's Sobel filter. Reads past the edge are clamped, matching v2's
+   padding. Rows run bottom-up here, so y points up and `gy` is the row
+   above minus the row below. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   ivec2 last = ivec2(target_size) - ivec2(1);
@@ -90,8 +94,9 @@ vec4 apply(ivec2 texel, vec4 c)
 PEAK = FilterSpec(
     name="painter_peak",
     apply_source=f"const int PEAK_BLOCK = {PEAK_BLOCK};\n" + """
-/* The largest magnitude in one PEAK_BLOCK square of the level below,
-   in every channel, so the next level reads it where this one did. */
+/* The largest magnitude in one PEAK_BLOCK square of the level below.
+   It is written to every channel, so the next level can read it from
+   `.b` just as this level did. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   ivec2 last = textureSize(source, 0) - ivec2(1);
@@ -109,7 +114,7 @@ vec4 apply(ivec2 texel, vec4 c)
 GATHER = FilterSpec(
     name="painter_gather",
     apply_source="""
-/* One stamp per texel: `second` holds where each one's centre is. */
+/* One stamp per texel. `second` holds each stamp's centre, in texels. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   return texelFetch(source, ivec2(texelFetch(second, texel, 0).xy), 0);
@@ -131,8 +136,8 @@ vec4 apply(ivec2 texel, vec4 c)
 FINISH = FilterSpec(
     name="painter_finish",
     apply_source="""
-/* The canvas back to straight scene linear, which is what a kind hands
-   the build. */
+/* Turn the canvas back into straight scene linear, which is what a kind
+   must return to the layer build. */
 vec4 apply(ivec2 texel, vec4 c)
 {
   vec3 rgb = c.a > 0.0 ? clamp(c.rgb / c.a, 0.0, 1.0) : vec3(0.0);
@@ -156,9 +161,10 @@ float ps_brush_at(ivec2 texel, ivec2 last)
   return texelFetch(atlas, clamp(texel, ivec2(0), last), 0).r;
 }
 
-/* Bilinear by hand: a texture made from Python samples nearest, and
-   before Blender 5.1 cannot be told otherwise. The cell's gutter is
-   what the outermost reads land on. */
+/* Bilinear filtering done by hand. A texture made from Python samples
+   with nearest filtering, and before Blender 5.1 there is no way to
+   change that. The outermost reads land on the cell's transparent
+   gutter. */
 void main()
 {
   ivec2 last = textureSize(atlas, 0) - ivec2(1);
@@ -174,11 +180,12 @@ void main()
 
 _stamp_shader = None
 
-# The atlases each brush's last build drew with, by ``(cell, columns,
-# rows)``: the uploaded texture and the lower-left texel of every brush
-# in it. Building and uploading them is a tenth of a 4096 build, and one
-# build's worth per brush is a few MB of video memory at the defaults.
-# Keyed by preset name, which is enough while a preset cannot change; a
+# The atlases each brush's last build drew with. Maps a brush name
+# (`settings.brush`) to ``{(cell, columns, rows): (texture, origins)}``,
+# where origins are the lower-left texel of each brush in the atlas.
+# Making and uploading them takes a tenth of a 4096 build. One build's
+# worth per brush costs a few MB of video memory at the default settings.
+# The name alone is a safe key only because a preset cannot change. A
 # brush made from the user's own image would need its pixels in the key.
 _atlases: dict[str, dict[tuple, tuple]] = {}
 
@@ -186,12 +193,12 @@ _atlases: dict[str, dict[tuple, tuple]] = {}
 def build(settings, texture, pool):
     """Paint *texture* with *settings*, a `plan.Settings`, and return the result.
 
-    A generator of ``(label, fraction)``, for `filters.layer_build` to
-    drive. *texture* is scene linear and straight, and so is the texture
-    returned; both belong to *pool*, and *texture* is given back to it
-    once read.
+    This is a generator that yields ``(label, fraction)`` progress for
+    `filters.layer_build`. *texture* and the returned texture are both
+    straight scene linear, and both belong to *pool*. *texture* is given
+    back to the pool once it has been read.
     """
-    # The composite ran in the unit before this one; planning gets its own.
+    # The composite ran in the previous unit, so planning gets its own.
     yield "planning the strokes", 0.0
     width, height = texture.width, texture.height
     masks = brushes.masks(settings.brush)
@@ -249,8 +256,8 @@ def build(settings, texture, pool):
                                       step.size, origins, cell)
                 _draw_stamps(framebuffer, (width, height), atlas, geometry)
         done += step.count
-    # Replaced rather than merged, so what is kept is only ever what one
-    # build drew with. A build abandoned before here keeps the last one's.
+    # Replace rather than merge, so only the atlases of one build are kept.
+    # A build abandoned before this line leaves the previous build's.
     _atlases[settings.brush] = used
 
     yield "finishing", 0.95
@@ -258,10 +265,10 @@ def build(settings, texture, pool):
 
 
 def _run(pool, spec: FilterSpec, texture, params: dict | None = None, *, keep: bool = False):
-    """*spec* over *texture* into a target from *pool*.
+    """Run *spec* over *texture* into a target from *pool*, and return it.
 
-    *texture* goes back to the pool afterwards unless *keep* says a later
-    pass still reads it.
+    *texture* goes back to the pool afterwards, unless *keep* is set
+    because a later pass still reads it.
     """
     _framebuffer, result = run_pass(spec, texture, pool.acquire(), params=params or {})
     if not keep:
@@ -270,12 +277,12 @@ def _run(pool, spec: FilterSpec, texture, params: dict | None = None, *, keep: b
 
 
 def _blurred(pool, texture, sigma: float, *, keep: bool, progress: tuple[str, float]):
-    """*texture* through v2's gaussian: one pass per axis, cut off at two sigma.
+    """Blur *texture* with v2's gaussian, one pass per axis, cut off at two sigma.
 
-    A generator yielding *progress* between the two passes, each of
-    which is a unit of its own: at 4096 a pass is about 50 ms. A sigma
-    of zero returns *texture* itself, which is why the caller compares
-    before giving either back.
+    This is a generator. It yields *progress* between the two passes, so
+    each pass is a unit of its own (about 50 ms at 4096). A sigma of zero
+    returns *texture* itself, so the caller checks for that before it
+    gives either texture back to the pool.
     """
     if sigma <= 0:
         return texture
@@ -302,11 +309,12 @@ def _peak(field) -> float:
 
 
 def _gather(textures, x: np.ndarray, y: np.ndarray) -> list[np.ndarray]:
-    """Each of *textures* at the texels ``(x, y)``, as ``(count, 4)`` arrays.
+    """Each of *textures* read at the texels ``(x, y)``, as ``(count, 4)`` arrays.
 
-    One texel of a small target per stamp. The target is never larger
-    than the textures read, which keeps the pass's own read of its
-    source inside it.
+    Each stamp gets one texel of a small target. The target is never
+    larger than the textures it reads, because the pass also reads its
+    source at the target's own texel, and that read must stay inside the
+    source.
     """
     count = len(x)
     columns = max(1, ceil(sqrt(count)))
@@ -351,11 +359,11 @@ def _stamp_program():
 
 
 def _draw_stamps(framebuffer, size, atlas, geometry) -> None:
-    """Draw one chunk of quads over the canvas, premultiplied "over", in order.
+    """Draw one chunk of stamp quads over the canvas with premultiplied "over".
 
-    Blending follows the order the triangles were submitted in, which is
-    the order they were planned in, so a later stamp covers an earlier
-    one exactly as in v2's loop.
+    The GPU blends triangles in the order they are submitted, which is
+    the order they were planned in. So a later stamp covers an earlier
+    one, exactly as in v2's loop.
     """
     positions, coords, colors, indices = geometry
     shader = _stamp_program()
@@ -371,7 +379,10 @@ def _draw_stamps(framebuffer, size, atlas, geometry) -> None:
 
 
 def release() -> None:
-    """Give the stamp shader, the atlases and the cached brushes back before the GPU context goes."""
+    """Free the stamp shader, the atlases and the cached brushes.
+
+    Called before the GPU context goes away.
+    """
     global _stamp_shader
     _stamp_shader = None
     _atlases.clear()

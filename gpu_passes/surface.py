@@ -1,43 +1,43 @@
 """Content keys for the evaluated surface of an object (PS-092, PS-093).
 
 A surface key is a 16-byte BLAKE2b digest of what a per-object GPU cache
-is built from: evaluated positions, corner vertices, face offsets, one UV
-map, material indices and the attributes that shape corner normals. The
-world matrix is not part of it. Caches keyed by it survive the events that
-report a geometry update without changing the surface: a texture paint
-stroke on 5.3, the undo of a stroke, entering Texture Paint.
+is built from: evaluated positions, corner vertices, face offsets, one
+UV map, material indices and the attributes that shape corner normals.
+The world matrix is left out. Caches keyed by it survive events that
+report a geometry update without changing the surface, such as a texture
+paint stroke on 5.3, undoing a stroke, or entering Texture Paint.
 
-Three costs, cheapest first:
+Entry points, cheapest first:
 
-- `peek_key` (draw callbacks): the last key and whether it is fresh.
-  Fresh means the entry was resolved, nothing marked it suspect since, and
-  the identity token (counts and data pointers of the evaluated mesh) is
-  unchanged. Microseconds; never reads arrays.
-- `resolve_key` (timers, operators): a fresh key as it is; otherwise read
-  the arrays through the attribute API and compare them with the ones the
-  key was made from. Only a real change pays for the hash. About 25 ms to
-  read and compare at a million triangles on 5.2.
-- `mark_suspect` (handlers): a flag. Handlers never evaluate.
+- `peek_key` (draw callbacks): the last key, and whether it is fresh.
+  Fresh means it was resolved, nothing marked it suspect since, and its
+  token (counts and data pointers of the evaluated mesh) is unchanged.
+  Takes microseconds and never reads arrays.
+- `resolve_key` (timers, operators): returns a fresh key as it is.
+  Otherwise it reads the arrays through the attribute API and compares
+  them with the ones the key was made from, and hashes only on a real
+  change. Reading and comparing takes about 25 ms at a million triangles
+  on 5.2.
+- `mark_suspect` (handlers): only sets a flag. Handlers never evaluate.
 
-The arrays are read from attributes rather than `MeshLoop.vertex_index`
-and `MeshPolygon.material_index`, which cost 5 to 25 times as much. An
-entry keeps its arrays for the next compare, so at most `ENTRY_LIMIT`
-entries keep them, the least recently resolved losing them first. An
-entry without arrays keeps its key and token: it still peeks as fresh, and
-its next read gives the same key, so neither a draw nor a tick treats the
-lost arrays as a change. At most `KEY_LIMIT` entries are kept at all.
+Arrays are read from attributes, because `MeshLoop.vertex_index` and
+`MeshPolygon.material_index` cost 5 to 25 times as much. An entry keeps
+its arrays for the next compare. At most `ENTRY_LIMIT` entries keep
+them, and the least recently resolved lose theirs first. An entry
+without arrays keeps its key and token, so it still peeks as fresh and
+its next read gives the same key. Losing the arrays therefore never
+looks like a change. At most `KEY_LIMIT` entries are kept in total.
 
-Each view layer's depsgraph evaluates the mesh on its own, with its own
+Each view layer's depsgraph evaluates the mesh separately, with its own
 data pointers, so an entry belongs to one object, UV map and view layer.
-A draw in a window on another view layer requests a resolve on that view
-layer's depsgraph.
+A draw in a window on another view layer requests a resolve on that
+view layer's depsgraph.
 
-An entry also records that it was resolved when there is no surface: a
-non-mesh, a mesh in Edit Mode through any object that uses it, or an
-evaluated mesh without the UV map (a Remesh modifier drops UVs).
-`peek_key` then reports that None key as fresh until the token changes,
-so a draw callback caches its empty result instead of asking again on
-every redraw.
+A resolve that finds no surface is recorded too: a non-mesh, a mesh in
+Edit Mode through any object that uses it, or an evaluated mesh without
+the UV map (a Remesh modifier drops UVs). `peek_key` reports that None
+key as fresh until the token changes, so a draw callback can cache its
+empty result instead of asking again on every redraw.
 """
 import hashlib
 import logging
@@ -57,10 +57,12 @@ KEY_SIZE = 16
 """Bytes in a surface key."""
 
 ENTRY_LIMIT = 8
-"""Entries that keep their arrays: about 35 MB per entry at a million triangles."""
+"""How many entries keep their arrays. Each costs about 35 MB at a
+million triangles."""
 
 KEY_LIMIT = 256
-"""Entries kept at all; one without arrays holds only its key and token."""
+"""How many entries are kept in total. One without arrays holds only its
+key and token."""
 
 
 class _Entry:
@@ -74,8 +76,8 @@ class _Entry:
         self.resolved = False
 
 
-# (object session_uid, UV map, view layer) -> entry, the view layer as
-# `_layer` gives it; insertion order is least recently resolved first.
+# (object session_uid, UV map, view layer) -> entry, with the view layer
+# as `_layer` gives it. Insertion order is least recently resolved first.
 _entries: dict[tuple[int, str, tuple[int, str]], _Entry] = {}
 _requests: set[tuple[int, str, tuple[int, str]]] = set()
 
@@ -83,7 +85,8 @@ _CUSTOM_NORMAL_FORMATS = {
     'INT16_2D': (np.int16, 2, 'value'),
     'FLOAT_VECTOR': (np.float32, 3, 'vector'),
 }
-"""How to read a `custom_normal` attribute: 4.5+ encodes them as INT16_2D on corners."""
+"""How to read a `custom_normal` attribute. 4.5 and later store custom
+normals as INT16_2D on corners."""
 
 _OPTIONAL_ATTRIBUTES = (
     ('material_index', np.int32),
@@ -102,8 +105,9 @@ def _layer(depsgraph) -> tuple[int, str]:
 
 
 def _evaluated_mesh(obj, depsgraph) -> bpy.types.Mesh | None:
-    # A mesh in Edit Mode through another object, such as a linked
-    # duplicate, evaluates to an edit mesh wrapper for this object too.
+    # When another object that shares this mesh (such as a linked
+    # duplicate) is in Edit Mode, this object also evaluates to an edit
+    # mesh wrapper.
     if obj is None or obj.type != 'MESH' or obj.data.is_editmode:
         return None
     mesh = obj.evaluated_get(depsgraph).data
@@ -111,7 +115,10 @@ def _evaluated_mesh(obj, depsgraph) -> bpy.types.Mesh | None:
 
 
 def _token(mesh: bpy.types.Mesh, uv_map: str) -> tuple:
-    """Counts and data pointers: equal tokens are the same arrays unless something wrote into them."""
+    """Counts and data pointers of *mesh*.
+
+    Equal tokens mean the same arrays, unless something wrote into them.
+    """
     attributes = mesh.attributes
     position = attributes.get('position')
     corner_vert = attributes.get('.corner_vert')
@@ -134,7 +141,7 @@ def _read_custom(attribute) -> np.ndarray:
 def _read(mesh: bpy.types.Mesh, uv_map: str) -> dict[str, np.ndarray] | None:
     """The arrays a key is made from, or None when *uv_map* is not a corner UV map of *mesh*.
 
-    None as well for a mesh without the topology attributes, as an edit
+    Also None for a mesh without the topology attributes, such as an edit
     mesh wrapper, whose layers are those of its BMesh.
     """
     attributes = mesh.attributes
@@ -184,7 +191,8 @@ def _same(a: dict, b: dict) -> bool:
             continue
         if name != 'uv' or array.shape != other.shape:
             return False
-        # A plain difference is NaN where either map holds one, and every
+        # `allclose` with `equal_nan`, not a plain difference. A plain
+        # difference is NaN wherever either map holds a NaN. Every
         # comparison with NaN is False, so a NaN would hide any edit.
         if not np.allclose(array, other, rtol=0.0, atol=UV_TOLERANCE, equal_nan=True):
             return False
@@ -203,14 +211,20 @@ def _digest(arrays: dict, uv_map: str) -> bytes:
 
 
 def mark_suspect(session_uid: int | None = None) -> None:
-    """The surface of one object, or of every object, may have changed. For handlers."""
+    """Mark the surface of one object, or of every object, as maybe changed.
+
+    For handlers.
+    """
     for (uid, _, _), entry in _entries.items():
         if session_uid is None or uid == session_uid:
             entry.suspect = True
 
 
 def forget() -> None:
-    """Drop every entry and request; after a file read, whose objects are new."""
+    """Drop every entry and request.
+
+    Called after a file is loaded, because its objects are all new.
+    """
     _entries.clear()
     _requests.clear()
 
@@ -218,9 +232,9 @@ def forget() -> None:
 def peek_key(obj: bpy.types.Object, uv_map: str, depsgraph) -> tuple[bytes | None, bool]:
     """The last resolved key and whether it is still fresh. For draw callbacks.
 
-    `(None, False)` for an object and map never resolved on *depsgraph*'s
-    view layer or dropped since; `(None, True)` for one resolved without a
-    surface whose token held.
+    Returns `(None, False)` for an object and map never resolved on
+    *depsgraph*'s view layer, or dropped since. Returns `(None, True)` for
+    one resolved without a surface, while its token has not changed.
     """
     entry = _entries.get((obj.session_uid, uv_map, _layer(depsgraph)))
     if entry is None or not entry.resolved:
@@ -235,9 +249,9 @@ def peek_key(obj: bpy.types.Object, uv_map: str, depsgraph) -> tuple[bytes | Non
 def resolve_key(obj: bpy.types.Object, uv_map: str, depsgraph=None) -> bytes | None:
     """The current key of *obj*'s evaluated surface with UV map *uv_map*. For timers and operators.
 
-    *uv_map* is a name, never '' (see `texel_map.resolve_uv_map`). None
-    for a non-mesh, a mesh in Edit Mode or an evaluated mesh without that
-    corner UV map.
+    *uv_map* is a name, never '' (see `texel_map.resolve_uv_map`).
+    Returns None for a non-mesh, a mesh in Edit Mode, or an evaluated mesh
+    without that corner UV map.
     """
     depsgraph = depsgraph or bpy.context.evaluated_depsgraph_get()
     ident = (obj.session_uid, uv_map, _layer(depsgraph))
@@ -315,7 +329,8 @@ def _tick() -> None:
 
 def _surfaces_changed() -> None:
     """Redraw what draws from a surface, and let the selection check its masks."""
-    # Imported here: the selection package imports this one.
+    # Imported here to avoid an import cycle: the selection package
+    # imports this module.
     from ..selection import session
 
     redraw_paint_views(bpy.context.window_manager)
@@ -323,7 +338,7 @@ def _surfaces_changed() -> None:
 
 
 def release() -> None:
-    """Forget everything and stop the timer; on unregister."""
+    """Forget everything and stop the timer. Called on unregister."""
     if bpy.app.timers.is_registered(_tick):
         bpy.app.timers.unregister(_tick)
     forget()

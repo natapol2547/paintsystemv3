@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The brushes a painter layer stamps with (PS-053).
 
-Two presets ship with the add-on, the two v2 did, alongside v2's default
-circle. A brush is the alpha channel of its image, centred on a square,
-as v2 read one.
+The add-on ships the same two presets as v2, plus v2's default circle.
+A brush is the alpha channel of its image, centred on a square. This
+matches how v2 read a brush (see `mask_of`).
 
-A preset is read from disk once per session and kept, with the
-`plan.Areas` its stamp counts are taken from. A filter layer rebuilds on
-its own after every change below it, and loading twenty-one PNGs each
-time would cost more than the painting does.
+Each preset is read from disk once per session and kept, together with
+the `plan.Areas` its stamp counts come from. A filter layer rebuilds by
+itself after every change below it, and loading twenty-one PNGs each
+time would cost more than the painting itself.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def brush_items() -> list[tuple[str, str, str]]:
 
 
 def masks(name: str) -> list[np.ndarray]:
-    """The brushes of *name*, square float32 masks with row 0 at the bottom."""
+    """The brush masks of *name*: square float32 arrays, row 0 at the bottom."""
     if name not in _cache:
         if name == CIRCLE:
             _cache[name] = [plan.circle()]
@@ -78,11 +78,12 @@ def _load_folder(folder: str) -> list[np.ndarray]:
 
 
 def _load_file(path: str) -> np.ndarray | None:
-    """The mask of the image at *path*, through a datablock that is removed again.
+    """The mask of the image at *path*, or None when it cannot be read.
 
-    Blender has no way to decode an image without one. It is loaded
-    fresh rather than found, so that removing it cannot take away an
-    image the file was already using.
+    Blender can only decode an image through an image datablock, so one
+    is loaded and then removed again. It is always loaded as a new
+    datablock (``check_existing=False``), so removing it can never delete
+    an image the file was already using.
     """
     try:
         image = bpy.data.images.load(path, check_existing=False)
@@ -96,10 +97,10 @@ def _load_file(path: str) -> np.ndarray | None:
 
 
 def mask_of(image: bpy.types.Image) -> np.ndarray:
-    """*image* as a brush, clamped and centred on a square.
+    """*image* as a brush mask, clamped to 0..1 and centred on a square.
 
-    The alpha channel where there is one, and the luminance where there
-    is not, which is how v2 read a brush.
+    The mask is the alpha channel, or the luminance when the image has
+    no alpha. This matches how v2 read a brush.
     """
     width, height = image.size
     channels = image.channels

@@ -1,23 +1,23 @@
-"""Plumbing shared by every GPU pass.
+"""Helpers shared by every GPU pass.
 
-Three things differ between the Blender versions the addon supports, and
-are dealt with here rather than in each pass:
+Three things differ between the Blender versions the addon supports.
+They are handled here, so each pass does not have to:
 
 - Background Blender starts with no GPU context. 4.2 to 5.1 have no way
   to get one, so passes are unavailable there and callers get None
-  rather than an exception. 5.2 added `gpu.init()`, which builds one from
-  EGL and needs no display. It is documented to raise `SystemError` when
-  it fails, but on 5.2.1 and 5.3 alpha it terminates Blender with a
-  segmentation fault instead when EGL has no usable driver. So
-  `gpu_available()`, which calls it, is only called from a path that is
-  about to draw; `gpu_known()` answers without starting a context. A
+  instead of an exception. 5.2 added `gpu.init()`, which makes a context
+  from EGL without a display. It is documented to raise `SystemError`
+  on failure. But on 5.2.1 and 5.3 alpha, when EGL has no usable
+  driver, it crashes Blender with a segfault instead. So
+  `gpu_available()`, which calls it, is only called on a path that is
+  about to draw. `gpu_known()` answers without starting a context. A
   windowed session always has a context.
-- `GPUFrameBuffer.read_color` reports reversed strides for a
-  multi-dimensional `Buffer` on 4.2, so reads go through a
-  one-dimensional buffer and numpy does the reshape (PS-096 spike 4).
-- `GPUFrameBuffer.viewport_set` takes no arguments at all on 4.2, not
-  even keywords. It is never called: binding a framebuffer already sets
-  the viewport to that framebuffer's size on both versions.
+- On 4.2, `GPUFrameBuffer.read_color` reports reversed strides for a
+  multi-dimensional `Buffer`. So reads go through a one-dimensional
+  buffer and numpy does the reshape (PS-096 spike 4).
+- On 4.2, `GPUFrameBuffer.viewport_set` takes no arguments at all, not
+  even keywords. It is never called, because binding a framebuffer
+  already sets the viewport to its size on both 4.2 and 5.x.
 """
 import contextlib
 import logging
@@ -36,9 +36,9 @@ UNIT_QUAD = {"position": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
 BAND_ROWS = 512
 """Rows `draw_in_bands` draws before it makes the GPU finish."""
 
-# The vertex shader of a pass drawn with `draw_in_bands`. The shader
-# declares `target_size` and `rows` push constants and a smooth VEC2
-# `v_texel`, which reaches the fragment in target pixels.
+# The vertex shader of a pass drawn with `draw_in_bands`. The shader must
+# declare `target_size` and `rows` push constants and a smooth VEC2
+# `v_texel`, which gives the fragment its position in target pixels.
 BAND_VERTEX_SOURCE = """
 void main()
 {
@@ -53,12 +53,12 @@ _unused_texture = None
 
 
 def unused_sampler() -> gpu.types.GPUTexture:
-    """A 1x1 zero texture to bind to a sampler the pass does not read.
+    """A 1x1 zero texture to bind to a sampler that the pass does not read.
 
-    A sampler a create-info declares has to be bound even where the
-    shader never reads it: an unbound one is an error on Vulkan. A GLSL
-    sampler does not care what format is behind it, so one `R32F`
-    texture serves every pass.
+    Every sampler declared in the shader create-info must be bound, even
+    if the shader never reads it. An unbound sampler is an error on
+    Vulkan. A GLSL sampler does not care about the texture format behind
+    it, so one `R32F` texture serves every pass.
     """
     global _unused_texture
     if _unused_texture is None:
@@ -68,11 +68,11 @@ def unused_sampler() -> gpu.types.GPUTexture:
 
 
 def release_unused_sampler() -> None:
-    """Drop the texture `unused_sampler` keeps; the next call makes it again.
+    """Drop the texture `unused_sampler` keeps. The next call makes a new one.
 
-    Every module that binds it calls this from its own `release`, so a
+    Every module that binds it calls this from its own `release`. So a
     caller that releases only the modules it used still frees it before
-    the GPU context goes.
+    the GPU context goes away.
     """
     global _unused_texture
     _unused_texture = None
@@ -92,13 +92,14 @@ def saved_state():
 
 @contextlib.contextmanager
 def offscreen_state(blend: str = 'NONE'):
-    """Set `gpu.state` up for a pass into an offscreen target, and restore it after.
+    """Set up `gpu.state` for a pass into an offscreen target, then restore it.
 
-    Blending is *blend*, and depth test and depth write are off, so each
-    fragment lands as the shader wrote it. Face culling is turned off,
-    because a mirrored UV island reverses its winding, and colour writes
-    are turned on. `gpu.state` cannot read either of those two, so they
-    are left that way afterwards, which is Blender's default.
+    Blending is set to *blend*. Depth test and depth write are off, so
+    each fragment lands as the shader wrote it. Face culling is turned
+    off, because a mirrored UV island has reversed winding. Colour writes
+    are turned on. `gpu.state` cannot read back those last two settings,
+    so they are not restored. They stay culling off and all colour writes
+    on, which is Blender's default.
     """
     with saved_state():
         gpu.state.blend_set(blend)
@@ -112,17 +113,17 @@ def offscreen_state(blend: str = 'NONE'):
 def draw_in_bands(framebuffer: gpu.types.GPUFrameBuffer, height: int, draw_band) -> None:
     """Bind *framebuffer* and call ``draw_band(first, last)`` for each band of its rows.
 
-    A band is `BAND_ROWS` rows, read at call time so the view self-test
-    (`selection.view_raster.self_test_chain`) can change it. After every
-    band but the last, one texel is read back, which makes the GPU
-    finish that band before the next is queued. That bounds the GPU time
-    of any single command, so a slow software rasteriser or a heavy pass
-    is far less likely to trip a driver watchdog (i915 preempts after
-    640 ms, Windows after 2 s).
+    A band is `BAND_ROWS` rows. It is read at call time, so the view
+    self-test (`selection.view_raster.self_test_chain`) can change it.
+    After every band but the last, one texel is read back. That makes the
+    GPU finish the band before the next one is queued, which limits the
+    GPU time of any single command. A slow software rasteriser or a heavy
+    pass is then far less likely to trip a driver watchdog (i915 preempts
+    after 640 ms, Windows after 2 s).
     """
     rows = BAND_ROWS
-    # Four floats whatever the target: Vulkan writes every component of
-    # the target's format, up to four, and OpenGL writes the four asked for.
+    # Four floats for any target. Vulkan writes every component of the
+    # target's format (up to four), and OpenGL writes the four asked for.
     sync = gpu.types.Buffer('FLOAT', 4)
     with framebuffer.bind():
         for first in range(0, height, rows):
@@ -158,10 +159,11 @@ def gpu_available() -> bool:
 
 
 def gpu_known() -> bool | None:
-    """`gpu_available()` without starting a context.
+    """Like `gpu_available()`, but never starts a context.
 
-    None in a background session of 5.2 or later that has not called
-    `gpu_available()` yet, where the answer needs `gpu.init()`.
+    Returns None in a background session of 5.2 or later that has not
+    called `gpu_available()` yet, because there the answer needs
+    `gpu.init()`.
     """
     if _available is not None:
         return _available
@@ -176,8 +178,8 @@ def _read(framebuffer, width: int, first: int, count: int, slot: int, channels: 
           kind: str, dtype) -> np.ndarray:
     """Rows *first* to *first* + *count* of a colour slot, as a `(count, width, channels)` array.
 
-    The result is a copy: a `np.frombuffer` view stays backed by the
-    `Buffer`, which is freed when this returns.
+    The result is a copy, because a `np.frombuffer` view would still point
+    at the `Buffer`, which is freed when this returns.
     """
     buffer = gpu.types.Buffer(kind, width * count * channels)
     with framebuffer.bind():
@@ -191,10 +193,10 @@ def read_color(framebuffer: gpu.types.GPUFrameBuffer, width: int, height: int,
 
     Row 0 is the bottom of the image, matching `Image.pixels`.
 
-    *channels* has to be the number of components the slot's texture
-    holds: 4 for an `RGBA16F` or `RGBA32F` target, 1 for `R32F`. Vulkan
-    writes every component of the texture's format whatever count it is
-    given, so a smaller count overruns the buffer.
+    *channels* must be the number of components the slot's texture holds:
+    4 for an `RGBA16F` or `RGBA32F` target, 1 for `R32F`. Vulkan writes
+    every component of the texture's format, whatever count it is given,
+    so a smaller count overruns the buffer.
     """
     return _read(framebuffer, width, 0, height, slot, channels, 'FLOAT', np.float32)
 
@@ -203,14 +205,14 @@ def read_color_bytes(framebuffer: gpu.types.GPUFrameBuffer, width: int, first: i
                      *, channels: int = 4) -> np.ndarray:
     """Rows *first* to *last* of a byte colour slot, as a uint8 `(rows, width, channels)` array.
 
-    Only for an `RGBA8` or `R8` texture, with *channels* its component
-    count as for `read_color`. Reading a float texture as bytes returns
-    zeros on Vulkan, so a caller wanting bytes draws into a byte target
-    first and lets the GPU round (PS-091).
+    Only for an `RGBA8` or `R8` texture. *channels* is its component
+    count, as for `read_color`. Reading a float texture as bytes returns
+    zeros on Vulkan, so a caller that wants bytes draws into a byte
+    target first and lets the GPU do the rounding (PS-091).
 
-    It reads a band rather than the whole slot: one read of 4096 rows
-    stalls for about a second, which is too long to hold a modal
-    operator between events.
+    It reads a band of rows, not the whole slot. One read of 4096 rows
+    stalls for about a second, which is too long for a modal operator to
+    wait between events.
     """
     return _read(framebuffer, width, first, last - first, 0, channels, 'UBYTE', np.uint8)
 

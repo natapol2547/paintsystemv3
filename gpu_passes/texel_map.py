@@ -1,33 +1,34 @@
 """Where every texel of a layer image sits on the mesh (PS-092).
 
-A `TexelMap` is two GPU textures the size of a layer image. `position`
-holds the world position of the surface under each texel with coverage in
-alpha, and `normal` holds the world normal. With it, anything done in the
-3D view - a lasso, a flood in screen space, a moved decal - reaches the
-image as a flat pass over texels: no tool needs mesh adjacency or seam
-handling, and the mesh is rasterised once per change instead of once per
-operation.
+A `TexelMap` (from `get_texel_map`) is two GPU textures the size of a
+layer image. `position` holds the world position of the surface under
+each texel, with coverage in alpha. `normal` holds the world normal.
+With these, a tool used in the 3D view (a lasso, a screen-space flood, a
+moved decal) becomes a flat pass over texels. No tool needs mesh
+adjacency or seam handling, and the mesh is rasterised once per change
+instead of once per operation.
 
-The mesh is drawn in UV space: the vertex shader uses the UV coordinate
-as the clip position, so a fragment lands on the texel that corner of the
-surface is painted on. World transforms are applied with numpy while the
-vertex arrays are built, which keeps the push constants to 24 bytes; two
-`MAT4` push constants come to 144 and Vulkan only guarantees 128.
+Design notes:
 
-The margin is drawn, not flooded. Each triangle is rasterised twice: once
-pushed outward from its own UV centroid by the margin, writing coverage
-`MARGIN_COVERAGE`, and once at its real size writing coverage 1.0 over
-the top. This is what Blender's bake margin calls Extend. The jump flood
-this ticket first specified yields the nearest island texel rather than a
-continuation of the surface, but wants two ping-pong seed textures and a
-gather pass into fresh position and normal targets: about 1 GB of video
-memory at 4K against the 400 MB the map itself occupies.
-
-A pass that draws the surface from a view, such as the depth test of a
-selection drawn in the 3D view, takes the same triangles as a position
-batch (`get_position_batch`). Both are cached under the surface's content
-key, so they survive events that report a geometry update without
-changing the mesh (PS-093).
+- The mesh is drawn in UV space. The vertex shader uses the UV
+  coordinate as the clip position, so each fragment lands on the texel
+  where that point of the surface is painted.
+- World transforms are applied in numpy while the vertex arrays are
+  built. This keeps the push constants at 24 bytes. Two `MAT4` push
+  constants would be 144 bytes, and Vulkan only guarantees 128.
+- The margin is drawn, not flooded. Each triangle is drawn twice: first
+  grown outward from its own UV centroid by the margin, writing coverage
+  `MARGIN_COVERAGE`, then at its real size writing coverage 1.0 on top.
+  Blender's bake margin calls this Extend. A jump flood would copy the
+  nearest island texel instead of continuing the surface. It would also
+  need two ping-pong seed textures and a gather pass into new position
+  and normal targets: about 1 GB of video memory at 4K, against the
+  400 MB the map itself uses.
+- A pass that draws the surface from a view, such as the depth test of
+  a selection in the 3D view, uses the same triangles as a position
+  batch (`get_position_batch`). Maps and batches are cached under the
+  surface's content key, so they survive events that report a geometry
+  update without changing the mesh (PS-093).
 """
 import logging
 
@@ -112,8 +113,8 @@ def _texel_shader() -> gpu.types.GPUShader:
 def resolve_uv_map(obj: bpy.types.Object, uv_map: str) -> str | None:
     """*uv_map*, or the active render UV map's name for ''; None when the mesh has no such map.
 
-    An empty name renders with the active render UV map, so that is the
-    one a layer without a UV map of its own is painted through.
+    An empty name renders with the active render UV map, so a layer
+    without its own UV map is painted through that one.
     """
     uv_layers = getattr(obj.data, 'uv_layers', None) if obj is not None else None
     if uv_layers is None:
@@ -127,12 +128,12 @@ def local_triangles(obj: bpy.types.Object, uv_map: str, depsgraph: bpy.types.Dep
                     normals: bool = True) -> dict | None:
     """The evaluated mesh of *obj* as a triangle soup in local space.
 
-    Corners are not shared: UVs and split normals are per corner, so every
-    triangle contributes three of its own vertices. The dict holds `uv`,
-    `position` and, with *normals*, `normal` per corner, and
+    Corners are not shared, because UVs and split normals are per corner.
+    So every triangle has three vertices of its own. The dict holds `uv`,
+    `position` and (with *normals*) `normal` per corner, and
     `material_index` per triangle. *uv_map* is a UV map name (see
-    `resolve_uv_map`). None when the object has no geometry or no such UV
-    map.
+    `resolve_uv_map`). Returns None when the object has no geometry or no
+    such UV map.
     """
     evaluated = obj.evaluated_get(depsgraph)
     try:
@@ -178,8 +179,8 @@ def local_triangles(obj: bpy.types.Object, uv_map: str, depsgraph: bpy.types.Dep
 def _triangle_arrays(obj: bpy.types.Object, uv_map: str, depsgraph: bpy.types.Depsgraph) -> dict | None:
     """`local_triangles` moved to world space, with each triangle's UV centroid per corner.
 
-    The arrays a map or a position batch is drawn from. None when the
-    object has no geometry or no such UV map.
+    These are the arrays a map or a position batch is drawn from. Returns
+    None when the object has no geometry or no such UV map.
     """
     arrays = local_triangles(obj, uv_map, depsgraph)
     if arrays is None:
@@ -192,8 +193,9 @@ def _triangle_arrays(obj: bpy.types.Object, uv_map: str, depsgraph: bpy.types.De
     try:
         normals = normals @ np.linalg.inv(basis)
     except np.linalg.LinAlgError:
-        # A zero scale on an axis flattens the object; the normals are
-        # meaningless either way, so rotate them and carry on.
+        # A zero scale on an axis flattens the object, so the matrix has
+        # no inverse. The normals mean nothing then anyway, so just rotate
+        # them and carry on.
         normals = normals @ basis.T
 
     # One centroid per triangle, repeated for each of its three corners.
@@ -210,8 +212,8 @@ def _triangle_arrays(obj: bpy.types.Object, uv_map: str, depsgraph: bpy.types.De
 class TexelMap:
     """The position and normal textures for one object, image size and tile.
 
-    Free is not exposed: dropping the last reference releases both
-    textures. The cache below is what holds them.
+    There is no free method. Dropping the last reference releases both
+    textures, and the cache below is what holds that reference.
     """
 
     __slots__ = ('position', 'normal', 'width', 'height')
@@ -235,9 +237,9 @@ def _draw_texel_map(arrays: dict, width: int, height: int, tile: int, margin: in
     normal = gpu.types.GPUTexture((width, height), format='RGBA16F')
     framebuffer = gpu.types.GPUFrameBuffer(color_slots=(position, normal))
 
-    # Writes must land as written: blending would mix the margin pass into
-    # the real one, and a depth test would drop coplanar fragments, since
-    # every triangle is drawn at depth 0.
+    # Writes must land exactly as written. Blending would mix the margin
+    # pass into the real one. A depth test would drop coplanar fragments,
+    # because every triangle is drawn at depth 0.
     with core.offscreen_state(), framebuffer.bind():
         framebuffer.clear(color=(0.0, 0.0, 0.0, 0.0))
         shader.uniform_float("tile_offset", core.tile_offset(tile))
@@ -256,11 +258,11 @@ def _draw_texel_map(arrays: dict, width: int, height: int, tile: int, margin: in
 # ── Cache ────────────────────────────────────────────────────────────
 #
 # Maps and depth batches are keyed by the object, the UV map, the world
-# matrix and the surface key (`surface.resolve_key`), and nothing drops
-# them on a geometry update or an undo: a stroke that reports a geometry
-# update, or the undo of a vertex move, finds the entry it had. What no
-# longer matches ages out of the budget. Without a surface key, in Edit
-# Mode, a build is returned and not cached.
+# matrix and the surface key (`surface.resolve_key`). Nothing drops them
+# on a geometry update or an undo. So a stroke that reports a geometry
+# update, or the undo of a vertex move, finds its old entry again.
+# Entries that no longer match age out of the budget. Without a surface
+# key (for example in Edit Mode), a build is returned but not cached.
 
 
 class _PositionBatch:
@@ -277,17 +279,17 @@ class _PositionBatch:
 # ('batch', session_uid, uv_map, matrix, surface key) -> _PositionBatch
 # Kept in use order, least recently used first.
 _cache: dict[tuple, TexelMap | _PositionBatch] = {}
-# One extraction a map miss and a batch miss for the same surface share
-# within a build: (session_uid, uv_map, matrix, surface key) and the
-# arrays, dropped on the next timer tick.
+# The last triangle arrays extracted, as ((session_uid, uv_map, matrix,
+# surface key), arrays). A map miss and a batch miss for the same surface
+# share one extraction this way. Dropped on the next timer tick.
 _pending_arrays: tuple[tuple, dict] | None = None
 
 
 def _matrix_key(obj: bpy.types.Object) -> tuple:
     """The world matrix as a hashable key.
 
-    Maps and batches store world positions, so moving the object gives
-    them a new key; the surface key leaves the transform out.
+    Maps and batches store world positions, so moving the object must
+    give them a new key. The surface key leaves the transform out.
     """
     return tuple(round(value, 6) for row in obj.matrix_world for value in row)
 
@@ -328,9 +330,9 @@ def get_texel_map(obj: bpy.types.Object, uv_map: str, size: tuple[int, int],
                   tile: int = 1001, margin: int = MARGIN) -> TexelMap | None:
     """The cached map for these arguments, building it on first use.
 
-    *uv_map* '' is the active render UV map (`resolve_uv_map`). None when
-    this session cannot draw, the mesh has no such UV map or the object
-    has no geometry.
+    An empty *uv_map* means the active render UV map (`resolve_uv_map`).
+    Returns None when this session cannot draw, the mesh has no such UV
+    map, or the object has no geometry.
     """
     if not core.gpu_available():
         return None
@@ -355,9 +357,10 @@ def get_texel_map(obj: bpy.types.Object, uv_map: str, size: tuple[int, int],
 def get_position_batch(obj: bpy.types.Object, uv_map: str) -> gpu.types.GPUBatch | None:
     """The world positions of *obj*'s triangle soup as a `TRIS` batch, cached like the maps.
 
-    One `position` attribute, F32 x3, in the order of the texel map's
-    triangles, for a depth pass with any shader that reads `position`.
-    None when this session cannot draw or the surface has no such UV map.
+    One `position` attribute, F32 x3, in the same triangle order as the
+    texel map, for a depth pass with any shader that reads `position`.
+    Returns None when this session cannot draw or the surface has no such
+    UV map.
     """
     if not core.gpu_available():
         return None
@@ -409,8 +412,9 @@ def release() -> None:
     """Free every GPU object this module holds.
 
     Called when the addon is unregistered. Leaving them to Python's own
-    teardown is not enough: in a background session the GPU context is
-    already gone by then and freeing a texture there segfaults Blender.
+    teardown does not work. In a background session the GPU context is
+    already gone by then, and freeing a texture without it crashes
+    Blender with a segfault.
     """
     global _shader
     if bpy.app.timers.is_registered(_forget_pending_arrays):

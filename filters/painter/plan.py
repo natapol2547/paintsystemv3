@@ -1,29 +1,32 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Where the painter's stamps go and what they look like (PS-053).
+"""Where the painter's stamps go and how they look (PS-053).
 
-Everything here is numpy and per stamp, so it runs without a GPU and a
-test can hold it to v2's arithmetic directly. `painter.build` does the
-per-texel work around it: it blurs the picture and takes its gradient,
-reads both back at the centres `draws` picked, hands them to `stamps`,
-and draws what `quads` returns.
+Everything here is numpy and works per stamp, so it runs without a GPU
+and tests can check it against v2's arithmetic directly. `painter.build`
+does the per-texel work around it. It blurs the picture, takes its
+gradient, reads both at the centres `draws` picked, passes them to
+`stamps`, and draws what `quads` returns.
 
-The order of a build is v2's. The steps run from the largest stroke to
-the smallest and from the first pass's opacity to the last's, each step places
-the number of stamps `schedule` works out for it, and every stamp takes
-its colour from a blur of the picture below rather than from the
-canvas being painted, so a later stamp never samples an earlier one.
+A build follows v2's order:
 
-Two things differ on purpose, and `docs/tickets/PS-053-gpu-brush-painter.md`
-says why:
+- Steps go from the largest stroke to the smallest, and from the first
+  pass's opacity to the last.
+- Each step places the number of stamps `schedule` works out for it.
+- Every stamp takes its colour from a blur of the picture below, not
+  from the canvas being painted. So a later stamp never samples an
+  earlier one.
 
-- the random numbers come from the layer's own seed, drawn per step and
-  per stream before anything looks at the picture, so a rebuild after
-  painting below moves no stamp;
-- the stroke follows the gradient on every edge, where v2 mirrored it
-  on the diagonals.
+Two things differ from v2 on purpose. The reasons are in
+`docs/tickets/PS-053-gpu-brush-painter.md`.
 
-Rows run bottom-up, as `Image.pixels` does, so y points up and an angle
-turns counter-clockwise on screen. v2 held its arrays top-down.
+- Random numbers come from the layer's own seed. They are drawn per
+  step and per stream before the picture is read, so a rebuild after
+  painting below moves no stamp.
+- The stroke follows the gradient on every edge. v2 mirrored it on
+  diagonal edges.
+
+Rows run bottom-up, as in `Image.pixels`, so y points up and a positive
+angle turns counter-clockwise on screen. v2 stored its arrays top-down.
 """
 from __future__ import annotations
 
@@ -32,47 +35,49 @@ from math import ceil, sqrt
 
 import numpy as np
 
-# The side of the default circular brush, in texels, before it is resized
-# to each step. v2 made it this size and resized it like any other.
+# Side of the default circle brush in texels, before it is resized to
+# each step. v2 used this size too, and resized it like any other brush.
 CIRCLE_SIDE = 50
 
-# v2's count: enough stamps to cover *density* of the image once, assuming
-# each overlaps the others by this much, within these bounds.
+# v2's stamp count: enough stamps to cover *density* of the image once,
+# assuming each stamp overlaps the others by `OVERLAP`, and never fewer
+# than `MIN_STAMPS`.
 OVERLAP = 0.7
 MIN_STAMPS = 50
 # At most one stamp per this many texels of the image.
 TEXELS_PER_STAMP = 8
 
-# The smallest value above zero a brush may hold for `covered_area` to
-# count it without resizing. Below it a product in the resize could
-# round to zero, and the count would no longer be v2's.
+# Smallest non-zero brush value that `covered_area` can count without
+# running the resize. A smaller value could round to zero inside the
+# resize, and the count would no longer match v2's.
 SAFE_MIN = 1e-20
 
-# A layer's Smoothing is in texels of an image this wide, v2's usual size
-# and a new filter layer's, and scales with the layer's resolution so the
-# strokes follow the same shapes at any of them.
+# A layer's Smoothing is in texels of an image this wide, which is v2's
+# usual size and a new filter layer's. It scales with the layer's
+# resolution, so the strokes follow the same shapes at any resolution.
 SMOOTHING_SIDE = 2048
 
 # A sampled colour this transparent places no stamp, as in v2.
 MIN_ALPHA = 1e-6
-# A gradient field whose strongest edge is this weak has no edges at all,
-# so a threshold above zero keeps nothing.
+# When the strongest edge in the gradient field is this weak, the field
+# counts as having no edges, and any threshold above zero keeps nothing.
 MIN_PEAK = 1e-6
 
 # The independent random streams of a step. Each has its own generator,
-# so asking for more stamps extends every stream rather than shifting one
-# into the next: raising the coverage adds stamps and moves none.
+# so asking for more stamps makes every stream longer instead of shifting
+# one stream's numbers into the next. Raising the coverage adds stamps
+# and moves none of the existing ones.
 X, Y, BRUSH, TURN, JITTER = range(5)
 
 
 @dataclass(frozen=True)
 class Settings:
-    """A painter layer's parameters, as the build reads them.
+    """A painter layer's parameters, in the units the build uses.
 
-    These are v2's quantities, which the planning is written in: stroke
-    sizes, coverage and threshold as fractions, and the blur in texels
-    of the image being built. The layer's settings are percentages and
-    a resolution-independent Smoothing; `of` converts.
+    The planning is written in v2's quantities: stroke sizes, coverage
+    and threshold as fractions, and the blur in texels of the image being
+    built. The layer stores percentages and a resolution-independent
+    Smoothing. `of` converts from the layer's settings.
     """
 
     density: float = 0.7
@@ -87,7 +92,7 @@ class Settings:
     seed: int = 42
     # Radians, counter-clockwise.
     rotation: float = 0.0
-    # The whole spread of the random turn, centred; zero turns nothing.
+    # Full width of the random turn, centred on zero. Zero turns nothing.
     rotation_range: float = 0.0
     hue: float = 0.0
     saturation: float = 0.0
@@ -124,9 +129,9 @@ class Settings:
 def _fraction(percentage: float) -> float:
     """*percentage* as a fraction, rounded to single precision.
 
-    v2's settings were single-precision fractions, and a stamp count is a
-    truncated product of them: a double 0.7 can count one stamp more
-    than the single 0.7 v2 counted with.
+    v2 stored its settings as single-precision fractions, and a stamp
+    count is a truncated product of them. A double 0.7 can give one stamp
+    more than the single-precision 0.7 that v2 used.
     """
     return float(np.float32(percentage / 100.0))
 
@@ -188,10 +193,10 @@ def circle(side: int = CIRCLE_SIDE) -> np.ndarray:
 
 
 def square(mask: np.ndarray) -> np.ndarray:
-    """*mask* centred on a transparent square, as v2 padded a brush.
+    """*mask* centred on a transparent square, padded the way v2 padded a brush.
 
-    v2 held its rows top-down and put the odd row of padding at the
-    bottom, which in rows that run bottom-up is the first one.
+    v2 stored rows top-down and put the odd row of padding at the bottom.
+    Rows here run bottom-up, so that extra row comes first.
     """
     height, width = mask.shape
     if height == width:
@@ -205,12 +210,12 @@ def square(mask: np.ndarray) -> np.ndarray:
 
 
 def _sample_axes(src_h: int, src_w: int, side: int):
-    """Where a bilinear resize from *src_h* by *src_w* to *side* samples.
+    """The sample positions of a bilinear resize from *src_h* by *src_w* to *side*.
 
     Returns ``(y, x, y0, x0, y1, x1)``: the float32 sample positions on
-    each axis, and the int32 texels either side of them, clamped to the
-    edge. `resize_bilinear`, `covered_area` and `resize` all read these,
-    so the count and the drawn stamp land on the same texels.
+    each axis, and the int32 texels on either side of them, clamped to
+    the edge. `resize_bilinear`, `covered_area` and `resize` all use
+    these, so the stamp count and the drawn stamp sample the same texels.
     """
     y = np.linspace(0, src_h - 1, side, dtype=np.float32)
     x = np.linspace(0, src_w - 1, side, dtype=np.float32)
@@ -222,13 +227,13 @@ def _sample_axes(src_h: int, src_w: int, side: int):
 
 
 def resize_bilinear(mask: np.ndarray, side: int) -> np.ndarray:
-    """v2's `_resize_mask_bilinear` to *side* by *side*, which the count is taken on.
+    """*mask* resized to *side* by *side* with v2's `_resize_mask_bilinear`.
 
-    Point sampling: every output texel reads the two by two input texels
-    nearest it and nothing else, so shrinking a brush a long way skips
-    most of it. That is why `resize` filters first; the count keeps this
-    one, because it is the one v2's count was taken on, and
-    `covered_area` counts what it would leave without running it.
+    Each output texel reads only the two by two input texels nearest it.
+    So shrinking a brush a lot skips most of its texels, which is why
+    `resize` box-filters first for drawing. The stamp count still uses
+    this resize, because v2's count was taken on it. `covered_area` gets
+    the same count without running it.
     """
     src_h, src_w = mask.shape
     if (src_h, src_w) == (side, side):
@@ -244,11 +249,11 @@ def resize_bilinear(mask: np.ndarray, side: int) -> np.ndarray:
 
 
 def covered(mask: np.ndarray) -> np.ndarray | None:
-    """``mask > 0``, for `covered_area`, or None where it cannot stand in for the resize.
+    """``mask > 0`` for `covered_area`, or None when it cannot stand in for the resize.
 
-    That is a mask with a value that is negative, not finite, or so close
-    to zero that the resize could round it away (`SAFE_MIN`). No shipped
-    brush has one; a brush made from an arbitrary image could.
+    It cannot when *mask* has a value that is negative, not finite, or so
+    close to zero that the resize could round it away (`SAFE_MIN`). No
+    shipped brush has such a value, but a brush made from any image could.
     """
     if not np.isfinite(mask).all() or float(mask.min()) < 0.0:
         return None
@@ -261,13 +266,13 @@ def covered(mask: np.ndarray) -> np.ndarray | None:
 def covered_area(mask: np.ndarray, side: int, inside: np.ndarray | None) -> int:
     """How many texels `resize_bilinear(mask, side)` leaves above zero, without resizing.
 
-    Every term of that resize is a texel of *mask*, never negative, times
-    a weight that is zero only where a sample lands on a whole texel. So
-    an output texel is above zero exactly where one of the texels it
-    reads with a weight is, and the count is a gather of *inside*, what
-    `covered` returned for *mask*, on the same sample positions -- a
-    tenth of the cost of the float resize at 4K. Where *inside* is None
-    the resize itself is counted.
+    Each term of that resize is a texel of *mask* (never negative) times
+    a weight. A weight is zero only where a sample lands exactly on a
+    whole texel. So an output texel is above zero exactly when a texel it
+    reads with a non-zero weight is above zero. The count is therefore a
+    lookup of *inside* (what `covered` returned for *mask*) at the same
+    sample positions. That costs a tenth of the float resize at 4K. When
+    *inside* is None, the real resize is counted instead.
     """
     src_h, src_w = mask.shape
     if inside is None:
@@ -285,11 +290,11 @@ def covered_area(mask: np.ndarray, side: int, inside: np.ndarray | None) -> int:
 
 
 class Areas:
-    """The mean covered area of a set of brushes at each side, as `stamp_count` takes it.
+    """The mean covered area of a set of brushes at each side, for `stamp_count`.
 
-    `painter.brushes` keeps one per preset, so the masks are compared
-    once per session and a rebuild at a size already seen looks its
-    area up. The table holds one number per side asked for.
+    `painter.brushes` keeps one per preset. So each mask goes through
+    `covered` once per session, and a rebuild at a side already seen just
+    looks its area up. The table holds one number per side asked for.
     """
 
     def __init__(self, masks):
@@ -298,7 +303,7 @@ class Areas:
         self._means: dict[int, float] = {}
 
     def mean(self, side: int) -> float:
-        """The covered area at *side*, averaged over the brushes; at least one texel."""
+        """The covered area at *side*, averaged over the brushes. At least one texel."""
         area = self._means.get(side)
         if area is None:
             counts = [covered_area(mask, side, inside)
@@ -308,16 +313,17 @@ class Areas:
 
 
 def resize(mask: np.ndarray, side: int) -> np.ndarray:
-    """*mask* resized to *side* for drawing, averaged first when it shrinks.
+    """*mask* resized to *side* for drawing, box-filtered first when it shrinks.
 
-    A brush shrunk by a whole factor of two or more is box-filtered by
-    that factor before the bilinear step, so every input texel counts
-    towards the stamp. The rows and columns that do not divide evenly
-    are trimmed from both edges alike, which keeps the brush centred.
+    A brush shrunk by a factor of two or more is first box-filtered by
+    the whole part of that factor, so every input texel counts towards
+    the stamp. Rows and columns left over by that division are trimmed
+    evenly from both edges, which keeps the brush centred.
 
-    The bilinear step is `resize_bilinear`'s, one axis at a time and in
-    single precision, which is four times as fast and differs from it by
-    less than the half float the atlas is uploaded as can hold.
+    The bilinear step matches `resize_bilinear`, but runs one axis at a
+    time in single precision. That is four times as fast, and the
+    difference is smaller than the half float the atlas is uploaded as
+    can show.
     """
     src = mask.shape[0]
     factor = src // side
@@ -325,8 +331,8 @@ def resize(mask: np.ndarray, side: int) -> np.ndarray:
         kept = src // factor * factor
         start = (src - kept) // 2
         block = mask[start:start + kept, start:start + kept]
-        # Strided sums rather than a reshaped mean, which copies the
-        # block to lay it out.
+        # Strided sums instead of a reshaped mean, because the reshape
+        # would copy the block first.
         rows = block[0::factor].copy()
         for offset in range(1, factor):
             rows += block[offset::factor]
@@ -360,8 +366,8 @@ def schedule(settings: Settings, width: int, height: int, areas: Areas) -> list[
         if settings.steps == 1:
             scale, opacity = settings.min_scale, settings.end_opacity
         else:
-            # In v2's order of operations, so that a size on the edge of
-            # a whole texel rounds the way v2's did.
+            # Same order of operations as v2, so a size right on a
+            # whole-texel boundary rounds the same way as in v2.
             last = settings.steps - 1
             scale = settings.max_scale + (
                 settings.min_scale - settings.max_scale) * index / last
@@ -376,11 +382,11 @@ def schedule(settings: Settings, width: int, height: int, areas: Areas) -> list[
 def stamp_count(density: float, width: int, height: int, area: float) -> int:
     """v2's `calculate_brush_area_density`, for brushes covering *area* texels on average.
 
-    The area of a brush is the number of texels it covers at all once
-    resized to the step's size, counted on v2's own resize so that the
-    count matches v2's exactly; `Areas.mean` is that, and never less
-    than one texel, so a brush that covers nothing does not divide by
-    zero.
+    A brush's area is the number of texels it covers at all after it is
+    resized to the step's size. It is counted on v2's own resize, so the
+    count matches v2's exactly. `Areas.mean` gives this value and is never
+    less than one texel, so a brush that covers nothing does not cause a
+    division by zero.
     """
     image = width * height
     count = int(image * density / (area * OVERLAP))
@@ -390,8 +396,8 @@ def stamp_count(density: float, width: int, height: int, area: float) -> int:
 def draws(settings: Settings, step: Step, width: int, height: int, brushes: int) -> Draws:
     """The random numbers of *step*, from the layer's seed.
 
-    Every stream is drawn in full whatever the settings use, so raising
-    Random Rotation or a colour shift changes no position.
+    Every stream is drawn in full, even when the settings do not use it.
+    So raising Random Rotation or a colour shift moves no stamp.
     """
     def stream(kind):
         return np.random.default_rng([settings.seed, step.index, kind])
@@ -413,15 +419,15 @@ def stamps(settings: Settings, step: Step, drawn: Draws, colors: np.ndarray,
            gradients: np.ndarray, peak: float | None) -> Stamps:
     """The stamps of *step* that land, with their angle and colour.
 
-    *colors* is the blurred picture at each drawn centre, straight sRGB;
-    *gradients* is ``(gx, gy, magnitude)`` there, with y up. *peak* is
-    the strongest magnitude anywhere in the picture, which the threshold
-    is relative to; None when the threshold is zero and it was not
-    measured.
+    *colors* is the blurred picture at each drawn centre, in straight
+    sRGB. *gradients* is ``(gx, gy, magnitude)`` at the same centres,
+    with y up. *peak* is the strongest magnitude anywhere in the picture,
+    and the threshold is relative to it. It is None when the threshold is
+    zero, because then it is not measured.
 
     A stamp is dropped where the picture is transparent or the edge is
-    weaker than the threshold. Dropping it changes nothing about the
-    others: each one's numbers were drawn for it alone.
+    weaker than the threshold. Dropping one does not affect the others,
+    because each stamp's random numbers were drawn for it alone.
     """
     colors = jitter_hsv(colors, (settings.hue, settings.saturation, settings.value),
                         drawn.jitter)
@@ -444,11 +450,11 @@ def stamps(settings: Settings, step: Step, drawn: Draws, colors: np.ndarray,
 
 
 def jitter_hsv(colors: np.ndarray, shifts, jitter: np.ndarray) -> np.ndarray:
-    """v2's `apply_color_shift`, per stamp and from the seeded stream.
+    """v2's `apply_color_shift`, applied per stamp with the seeded numbers.
 
-    A shift of *s* moves hue by up to half of *s* turns either way, and
-    saturation and value by up to half of *s*, clamped. Alpha is left
-    alone, and a colour with no shift at all is returned as it came.
+    A shift of *s* moves hue by up to half of *s* turns either way. It
+    moves saturation and value by up to half of *s*, clamped to 0..1.
+    Alpha is unchanged. With no shift at all, *colors* is returned as is.
     """
     hue, saturation, value = shifts
     if not (hue or saturation or value):
@@ -496,10 +502,10 @@ def hsv_to_rgb(h, s, v) -> np.ndarray:
 def atlas_layout(brushes: int, side: int, limit: int) -> tuple[int, int, int]:
     """``(columns, rows, cell side)`` for *brushes* cells of up to *side* texels.
 
-    Each cell carries a one-texel transparent gutter, so a bilinear read
-    at a cell's edge fades to nothing instead of reaching into the next
-    brush. A step whose brushes would not fit in a texture of *limit*
-    texels gets smaller cells, which the stamp then magnifies.
+    Each cell has a one-texel transparent gutter, so a bilinear read at a
+    cell's edge fades to nothing instead of reaching into the next brush.
+    When a step's brushes would not fit in a texture of *limit* texels
+    on a side, the cells are made smaller, and the stamp magnifies them.
     """
     columns = ceil(sqrt(brushes))
     rows = ceil(brushes / columns)
@@ -527,10 +533,10 @@ def atlas(masks, cell: int, columns: int, rows: int) -> tuple[np.ndarray, np.nda
 def quads(stamps: Stamps, size: int, origins: np.ndarray, cell: int):
     """Vertex positions, atlas coordinates, colours and indices for *stamps*.
 
-    A stamp of *size* covers the square v2 wrote it into -- from ``x -
-    size // 2`` for *size* texels -- turned about that square's centre.
-    Unturned, its corners sit on texel edges and the atlas cell maps onto
-    it texel for texel, so a stamp at angle zero reproduces its brush.
+    A stamp of *size* covers the same square v2 wrote it into, starting
+    at ``x - size // 2`` and *size* texels wide, rotated about its centre.
+    At angle zero its corners sit on texel edges and the atlas cell maps
+    onto it texel for texel, so the stamp reproduces its brush.
     """
     count = len(stamps)
     half = size / 2.0
