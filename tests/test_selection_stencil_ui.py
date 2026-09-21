@@ -280,7 +280,7 @@ def steps():
         check(applied() and stencil_matches_mask(), "redo applies it again with the mask's pixels")
     else:
         # Before 5.1, undo in texture paint mode steps through image undo
-        # only (ops.selection_ops), so the selection stays.
+        # only (undo.UNDO_OPTIONS), so the selection stays.
         with override():
             bpy.ops.ed.undo()
         yield 0.5

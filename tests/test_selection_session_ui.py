@@ -173,7 +173,7 @@ def steps():
         check(not tree().selection.is_empty and session.current().active, "redo restores and resyncs")
     else:
         # Before 5.1 undo in texture paint mode steps through image undo
-        # only, so the operator pushes no step there (ops.selection_ops).
+        # only, so the operator pushes no step there (undo.UNDO_OPTIONS).
         skip("before 5.1, undo in texture paint mode does not restore the ops")
 
     section("a target problem shows in the section")
