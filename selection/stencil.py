@@ -115,7 +115,7 @@ def _mask_file(selection, size: tuple[int, int], tile: int) -> str | None:
     if os.path.exists(path):
         return path
     try:
-        mask = raster.peek_mask(selection, size, tile) or raster.get_mask(selection, size, tile)
+        mask = raster.get_mask(selection, size, tile)
         grey = mask.read_bytes()
         os.makedirs(_file_dir(), exist_ok=True)
         _write_png(path, grey)

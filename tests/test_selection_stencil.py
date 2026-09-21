@@ -135,6 +135,9 @@ class FakeMask:
     def read_bytes(self):
         return np.full((self.size[1], self.size[0]), self.value, np.uint8)
 
+    def is_empty(self):
+        return self.value == 0
+
 
 setup()
 # Starts the background GPU context where one exists (5.2 and later).
@@ -401,15 +404,14 @@ def test_block_mode():
     def unavailable(selection, size, tile=1001):
         raise raster.MaskUnavailable('TOO_COMPLEX', "The lasso outline is too complex to build")
 
-    with patched(raster, "peek_mask", lambda selection, size, tile=1001: None), \
-            patched(raster, "get_mask", unavailable):
+    with patched(raster, "get_mask", unavailable):
         stencil.sync(usable, target)
     check(blocked(), "a mask that turns out unavailable blocks")
 
     def unwritable(path, grey):
         raise OSError("read-only file system")
 
-    with patched(raster, "peek_mask", lambda selection, size, tile=1001: FakeMask(size, 255)), \
+    with patched(raster, "get_mask", lambda selection, size, tile=1001: FakeMask(size, 255)), \
             patched(stencil, "_write_png", unwritable):
         stencil.sync(usable, target)
     check(blocked() and not os.path.exists(mask_file(state)), "a mask file that cannot be written blocks")
@@ -424,7 +426,7 @@ def test_block_mode():
                 and tuple(image.size) == (1, 1) and pixels(image)[..., :3].max() == 0 and not image.is_dirty
                 and image_paint().use_stencil_layer and image_paint().invert_stencil)
 
-    with patched(raster, "peek_mask", lambda selection, size, tile=1001: FakeMask(size, 255)), \
+    with patched(raster, "get_mask", lambda selection, size, tile=1001: FakeMask(size, 255)), \
             patched(stencil, "_write_png", unwritable):
         stencil.sync(usable, target)
         check(generated_blocks(), "with no file at all, a generated black image blocks")
@@ -572,7 +574,7 @@ def test_prune_keeps_current_and_block():
     state = dataclasses.replace(session.sync(force=True), reason="", message="")
     remove_mask_file(state)
     with patched(stencil, "FILE_BUDGET", 1), \
-            patched(raster, "peek_mask", lambda selection, size, tile=1001: FakeMask(size, 128)):
+            patched(raster, "get_mask", lambda selection, size, tile=1001: FakeMask(size, 128)):
         stencil.sync(state, session.resolve_target(bpy.context)[0])
     current = mask_file(state)
     check(not any(os.path.exists(path) for path in old), "older files beyond the budget are deleted")
