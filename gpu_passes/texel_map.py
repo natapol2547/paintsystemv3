@@ -123,52 +123,72 @@ def resolve_uv_map(obj: bpy.types.Object, uv_map: str) -> str | None:
     return next((layer.name for layer in uv_layers if layer.active_render), None)
 
 
-def _triangle_arrays(obj: bpy.types.Object, uv_map: str, depsgraph: bpy.types.Depsgraph) -> dict | None:
-    """The evaluated mesh as a triangle soup of vertex attributes.
+def local_triangles(obj: bpy.types.Object, uv_map: str, depsgraph: bpy.types.Depsgraph,
+                    normals: bool = True) -> dict | None:
+    """The evaluated mesh of *obj* as a triangle soup in local space.
 
     Corners are not shared: UVs and split normals are per corner, so every
-    triangle contributes three of its own vertices. *uv_map* is a UV map
-    name (see `resolve_uv_map`). Returns None when the object has no
-    geometry or no such UV map.
+    triangle contributes three of its own vertices. The dict holds `uv`,
+    `position` and, with *normals*, `normal` per corner, and
+    `material_index` per triangle. *uv_map* is a UV map name (see
+    `resolve_uv_map`). None when the object has no geometry or no such UV
+    map.
     """
     evaluated = obj.evaluated_get(depsgraph)
     try:
         mesh = evaluated.to_mesh()
     except RuntimeError as error:
-        log.warning("Could not evaluate %r for a texel map: %s", obj.name, error)
+        log.warning("Could not evaluate %r: %s", obj.name, error)
         return None
     if mesh is None:
         return None
     try:
         mesh.calc_loop_triangles()
-        if not len(mesh.loop_triangles):
-            return None
         layer = mesh.uv_layers.get(uv_map)
-        if layer is None:
+        if not len(mesh.loop_triangles) or layer is None:
             return None
 
         corners = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int32)
         mesh.loop_triangles.foreach_get('loops', corners)
+        material_index = np.empty(len(mesh.loop_triangles), dtype=np.int32)
+        mesh.loop_triangles.foreach_get('material_index', material_index)
 
         uvs = np.empty(len(layer.uv) * 2, dtype=np.float32)
         layer.uv.foreach_get('vector', uvs)
-        uvs = uvs.reshape(-1, 2)[corners]
 
         vertex_of_corner = np.empty(len(mesh.loops), dtype=np.int32)
         mesh.loops.foreach_get('vertex_index', vertex_of_corner)
         positions = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
         mesh.vertices.foreach_get('co', positions)
-        positions = positions.reshape(-1, 3)[vertex_of_corner[corners]]
 
-        normals = np.empty(len(mesh.corner_normals) * 3, dtype=np.float32)
-        mesh.corner_normals.foreach_get('vector', normals)
-        normals = normals.reshape(-1, 3)[corners]
+        arrays = {
+            "uv": uvs.reshape(-1, 2)[corners],
+            "position": positions.reshape(-1, 3)[vertex_of_corner[corners]],
+            "material_index": material_index,
+        }
+        if normals:
+            corner_normals = np.empty(len(mesh.corner_normals) * 3, dtype=np.float32)
+            mesh.corner_normals.foreach_get('vector', corner_normals)
+            arrays["normal"] = corner_normals.reshape(-1, 3)[corners]
     finally:
         evaluated.to_mesh_clear()
+    return arrays
 
+
+def _triangle_arrays(obj: bpy.types.Object, uv_map: str, depsgraph: bpy.types.Depsgraph) -> dict | None:
+    """`local_triangles` moved to world space, with each triangle's UV centroid per corner.
+
+    The arrays a map or a position batch is drawn from. None when the
+    object has no geometry or no such UV map.
+    """
+    arrays = local_triangles(obj, uv_map, depsgraph)
+    if arrays is None:
+        return None
+    uvs = arrays["uv"]
     matrix = np.array(obj.matrix_world, dtype=np.float32)
     basis = matrix[:3, :3]
-    positions = positions @ basis.T + matrix[:3, 3]
+    positions = arrays["position"] @ basis.T + matrix[:3, 3]
+    normals = arrays["normal"]
     try:
         normals = normals @ np.linalg.inv(basis)
     except np.linalg.LinAlgError:

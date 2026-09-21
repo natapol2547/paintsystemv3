@@ -41,7 +41,7 @@ from gpu_extras.batch import batch_for_shader
 
 from ..common import addon_preferences
 from ..context import get_active_tree, get_ps_object
-from ..gpu_passes import core, surface
+from ..gpu_passes import core, surface, texel_map
 from . import overlay_shader, raster
 
 log = logging.getLogger(__name__)
@@ -212,41 +212,18 @@ def _mesh_batch(obj, uv_map: str, tree, depsgraph) -> gpu.types.GPUBatch | None:
     Triangles with `position` and `uv` from *uv_map*. None when nothing is
     left to draw or the map is missing.
     """
-    evaluated = obj.evaluated_get(depsgraph)
-    try:
-        mesh = evaluated.to_mesh()
-    except RuntimeError as error:
-        log.warning("Could not evaluate %r for the selection overlay: %s", obj.name, error)
+    arrays = texel_map.local_triangles(obj, uv_map, depsgraph, normals=False)
+    if arrays is None:
         return None
-    if mesh is None:
-        return None
-    try:
-        mesh.calc_loop_triangles()
-        layer = mesh.uv_layers.get(uv_map)
-        if not len(mesh.loop_triangles) or layer is None:
-            return None
-        corners = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int32)
-        mesh.loop_triangles.foreach_get('loops', corners)
-        material_index = np.empty(len(mesh.loop_triangles), dtype=np.int32)
-        mesh.loop_triangles.foreach_get('material_index', material_index)
-        uvs = np.empty(len(layer.uv) * 2, dtype=np.float32)
-        layer.uv.foreach_get('vector', uvs)
-        vertex_of_corner = np.empty(len(mesh.loops), dtype=np.int32)
-        mesh.loops.foreach_get('vertex_index', vertex_of_corner)
-        positions = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
-        mesh.vertices.foreach_get('co', positions)
-    finally:
-        evaluated.to_mesh_clear()
+    positions, uvs = arrays["position"], arrays["uv"]
     uses = _slot_uses(obj, tree)
     if uses:
-        keep = np.array(uses, dtype=bool)[np.clip(material_index, 0, len(uses) - 1)]
-        corners = corners.reshape(-1, 3)[keep].ravel()
-    if not len(corners):
+        keep = np.array(uses, dtype=bool)[np.clip(arrays["material_index"], 0, len(uses) - 1)]
+        corner_kept = np.repeat(keep, 3)
+        positions, uvs = positions[corner_kept], uvs[corner_kept]
+    if not len(positions):
         return None
-    return batch_for_shader(_shader("coverage"), 'TRIS', {
-        "position": positions.reshape(-1, 3)[vertex_of_corner[corners]],
-        "uv": uvs.reshape(-1, 2)[corners],
-    })
+    return batch_for_shader(_shader("coverage"), 'TRIS', {"position": positions, "uv": uvs})
 
 
 def _cached_batch(obj, uv_map: str, tree, depsgraph) -> gpu.types.GPUBatch | None:
