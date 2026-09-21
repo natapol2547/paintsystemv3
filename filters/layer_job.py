@@ -216,7 +216,16 @@ def _overtaken(job) -> bool:
     poked, _poked = _poked, False
     if _restarts.get(job.uuid, 0) >= RESTART_LIMIT:
         return False
-    return job.painted_over() or (poked and job.moved())
+    if job.painted_over():
+        return True
+    if not poked:
+        return False
+    moved = job.moved()
+    # The IR build inside `moved` compiles the layer, which is still
+    # stale, so it calls `notify` again. That call is not news, and
+    # left set it would make every tick pay for another IR build.
+    _poked = False
+    return moved
 
 
 def _restart(job) -> None:

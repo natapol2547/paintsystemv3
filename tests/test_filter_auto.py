@@ -242,6 +242,30 @@ if available():
               f"and the layer is up to date again: {node.stale_reason!r}")
         check(as_built_now(), "with the setting it ended on")
 
+        # A compile while a job runs pokes it to check what moved. That
+        # check compiles the layer, which is still stale and pokes again,
+        # so only the first poke may cost an IR build.
+        looks = []
+        moved = layer_job._Job.moved
+        layer_job._Job.moved = lambda job: looks.append(job.uuid) or moved(job)
+        try:
+            node.invert_alpha = True
+            core.flush_now()
+            check(begin(), "a setting starts a refresh")
+            layer_job.notify()
+            ticks = 0
+            while layer_job.running() and ticks < 3:
+                layer_job._tick()
+                ticks += 1
+        finally:
+            layer_job._Job.moved = moved
+        check(ticks == 3 and len(looks) == 1,
+              f"one poke is one look at what moved ({len(looks)} in {ticks} ticks)")
+        node.invert_alpha = False
+        core.flush_now()
+        check(pump() and node.stale_reason == "",
+              f"and the layer settles afterwards: {node.stale_reason!r}")
+
         # Past the restart limit the build is let finish, which is where
         # the stamp has to be what was read rather than what is there.
         layer_job._restarts[node.uuid] = layer_job.RESTART_LIMIT
