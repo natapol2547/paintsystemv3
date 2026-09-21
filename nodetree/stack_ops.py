@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 import bpy
 
-from ..nodes.builder import same_value
+from ..compiler.builder import same_value
 from ..props.channel import channel_alpha_name
 
 

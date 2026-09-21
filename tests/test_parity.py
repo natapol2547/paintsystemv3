@@ -26,7 +26,7 @@ from harness import check, finish, import_from, register_addon, section  # noqa:
 
 register_addon()
 core = import_from("compiler.core")
-builder = import_from("nodes.builder")
+builder = import_from("compiler.builder")
 stack_ops = import_from("nodetree.stack_ops")
 
 IMAGE = 'PaintSystemImageLayerNode'

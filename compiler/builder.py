@@ -8,6 +8,8 @@ from typing import Any
 
 import bpy
 
+from .profile import phase
+
 log = logging.getLogger(__name__)
 
 # Custom ID property that tags each artifact node with the identifier the
@@ -218,11 +220,6 @@ class NodeTreeBuilder:
     # ── Build ────────────────────────────────────────────────────────
 
     def build(self, *, arrange: bool = True) -> None:
-        # Imported per build, not at module level: the compiler package imports
-        # this module, so importing it back from the top would fail whenever
-        # the builder is imported first. A build is one import lookup.
-        from ..compiler.profile import phase
-
         with phase("upsert", self.node_tree):
             # Sync node tree interface sockets
             self._sync_interface_sockets()

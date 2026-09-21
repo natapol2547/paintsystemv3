@@ -16,9 +16,9 @@ from typing import Any, Iterable
 
 import bpy
 
+from .builder import BuildStats
 from .ir import IR, Ref, SocketId, hash_payload, _serialize
 from .profile import phase
-from ..nodes.builder import BuildStats
 from ..nodetree.stack_ops import (alpha_partner, feeding_link, feeds_clip_run, link_index,
                                   paired_color_input, producing_link)
 from ..props.channel import channel_socket_specs

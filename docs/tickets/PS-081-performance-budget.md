@@ -28,7 +28,7 @@ What landed, in merge order:
   cannot clobber it, and is dropped before any link edit. An unchanged
   compile of 100 layers made 858 calls into that property, 124 ms of its
   132; it now makes none.
-- **Writes that change nothing are skipped** (`nodes/builder.py`). Every
+- **Writes that change nothing are skipped** (`compiler/builder.py`). Every
   compile re-declared all 665 socket values and node properties of a
   100-layer artifact, and each no-op write cost about 320 us because it
   tags the artifact and every material using it. `same_value` compares

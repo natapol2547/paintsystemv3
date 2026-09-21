@@ -16,7 +16,7 @@ from typing import Callable
 
 import bpy
 
-from ..nodes.builder import NodeTreeBuilder
+from .builder import NodeTreeBuilder
 
 
 LIBRARY_VERSION = 2

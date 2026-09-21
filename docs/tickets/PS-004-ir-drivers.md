@@ -19,7 +19,7 @@ inputs so the light direction follows the empty's rotation live
   are removed. Drivers on user-owned nodes (PS-003) are left alone.
 - Fingerprint includes driver specs. Object targets serialise as
   `["id", "Object", name]` like other IDs.
-- Builder helper in `nodes/builder.py`: `NodeTreeBuilder.sync_drivers`.
+- Builder helper in `compiler/builder.py`: `NodeTreeBuilder.sync_drivers`.
 
 ## Acceptance
 

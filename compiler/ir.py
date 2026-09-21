@@ -14,7 +14,7 @@ from typing import Any
 
 import bpy
 
-from ..nodes.builder import BuildStats, NodeTreeBuilder
+from .builder import BuildStats, NodeTreeBuilder
 
 
 SocketId = int | str
