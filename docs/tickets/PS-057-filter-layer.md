@@ -2,6 +2,15 @@
 
 Epic F. Size L. Milestone M3.
 
+## Status
+
+Shipped through the GPU composite path, with the Invert, Blur, Sharpen
+and Painterly kinds (PS-051, PS-053), automatic refresh, packed results
+and undo. The Cycles fallback (Path B below) is designed but not built: a
+stack only a bake could draw is refused by name for now. The sections
+below describe the code as it is, and say so where a part is still only
+a plan.
+
 ## v2 behaviour
 
 v2 had no filter layer. Two features covered parts of one:
@@ -54,13 +63,14 @@ A filter layer is an ordinary `PaintSystemLayerNode` whose `emit_source`
 returns an Image Texture over a derived image it owns, and whose
 `emit_blend` *replaces* the stack below with those pixels instead of
 compositing over them. It never sets `cache_enabled`, and
-`CompileContext.is_cached` (`compiler/core.py:205-216`) is never true for
+`CompileContext.is_cached` (`compiler/core.py`) is never true for
 it.
 
 The derived pixels are produced by compositing the stack below into one
 RGBA buffer and running a GPU filter pass over it (`filters/core.py`,
-PS-050). The composite is done on the GPU where it can be, and by the
-existing Cycles bake where it cannot.
+PS-050). The composite is done on the GPU where it can be. Where it
+cannot, the plan is the existing Cycles bake; until that lands, such a
+stack is refused.
 
 ### Why not the node cache
 
@@ -73,20 +83,20 @@ during the design spikes:
 - The cache swallows the blend. `build_bake_tree` bakes
   `ctx.output_ref(bake_target, ...)` and `is_cached` exempts the bake
   target, so the target emits its full `emit_blend`
-  (`compiler/core.py:352-357`, `compiler/bake.py:34-42`): opacity, blend
+  (`compiler/core.py::build_ir`, `compiler/bake.py`): opacity, blend
   mode, `enabled`, Mask and Clip end up *inside* the baked pixels. Every
   one of those is in `node_state`, so nudging an opacity slider would
   invalidate the cache and queue a multi-second rebuild. What a filter
   wants cached is the filtered pixels; what it wants live is the blend.
-- `is_cached` refuses a node where `feeds_clip_run(node)` is true
-  (`compiler/core.py:212-215`), which a filter layer becomes the moment
+- `is_cached` refuses a node where `feeds_clip_run(node)` is true,
+  which a filter layer becomes the moment
   anyone clips a layer to it. Removing that refusal makes the whole stack
   below the clip base compile to transparent black, silently:
   `ctx.upstream` returns None and `input_source` falls back to the socket
-  default (`compiler/core.py:193-198`). For an ordinary layer the refusal
+  default. For an ordinary layer the refusal
   costs performance; for a filter layer it would cost the feature.
 - A stale ordinary cache falls back to a pixel-equivalent live graph
-  (`nodes/layers/base_layer_node.py:178-180`). A filter layer has no live
+  (`nodes/layers/base_layer_node.py`). A filter layer has no live
   graph, because a shader cannot sample neighbouring texels of a
   procedurally composited stack, so "stale" would mean the effect
   vanishes from the viewport.
@@ -116,7 +126,7 @@ a Mix, which is possible because the two weights sum to `a`, and it
 reuses `_build_layer_blend`'s trick that Math DIVIDE returns 0 for a zero
 divisor, so a fully transparent result takes the backdrop colour rather
 than NaN. Nine nodes; a sibling of `_build_layer_blend`
-(`compiler/library.py:67-169`) with the source alpha moved out of the
+(`compiler/library.py`) with the source alpha moved out of the
 coverage term.
 
 `kept` weights only the source while the backdrop keeps `1 - f`, exactly
@@ -131,7 +141,7 @@ over the same stack it was computed from compounds alpha: backdrop alpha
 0.5 with filtered alpha 0.5 at full Opacity gives alpha 0.75 and
 `source_share` 0.667, so at full strength the unfiltered original shows
 through and every soft edge gains a halo. A channel's bottom is the
-transparent Group Input (`nodetree/tree.py:195-199`), so "the stack below
+transparent Group Input (`nodetree/tree.py`), so "the stack below
 is opaque" is not a case to rely on.
 
 Amount is the inherited `opacity` (`0.0` when `enabled` is off), so the
@@ -155,109 +165,131 @@ registered in `nodes/layers/registry.py` as the fourth type
 
 Authored:
 
-- `filter_type: EnumProperty`, items from `filters/layer_specs.py`. v1
-  ships one entry; PS-051 and PS-053 add theirs with no mechanism change.
+- `filter_type: EnumProperty`, items from `filters/layer_specs.py`:
+  Invert, Blur, Sharpen and Painterly. A new kind is a new entry there,
+  with no change to the mechanism.
 - One flat `FloatProperty`/`IntProperty`/`EnumProperty` per parameter of
-  every registered kind (`blur_sigma`, `blur_strength`, later
-  `stamp_density` and the rest), drawn conditionally on `filter_type`.
-  Flat, not a `PointerProperty` to a `PropertyGroup`: `IR._serialize`
-  falls through to `repr()` for a PropertyGroup
-  (`compiler/ir.py:190-206`), and `repr()` of one is a data path, not its
-  contents — a parameter group would be invisible to every hash in the
-  addon and would additionally churn `node_state` on a rename.
-- `resolution` (`RESOLUTION_ITEMS` from `ops/node_tree_ops.py:12`),
-  `uv_map`, `auto_refresh: BoolProperty(default=True)`.
+  every registered kind (`invert_alpha`, `blur_sigma`, `sharpen_radius`,
+  `sharpen_strength`, the `painter_*` set), drawn conditionally on
+  `filter_type` from the list each kind declares. Flat, not a
+  `PointerProperty` to a `PropertyGroup`: `IR._serialize` falls through
+  to `repr()` for a PropertyGroup, and `repr()` of one is a data path,
+  not its contents — a parameter group would be invisible to every hash
+  in the addon and would additionally churn `node_state` on a rename.
+- `resolution` (`RESOLUTION_ITEMS`), `uv_map`,
+  `auto_refresh: BoolProperty(default=True)`.
+- `enabled` and `lock_layer` are redeclared for their update callbacks
+  only, because either can hold a refresh back (Rebuild, below).
 
 Derived bookkeeping on the node:
 
 - `derived_image: PointerProperty(bpy.types.Image)`.
-- `derived_capture: PointerProperty(bpy.types.Image)` — the fallback
-  path's baked input, session only (below).
-- `derived_stale_structure: BoolProperty(options={'SKIP_SAVE'})` —
-  written from `emit_source`, only when the value changes, exactly as
-  `cache_stale` is (`nodes/layers/base_layer_node.py:167-180`). Not
-  saved, because the first compile after a file read recomputes it and
-  `on_load_post` calls `mark_dirty()`.
+- `derived_stale_reason: StringProperty` — why the image no longer
+  matches its structural inputs, or empty. Written from `emit_source`
+  on every compile and by nothing else, and only when the value
+  changes, as `cache_stale` is. It has no update callback: tagging the
+  tree from inside a compile would schedule another compile. It is
+  saved, but nothing trusts the saved value, because `on_load_post`
+  calls `mark_dirty()` and the first compile recomputes it.
 - `derived_stale_pixels: BoolProperty` — written from outside the
-  compile, by the watch below. This one *is* saved, deliberately
-  diverging from `cache_stale`: nothing recomputes it for free after a
-  reload, and a file saved out of date must reopen out of date rather
-  than show a fresh badge over old pixels.
-- `derived_error: StringProperty` — the last refusal, shown until the
-  next attempt.
+  compile, by `filters/freshness.py`. Saved deliberately: nothing
+  recomputes it for free after a reload, and a file saved out of date
+  must reopen out of date rather than show a fresh badge over old
+  pixels.
+- `derived_error: StringProperty` — why the last automatic refresh
+  stopped, shown in the panel until the next one. Only the auto job
+  writes it, and every time it does it also switches Auto Refresh off,
+  so a non-empty value means the job switched it off rather than the
+  user. A successful Update relies on that to switch Auto Refresh back
+  on (`ops/filter_layer_ops.py::_resume_auto_refresh`).
+
+`stale_reason` on the node combines the two: the structural reason when
+there is one, otherwise "the pixels below changed" when the pixel flag is
+set, and always empty for an unbuilt layer.
 
 `paint_image` stays None. That is load-bearing and needs no new code:
 `context.update_active_image` already skips a layer with no image, and
-`filters/actions.py:99` already refuses an action on one, so the brush
-and the pixel actions can never target a filter layer.
+`filters/actions.py::resolve_target` already refuses an action on one, so
+the brush and the pixel actions can never target a filter layer.
 
 ### Hashing
 
-`compiler/core.py:_hashed_props` (`:243-261`) gains one rule: skip any
-name in `getattr(cls, 'ps_unhashed_props', ())`, a class attribute
-defaulting to `()` on `PaintSystemBaseNode`. The filter node lists its
-`derived_*` bookkeeping, its parameters, `resolution`, `uv_map` and
+`compiler/core.py::_hashed_props` has one rule for this: skip any name
+in `getattr(cls, 'ps_unhashed_props', ())`, a class attribute defaulting
+to `()` on `PaintSystemBaseNode`. The filter node lists its `derived_*`
+bookkeeping, its parameters, `filter_type`, `resolution`, `uv_map` and
 `auto_refresh` there. One declaration rather than a second name prefix,
 and free at runtime because `_hashed_props` is memoised per class.
 
-Two consequences, both wanted. Writing `derived_stale_structure` from
+Two consequences, both wanted. Writing `derived_stale_reason` from
 inside a compile cannot churn `node_state` and recompile forever. And
 dragging a blur slider does not invalidate a node cache or a PS-007
 channel bake above the filter before any pixel has changed.
 
 What consumers above *must* see — "these pixels are a different picture
-now" — comes back through the existing hook:
+now" — comes back through the existing hook, which `subtree_hash` folds
+in:
 
 ```python
 def hash_parts(self, ctx):
-    # The derived image hashes by name like any datablock
-    # (compiler/ir.py:190), so the stamp of its pixels is what a cache
-    # above has to see.
-    image = self.derived_image
-    return [image.get(BUILD_KEY, "") if image is not None else ""]
+    # The derived image hashes by name like any other datablock, so the
+    # stamp of its pixels is what a cache above this layer has to see.
+    return [build_stamp(self.derived_image)]
 ```
-
-`subtree_hash` folds `hash_parts` in at `compiler/core.py:236-238`.
 
 ### The stamps live on the image, not the node
 
-Five ID properties, written together at commit, constants in
+Four ID properties, written together at commit, constants in
 `filters/derived.py`:
 
 - `ps_filter_owner` — `"<tree uuid>:<node uuid>"`.
-- `ps_filter_uv_map` — the UV map the pixels were laid out in. The
-  fingerprint hashes the resolved map but cannot give it back, and
-  `emit_source` needs the name to build the Image Texture's UV Map node,
-  so it is stamped separately.
-- `ps_filter_fingerprint` — the structural token:
-  `hash_payload([FILTER_VERSION, filter_type, params, [w, h],
-  resolved_uv_map, ctx.subtree_hash(below) or "empty"])`. Cheap to
-  recompute inside a compile, where `ctx._subtree_hashes` is already
-  warm.
-- `ps_filter_sources` — the digest of every source image at build time,
-  by name. Read only by the digest pass below.
-- `ps_filter_build` — a hash of the other two. This is what `hash_parts`
-  returns, so a rebuild that changed only source *pixels* still
-  invalidates a cache above it.
+- `ps_filter_fingerprint` — the structural token: what the build was
+  asked for. A JSON object of named parts (`filters/freshness.py::
+  fingerprint_parts`): `version` (`FILTER_VERSION`), `filter`, `params`
+  (the kind's own fingerprint of its settings), `size`, `uv_map` as
+  authored, `below` (`ctx.subtree_hash` of the node feeding the Color
+  input, or `"empty"`), and `clip`, present only when the layer is
+  clipped. Stored as parts rather than one hash so that a mismatch can
+  name the part that moved. Cheap to recompute inside a compile, where
+  the subtree hashes are already warm.
+- `ps_filter_uv_map` — the UV map the pixels were laid out in, resolved.
+  The compiled Image Texture's UV Map node needs it, and it has to be
+  the map the pixels were built in however the setting has moved since.
+- `ps_filter_build` — a hash of the fingerprint and a digest of the
+  result's bytes. This is what `hash_parts` returns, so it has to change
+  exactly when the pixels do: painting below moves no property, so two
+  builds either side of a stroke share a fingerprint and differ only in
+  the digest.
 
-They are on the image and not on the node for the reason
-`compiler/core.py:29-31` already gives for the artifact: whichever copy
-of the node and whichever copy of the image undo restores, the stamp
-describes the pixels sitting next to it. It is also what makes
-duplication and `image.copy()` behave.
+They are on the image and not on the node for the reason the compiler
+already gives for the artifact: whichever copy of the node and whichever
+copy of the image undo restores, the stamp describes the pixels sitting
+next to it. It is also what makes duplication and `image.copy()` behave.
 
-Note that an unpacked generated image loses its pixels through
-`image.copy()` and comes back black after undo-then-redo (PS-096:173-176),
-while its ID properties survive both. A stamp with no pixels is the worst
-failure this feature can have, so **the commit step packs before it
-stamps**: `ResultImage.commit` (`filters/core.py:302-317`), then
-`undo.pixels.pack_write_once`, then the four stamps. A failed pack leaves
-the layer out of date rather than wrongly fresh.
+An unpacked generated image loses its pixels through `image.copy()` and
+comes back black after undo-then-redo (PS-096), while its ID properties
+survive both. A stamp with no pixels is the worst failure this feature
+can have, so **the commit packs before it stamps**
+(`filters/layer_build.py::commit`): the build's own PNG goes into the
+image with `image.pack(data=...)`, the image switches to a file source,
+and only then are the four stamps written. `derived.is_built` asks for a
+stamp *and* for a packed file or loaded pixels, so an image that lost its
+pixels reads as unbuilt rather than as wrongly fresh.
+
+A build can come out with exactly the pixels the image already holds —
+a stroke below undone before the refresh ran is the ordinary case. The
+commit sees that from the stamps alone: equal build stamps mean equal
+pixels, so when the image is still packed, not dirty and stamped with
+the same four values, it skips the pack, keeps the decoded buffer, and
+does not report the image as changed to the filter layers above. It
+still clears the pixel flag, under the same rule as a real commit (see
+Freshness), and still compiles, because the compile is what tells the
+auto job the layer has settled.
 
 ### Compile
 
 Only `emit_source` and `emit_blend` are overridden. `emit`
-(`nodes/layers/base_layer_node.py:167-194`) runs unmodified, so clip
+(`nodes/layers/base_layer_node.py`) runs unmodified, so clip
 runs, folders, the stack walk and `topological_order` behave exactly as
 they do for an image layer, the Group Input node stays in the artifact,
 and `build_bake_tree` keeps working over a tree containing filter layers.
@@ -273,13 +305,18 @@ and `build_bake_tree` keeps working over a tree containing filter layers.
   Flicking the viewport back to the unfiltered stack on every brush dab
   underneath is worse than old pixels next to a loud badge.
 
-`emit_source` also recomputes the structural fingerprint and writes
-`derived_stale_structure` when it differs, on the "write only when the
-value changes" rule.
+`emit_source` also recomputes the structural fingerprint parts, compares
+them with the stamp, and writes `derived_stale_reason` when the answer
+differs, on the "write only when the value changes" rule. The same spot
+tells the auto job about the result: a layer out of date calls
+`layer_job.notify()` when it has Auto Refresh on and is switched on, and
+a layer up to date calls `layer_job.settled()`. Almost every way a
+filter layer goes out of date ends in a compile, so this is where the
+auto job normally learns of work; the exceptions are under Rebuild.
 
 Cost: one `subtree_hash` walk per filter layer per compile, memoised —
 about what `is_cached` already costs a cached layer. `tests/test_perf.py`
-gets a budget line for a 20-layer stack with one filter layer.
+has a budget case for a stack with one built filter layer.
 
 Not done, deliberately: no pruning of the live sub-stack when Amount is
 exactly 1. It would recreate the `feeds_clip_run` upstream-not-visited
@@ -308,34 +345,35 @@ ping-pong pair plus one source texture at a time, each released after its
 layer composites — about 400 MB at 4096², plus the filter's own targets.
 An allocation failure is caught and reported by name.
 
-Conditions, each checked by name, each falling back rather than failing:
-every node below is Image, Solid, Folder or a valid filter layer; every
-`uv_map` resolves to the same UV layer through
-`gpu_passes/texel_map.py:112::resolve_uv_map`, which already maps `""` to
-the active render UV map; no `source == 'TILED'`; the blend mode is in
-`ALLOWED_BLEND_MODES`; no linked Mask input (PS-015). An object is needed
-only when at least one layer below sets an explicit `uv_map`: when they
-all leave it empty they resolve to the same map whatever it is, and the
-composite is object-independent.
+Conditions, each checked by name: every node below is Image, Solid,
+Folder or a valid filter layer; the blend mode is in
+`ALLOWED_BLEND_MODES`; no linked Mask input (PS-015); no clip reaching
+outside its own stack. A layer that fails one of these gets a plan on
+the bake path, with the reason. Every `uv_map` must also resolve to the
+same UV layer through `gpu_passes/texel_map.py::resolve_uv_map`, which
+maps `""` to the active render UV map, and no source may be UDIM; those
+two are refused outright. An object is needed only when at least one
+layer below sets an explicit `uv_map`: when they all leave it empty they
+resolve to the same map whatever it is, and the composite is
+object-independent.
 
 `ALLOWED_BLEND_MODES` is an allow-list a mode joins only once its
-per-texel parity test against a real Cycles bake of the same subtree
-passes (`tests/test_filter_layer_parity.py`). A mode outside it is not a
-refusal; it falls back.
+per-texel parity test against a real Cycles bake of the library group
+passes (`tests/test_filter_blend.py`). A mode outside it is not a
+refusal; it goes to the bake path.
 
-**Path B, Cycles fallback (`compiler/bake.py`).** For group layers, mixed
-UV maps, UDIM, un-parity-tested blend modes, linked masks, and the layer
-types that genuinely evaluate surface data (PS-022, PS-023, PS-024,
-PS-025, PS-026, PS-027, PS-028) — all of which land in M2, before this
-ticket. `bake_subtree(context, tree, node, obj, image, *, margin,
-uv_map)` is `bake_node_cache`'s body (`compiler/bake.py:107-163`)
-extracted verbatim, with the cache bookkeeping left behind in
-`bake_node_cache`, which becomes a short caller with an unchanged
-signature and return value.
+**Path B, Cycles fallback (`compiler/bake.py`). Not built yet.** Today a
+plan on the bake path is refused by `layer_build.steps`, and the auto job
+stops on it with the same reason. The design, for when it lands: group
+layers, un-parity-tested blend modes, linked masks, and the layer types
+that genuinely evaluate surface data (PS-022 to PS-028) bake their input
+with Cycles. `bake_subtree(context, tree, node, obj, image, *, margin,
+uv_map)` already exists as `bake_node_cache`'s body, extracted with the
+cache bookkeeping left behind in `bake_node_cache`.
 
 No compiler change is needed for this: `build_ir` already takes any node
-as `bake_target` and links its output refs into `bake:out`
-(`compiler/core.py:324, 337, 352-357`), so passing *the node that feeds
+as `bake_target` and links its output refs into `bake:out`, so passing
+*the node that feeds
 the filter's Color input* bakes exactly the composite below, including
 that node's own blend — and for a clip base, the base's own content,
 which is what a clipped filter layer wants. Those are the lines PS-007
@@ -346,17 +384,13 @@ The bake is 2 s at 2048² and 10 to 14 s at 4096², measured on a default
 cube with a two-layer stack, which is a best case. So the fallback keeps
 its result: `derived_capture` is a session-only image tagged
 `ps_session`, and a parameter change re-runs only the filter passes
-against it. The module docstring carries the rule that follows:
-**timers re-filter, operators bake.** No timer path may start a Cycles
-bake, ever.
+against it. The rule that follows: **timers re-filter, operators bake.**
+No timer path may start a Cycles bake, ever.
 
-Two bugs in that code are fixed while it is being extracted, both
-recorded already: `bake_node_cache` overwrites the selection and the
-active object with no save or restore (`compiler/bake.py:145-147`, while
-`tests/harness.py:153-154` does it right and `docs/BACKLOG.md:92` records
-the same bug being fixed once in `bake_group`), and `_temporary_material`
-leaves a permanent `None` material slot on an object that had none
-(`:84-85`).
+The two bugs found in that code on the way — the bake overwriting the
+selection and the active object, and a stray `None` material slot left
+on an object that had none — were fixed when `bake_subtree` was
+extracted.
 
 ### Freshness
 
@@ -364,7 +398,7 @@ Two halves, because `subtree_hash` has one known blind spot and refusing
 to paint under a filter layer is not a product.
 
 **Structural.** The fingerprint above, recomputed in `emit_source` and
-compared with the stamp. `subtree_hash` (`compiler/core.py:218-240`)
+compared with the stamp. `subtree_hash` (`compiler/core.py`)
 already covers a layer added, removed, reordered or muted, a
 `fill_color`, another layer's blend mode or opacity, a clip flag, an
 image datablock swapped or renamed, and a nested group tree's recompile.
@@ -399,42 +433,49 @@ of not being able to tell the two apart. The alternative, bumping
 missing key reports a legacy clipped layer as fresh the moment it is
 unclipped.
 
-**Pixels.** `IR._serialize_other` reduces a datablock to `["id", type,
-name_full]` (`compiler/ir.py:190-191`), so painting into an image below
-changes no hash. `filters/freshness.py` closes it without hashing pixels
-on the hot path:
+**Pixels.** `compiler/ir.py` reduces a datablock to its type and name,
+so painting into an image below changes no hash. `filters/freshness.py`
+closes that without hashing pixels on the hot path:
 
-- Blender tags the painted image in the depsgraph at the end of a stroke
-  on every version in range (`paint_image_proj.cc`, `paint_image_2d.cc`,
-  `paint_image_ops_paint.cc`), and an `Image` row does appear in
-  `depsgraph.updates` for such a tag. `on_depsgraph_update_post` gains a
-  branch collecting `update.id.original` values that are
-  `bpy.types.Image` and calling `freshness.note_image_changed(...)`. That
-  handler is the most carefully tuned function in the repo (PS-092,
-  PS-093); the branch only reads the same `depsgraph.updates` walk and
-  drops nothing.
-- A session map of filter node to the source image `session_uid`s
-  recorded at build time turns that into `derived_stale_pixels = True` on
-  the nodes downstream. After a file read the map is empty, so the first
-  image update rebuilds it from the stacks once.
-- `filters/core.ResultImage.commit` and `undo.pixels.write_pixels` call
+- Blender tags the painted image in the depsgraph at the end of a
+  stroke, and an `Image` row appears in `depsgraph.updates` for the tag.
+  `on_depsgraph_update_post` collects those images and calls
+  `freshness.note_image_changed(...)`, then `layer_job.notify()`
+  unconditionally, which keeps the refresh debounce from starting partway
+  through a stroke. That handler is the most carefully tuned function in
+  the repo (PS-092, PS-093); the branch only reads the same
+  `depsgraph.updates` walk and drops nothing.
+- `note_image_changed` sets `derived_stale_pixels` on every built filter
+  layer that reads one of the images. Which images a layer reads is
+  worked out when an image is tagged, by `composite.plan_below`, rather
+  than recorded at build time: the walk only runs when something changed,
+  and a recorded set would be one more thing to invalidate. A change to
+  *which* images are below is structural anyway.
+- `undo.pixels.write_pixels` and the build's own commit call
   `note_image_changed` too, so the addon's own writes — Clear, Fill,
-  Invert today, PS-095's fill later, and one filter layer feeding another
-  — are exact rather than depending on the depsgraph.
-- A debounced timer (`bpy.app.timers`, the pattern at
-  `compiler/core.py:487-495` and `selection/session.py:255-281`)
-  recomputes the digest of suspect images and **clears** the flag when
-  they came back identical, which is the common case after an undo or
-  after a stroke on an unrelated layer. The digest is never allowed to
-  claim freshness, only to withdraw a false alarm. It has a hard budget —
-  more than three suspect images, or any above 4K, and the pass skips and
-  the layer stays out of date. Failing safe is the rule.
+  Invert, Blur, Sharpen, and one filter layer feeding another — are exact
+  rather than depending on the depsgraph.
+- A build in flight is counted separately. The layer is usually marked
+  already, which is why it is being built, so a second stroke partway
+  through would change nothing and the commit would clear the flag over
+  pixels the build never saw. `freshness.reading(uuid)` is held for the
+  whole build, and every stroke below the layer meanwhile bumps
+  `freshness.changes(uuid)`; the commit clears the flag only when that
+  count is the one the build started with.
 
-The stale row names the reason by comparing fingerprint parts: "Out of
-date — the layers below changed", "— the filter settings changed", "—
-the resolution changed", "— the pixels below changed". An `ERROR` badge
-appears on the layer row in `PAINTSYSTEM_UL_layers.draw_item`, mirroring
-`draw_cache_settings` (`nodes/layers/base_layer_node.py:148-159`).
+Nothing ever clears the flag without a build. A stroke that is undone
+before the refresh runs still costs one, but a build that finds the same
+pixels commits nothing (the end of the stamps section above), so the
+cost is GPU time and never a repack or a cascade to the filter layers
+above.
+
+The panel names the reason: the structural part that moved, checked in
+the order of `freshness.REASONS` — the layers below, clipping, the
+filter, the resolution, the filter settings, the UV map, a Paint System
+update — or "the pixels below changed". The filter and the resolution
+come before the settings because each changes the settings as well. The
+layer row shows an `ERROR` badge while out of date and a refresh icon
+while the auto job builds it (`draw_row_state`).
 `paint_system.clear_filter_result` drops the derived image and returns
 the layer to pass-through, so a wedged layer is recoverable without
 deleting it.
@@ -444,30 +485,38 @@ deleting it.
 `filters/layer_build.py::steps(context, tree, node)` is a generator of
 bounded units, driven two ways.
 
-**Explicitly**, by `PAINTSYSTEM_OT_rebuild_filter_layer`, a modal
-operator on a `wm.event_timer_add(0.01)` with a per-event budget, a
-resolution/margin/UV-map dialog copied from `PAINTSYSTEM_OT_bake_cache`
-(`ops/bake_ops.py:20-60`), `wm.progress_update` plus
-`workspace.status_text_set`, and ESC or right mouse to cancel.
-`PAINTSYSTEM_OT_rebuild_filter_layers` runs the same generator over every
-out-of-date filter layer in the tree, bottom-up, under one modal — which
-is also how a filter layer below an out-of-date filter layer is handled:
-it is rebuilt first, not refused.
+**Explicitly**, by `PAINTSYSTEM_OT_rebuild_filter_layer` (the Update
+button), a modal operator on a `wm.event_timer_add(0.01)` that spends
+0.05 s of each event on the build, with `wm.progress_update` plus
+`workspace.status_text_set`, and ESC or right mouse to cancel. There is
+no dialog: the layer's own `resolution` and `uv_map` sit in the panel
+right above the button. `execute` runs the whole build in one go, for a
+script or a call with no window.
 
-The steps: resolve (nothing allocated yet, `Refused` by name), composite
-or bake, filter passes, banded readback, commit. **Only the commit step
-writes anything**, so a cancel leaves the previous pixels bit-identical.
+Update first cancels any automatic refresh, because two builds of one
+layer would race for the same image. After a successful build it also
+switches Auto Refresh back on if the auto job was the one that turned it
+off (`derived_error` set, see the data model).
 
-The honest budget: `gpu_passes.core.read_color` reads a whole framebuffer
-in one call — 0.99 s at 4096² on the probe machine — and
-`PixelSource.from_image` uploads one image in one call, about 0.17 s at
-4096². `read_color` therefore grows a row range so the readback yields
-per band, as `run_pass` already bands its draws, and an upload is one
-step per source image. The claim this ticket makes is that no single step
-runs longer than roughly 0.2 s at 4K, not 40 ms. The modal holds the
+The steps: resolve (nothing allocated yet, `Refused` by name), composite,
+the kind's passes or its own build, the sRGB encode into a byte target,
+banded readback into a PNG stream (`filters/png.py`), commit. **Only the
+commit writes anything**, so a cancel leaves the previous pixels
+bit-identical, and the textures live in the generator's frame, so
+closing it gives them back.
+
+The honest budget: a whole-framebuffer read is 0.99 s at 4096² on the
+probe machine, so `gpu_passes.core.read_color_bytes` takes a row range
+and the readback yields per band, as `run_pass` already bands its draws.
+The claim this ticket makes is that no single step runs longer than
+roughly 0.2 s at 4K, not 40 ms (see Measurements). The modal holds the
 window for the length of the build, which is the price of being
-cancellable; the auto path below exists so the common case does not reach
-it.
+cancellable; the auto path below exists so the common case does not
+reach it.
+
+A filter layer below an out-of-date filter layer is handled by the auto
+job's order, bottom of each stack first. There is no rebuild-all
+operator.
 
 `bl_options = {'REGISTER', 'UNDO'}`, as `PAINTSYSTEM_OT_bake_cache` has.
 This is not the case PS-090's no-`UNDO` rule covers. That rule exists
@@ -478,9 +527,11 @@ Ctrl+Z takes the whole rebuild back, pixels and stamps together, which is
 what a button labelled Update should do.
 
 **Automatically**, by `filters/layer_job.py`, the same generator pulled
-from a `bpy.app.timers` tick with a time budget, debounced 0.4 s, gated
-by `auto_refresh`, with the `GPU_ERROR` retry and back-off copied from
-`selection/session.py:255-281`. Three hard rules:
+from a `bpy.app.timers` tick: debounced 0.4 s, 0.02 s of build per tick,
+gated by `auto_refresh`. A candidate is a filter layer that is switched
+on, has Auto Refresh on, is not locked, is out of date, and is not being
+built by the Update button (`freshness.building`), taken bottom of each
+stack first. Three hard rules:
 
 - A switched-off layer is never a candidate. It renders as a
   pass-through, so a refresh would spend a whole composite and its video
@@ -502,121 +553,127 @@ by `auto_refresh`, with the `GPU_ERROR` retry and back-off copied from
   goes and not what the tree compiles to.
 
 - The auto path runs **only** when `resolve_input` reports the composite
-  path. A layer on the Cycles fallback shows "Update needed (baked
-  input)" and waits for the button, so a background refresh can never
+  path. A layer whose stack needs a bake gets Auto Refresh switched off
+  and a message naming the reason, so a background refresh can never
   lock Blender for ten seconds.
 - The viewport keeps showing the previous pixels for the whole job, and
   the commit is one atomic write, so no intermediate state is ever
   visible.
 
-The job holds `(tree.name, node.uuid)` and re-fetches each tick (PS-090's
-datablock rule); `cancel_all()` runs from `undo_post`, `redo_post` and
-`load_post`. It writes pixels, packs, stamps and calls `mark_dirty(tree)`
-— which is the repo's existing timer-safe compile path, including the
-pending-fingerprint stamp that keeps memfile undo from trusting a copy a
-timer patched (`compiler/core.py:470-495`). A pixel write the timer makes
-after an undo step was pushed is lost on a Ctrl+Z together with its
-stamp, which leaves the layer out of date and schedules another refresh:
+Two bounds keep it from spinning. A layer built `BUILD_LIMIT` (3) times
+with no compile finding it fresh in between cannot satisfy its own
+check, so the job gives up on it: Auto Refresh off, and a message in the
+panel telling the user to press Update. A build overtaken by a stroke or
+a setting that moved is dropped and started again after the debounce,
+and after `RESTART_LIMIT` (2) restarts in a row the next one runs to the
+end anyway, so someone painting in short bursts still sees the filter
+catch up.
+
+The job holds the tree name, node name and uuid, and re-fetches the node
+when it needs it (PS-090's datablock rule). `cancel_all()` runs from
+`on_restore_pre`, so before every undo, redo and file load, and also
+when Update starts, from the Cancel button, and on unregister. The
+commit packs, stamps and calls `mark_dirty(tree)` — the repo's existing
+timer-safe compile path. A pixel write the timer makes after an undo
+step was pushed is lost on a Ctrl+Z together with its stamp, which
+leaves the layer out of date and schedules another refresh:
 self-healing, and worth keeping that way.
 
-`poll` uses `gpu_passes.core.gpu_known()`; only a path about to draw
-calls `gpu_available()`, because `gpu.init()` crashes rather than raises
-on 5.2.1 and 5.3 with no usable driver (`gpu_passes/core.py:33-70`).
+`poll` and the auto job use `gpu_passes.core.gpu_known()`; only a path
+about to draw calls `gpu_available()`, because `gpu.init()` crashes
+rather than raises on 5.2.1 and 5.3 with no usable driver.
 
 ### Refusals
 
-Raised as `filters.core.Refused` from `resolve_input` and reported as a
-`WARNING` (`ops/pixel_ops.py:60-80`), each naming the layer or image at
-fault, in the style of `filters/actions.py:82-114`:
+Raised as `filters.core.Refused`, mostly from `resolve_input` before
+anything is allocated, and each naming the layer or image at fault. The
+Update button reports one as a `WARNING`; the auto job puts it in the
+panel through `derived_error` instead, because a popup from a background
+job would interrupt whatever the user was doing.
 
-- "This Blender has no GPU context to run a filter on"
+- "This Blender has no GPU context to run a filter on" (the Update
+  button's poll)
 - "There is nothing below 'X' to filter"
+- "Filter layers only work on colour channels"
 - "Image 'Y' below is a UDIM image, which is not supported yet" — the
-  fallback cannot help either; `bake_node_cache` does not do UDIM (PS-009)
+  fallback could not help either; `bake_node_cache` does not do UDIM
+  (PS-009)
 - "Image 'Y' below has no pixels; is its file missing?"
-- "Image 'Y' below is linked from another file"
-- "Filtering the layers below 'X' needs a Cycles bake, which needs an
-  active mesh object with a UV map" — the fallback's preconditions
-  (`compiler/bake.py:109-112`)
+- "The layers below 'X' name a UV map, so filtering them needs an active
+  mesh object to resolve it against"
+- "'Obj' has no UV map named 'UVMap.001'"
 - "Layers below use different UV maps ('UVMap' and 'UVMap.001'), so
-  filtering them needs an active mesh object"
+  filtering them needs a Cycles bake"
+- "Filtering the layers below 'X' needs a Cycles bake, because …" — any
+  plan on the bake path, until Path B is built
 - "The GPU could not allocate the textures for this filter; try a lower
   resolution"
-- "Filter layers only work on colour channels"
+- "'X' asks for a filter this build does not have (KIND)" — a file from a
+  newer build
 
 ### Lifecycle
 
 **Create.** Nothing is allocated in `create()`. A new filter layer has
 `derived_image = None` and compiles as a pass-through, so adding one is
 instant and cannot fail. The image is made in the commit step through
-`create_managed_image` (`compiler/bake.py:24-31`), byte and sRGB like a
-painted layer image — which halves memory against float and keeps
-PS-056's open premultiply-twice bug (PS-056:32-37) away from this
+`create_managed_image`, at one texel because the packed PNG brings its
+own size, and switched to a file source when the PNG is packed. It holds
+bytes in sRGB like a painted layer image, which halves memory against
+float and keeps PS-056's open premultiply-twice bug away from this
 feature. The datablock is reused on a resolution change, as
-`bake_node_cache` does (`:116-120`), so PS-083 and PS-084 stay rare
-rather than becoming routine. Since PS-053 it is resized by the pack
-itself, which carries the new size in the PNG, rather than by
-`image.scale()`.
+`bake_node_cache` does, so PS-083 and PS-084 stay rare rather than
+becoming routine; the pack itself resizes it.
 
 **Duplicate.** `copy()` calls `super().copy(node)` and then
-`self.derived_image = self.derived_image.copy()`, re-stamping
-`ps_filter_owner` with the new uuid. The pixels come with it because the
-image is packed, and the other three stamps come with it because ID
+`self.derived_image = self.derived_image.copy()`. The pixels come with
+it because the image is packed, and the stamps come with it because ID
 properties survive `image.copy()`, so the duplicate is immediately valid
-and looks identical. Sharing the pointer — which is what Shift+D does
-today for `cache_image` — would let two layers silently overwrite each
-other. That same bug is fixed on `PaintSystemLayerNode.copy` in the same
-ticket, by clearing `cache_image`, `cache_hash`, `cache_uv_map` and
-`cache_stale`: `bake_node_cache` reuses `node.cache_image` when it is not
-None (`:116-117`), so today baking either duplicate overwrites the
-other's pixels with no warning. A cache is a re-derivable artifact, so
-clearing it is right; a filter result is the layer's content, so copying
-it is right.
+and looks identical. Its owner stamp still names the original until its
+first build, which nothing reads in the meantime. Sharing the pointer —
+which is what Shift+D used to do for `cache_image` — would let two
+layers silently overwrite each other; `PaintSystemLayerNode.copy` now
+clears the cache for the same reason. A cache is a re-derivable
+artifact, so clearing it is right; a filter result is the layer's
+content, so copying it is right.
 
-`derived_capture` is dropped by `copy()`; it is session data.
-
-**Delete.** `PAINTSYSTEM_OT_remove_layer.execute` (`ops/layer_ops.py:81-97`)
-already computes the removed set, including a folder's descendants; it
-gains a pass removing each filter layer's derived image before
-`tree.remove_layer_node`. In the operator and not in `Node.free`: `free`
-also runs on undo-driven teardown, while the operator carries `UNDO`, so
-the memfile step records both the node and the removed packed image and
-Ctrl+Z brings back both with pixels intact. The remove dialog gains a
-line: "Its filtered image goes with it."
+**Delete.** `PAINTSYSTEM_OT_remove_layer.execute` computes the removed
+set, including a folder's descendants, and removes each filter layer's
+derived image before `tree.remove_layer_node`. In the operator and not
+in `Node.free`: `free` also runs on undo-driven teardown, while the
+operator carries `UNDO`, so the memfile step records both the node and
+the removed packed image and Ctrl+Z brings back both with pixels intact.
+The remove dialog says "Its filtered image goes with it."
 
 **Sweep.** `filters/derived.py::cleanup_orphan_derived()`, modelled on
-`cleanup_orphan_artifacts` (`compiler/core.py:380-391`): every image
-carrying `ps_filter_owner` whose tree uuid or node uuid no longer
-resolves to a filter layer pointing back at it, removed at 0 users (or 1
-plus a fake user). Called from `on_load_post` next to
-`cleanup_orphan_artifacts()`, **and only there**: a load is the one
-moment with no undo stack to break, and sweeping at save time would set
-up PS-083's recreate-under-a-freed-name case. It covers the paths the
-remove operator does not: a node-editor delete, a channel deletion
-(`nodetree/tree.py:202-206`, which leaves layer nodes alive and is out of
+`cleanup_orphan_artifacts`: every image carrying `ps_filter_owner` that
+no filter layer points at, removed at 0 users (or 1 plus a fake user).
+Called from `on_load_post` next to `cleanup_orphan_artifacts()`, **and
+only there**: a load is the one moment with no undo stack to break, and
+sweeping at save time would set up PS-083's recreate-under-a-freed-name
+case. It covers the paths the remove operator does not: a node-editor
+delete, a channel deletion (which leaves layer nodes alive and is out of
 scope otherwise), and a file from a crash or an older build.
 
-**Save.** `paint_system_images()` (`handlers/node_tree_handlers.py:16-26`)
-gains two rules: an image tagged `ps_filter_owner` is included only when a
-live filter layer still points at it, and an image tagged `ps_session` is
-never included. So an orphan is never packed into the next `.blend`, and
-the fallback's capture — a second full-resolution buffer per filter layer
-— never enters a file at all. `on_load_post` removes every `ps_session`
-image outright, so a capture cannot survive into a session whose
-freshness maps have been reset. A live derived image is packed at commit
-already, so the save path is a no-op for it; that is what makes a
-reopened file show the filter without a rebuild.
+**Save.** `paint_system_images()` includes an image tagged
+`ps_filter_owner` only while a filter layer still points at it, so an
+orphan is never packed into the next `.blend`. A live derived image is
+packed at commit already, so the save path is a no-op for it; that is
+what makes a reopened file show the filter without a rebuild. (The
+fallback's session-only capture would add a second rule here, never to
+save it, when Path B lands.)
 
-**Undo and redo.** PS-090:83-84 says owners of derived images rebuild them
+**Undo and redo.** PS-090 says owners of derived images rebuild them
 from their inputs after undo and redo. This design does not, and PS-090
-has to be amended to allow the alternative: the pixels are packed so they
+is amended to allow the alternative: the pixels are packed so they
 survive, the stamps travel on the same datablock so they always describe
-those pixels, `on_undo_post` already calls `mark_dirty()` so the next
-compile re-checks the structural half for free, and `freshness` drops its
-session maps so the pixel half re-verifies rather than being trusted
-across a restored document. Worst case the user sees "Out of date" and
-the layer refreshes. Running a multi-second GPU or Cycles job inside
-`undo_post` is precisely the freeze this whole design exists to avoid.
+those pixels, `derived_stale_pixels` travels on the node, and
+`on_undo_post` calls `mark_dirty()` so the next compile re-checks the
+structural half for free. An undo or redo that moves pixels below
+leaves the layer marked out of date, and it refreshes; a refresh that
+finds the pixels it already holds goes through the no-op commit
+(`tests/test_filter_auto.py`, "undo after an automatic refresh").
+Running a multi-second GPU or Cycles job inside `undo_post` is precisely
+the freeze this whole design exists to avoid.
 
 One thing does have to happen there. A memfile undo restores the packed
 file and the stamps, but Blender carries an image's decoded buffer and
@@ -632,10 +689,12 @@ for an undo that touched none of them.
 pointer is the real user.
 
 **Ownership UI.** No `template_ID` on `derived_image`. `cache_image` has
-one (`nodes/layers/base_layer_node.py:159`) and it lets a user point a
-derived slot at authored artwork with nothing marking it read-only. The
-panel shows the name and size as a label, the state row with its reason,
-Auto Refresh, Update, Cancel while a job runs, and Clear Result.
+one, and it lets a user point a derived slot at authored artwork with
+nothing marking it read-only. The panel shows the state (Refreshing, Not
+built, Out of date, or the size), Update and Clear Result or Cancel
+while a job runs, Auto Refresh, and one line under them: the auto job's
+message, why a refresh is waiting, the reason to rebuild, or the image
+name.
 
 ## What this changes elsewhere
 
@@ -658,23 +717,24 @@ Auto Refresh, Update, Cancel while a job runs, and Clear Result.
   `test_icons.py`, `test_api_surface.py` and `test_demo_flow.py`
   enumerate layer types somewhere.
 - `ops/layer_ops.py::PAINTSYSTEM_OT_remove_layer` now removes Image
-  datablocks. `tests/test_smoke_loop.py:171-199`, which undoes and redoes
+  datablocks. `tests/test_smoke_loop.py`, which undoes and redoes
   exactly that operator and calls `check_no_freed_images`, is the test
   most likely to catch a mistake.
 - `handlers/node_tree_handlers.py::paint_system_images()` stops returning
-  two categories of image. That is a deliberate departure from PS-056's
-  blanket rule and both PS-056 and `docs/ARCHITECTURE.md:191-197` need
-  the sentence; `tests/test_images.py` needs the cases.
-- `gpu_passes/core.py::read_color` gains an optional row range. Existing
-  callers pass none and are unaffected.
+  orphaned filter results. That is a deliberate departure from PS-056's
+  blanket rule and both PS-056 and `docs/ARCHITECTURE.md` need the
+  sentence; `tests/test_images.py` needs the cases.
+- `gpu_passes/core.py::read_color` gains an optional row range, and
+  `read_color_bytes` reads a byte target the same way. Existing callers
+  pass none and are unaffected.
 - `filters/core.py` gains `PixelSource.from_texture`, so its module
   docstring ("in and out of the image's own pixels") stops being true and
   is updated.
 - PS-090's caller rule about owners of derived images is amended to allow
   pack, re-check and flag.
-- `ops/bake_ops.py` refuses to bake a cache over an out-of-date filter
-  layer below the target, by name. PS-007 and PS-055 owe the same check
-  when they land; both get a line.
+- Not done yet: `ops/bake_ops.py` should refuse to bake a cache over an
+  out-of-date filter layer below the target, by name. PS-007 and PS-055
+  owe the same check when they land.
 - PS-051 becomes a dependency of PS-057 rather than a sibling, and
   PS-053's "in place on the image" line is amended: the painterly filter
   becomes a filter-layer kind as well as a destructive action.
@@ -685,7 +745,7 @@ Auto Refresh, Update, Cancel while a job runs, and Clear Result.
 
 - **PS-084** (a rename invalidates a cache silently). The structural
   fingerprint folds `ctx.subtree_hash`, which serialises a datablock by
-  name (`compiler/ir.py:190-191`), so renaming any image below a filter
+  name (`compiler/ir.py`), so renaming any image below a filter
   layer would silently cost a multi-second rebuild. Fixing it first also
   avoids invalidating every stored fingerprint later.
 - **PS-083** (delete and recreate under a freed name leaves a stale
@@ -765,6 +825,18 @@ values differently from the float readback it replaced, by one step in
 
 ## Known gaps
 
+- The Cycles fallback (Path B) is not built. A filter layer over a group
+  layer, a surface-data layer, a linked mask or a blend mode without a
+  parity test is refused. The auto job's message for it still starts
+  "Update needed", which Update cannot satisfy yet.
+- At Amount 1 a filter layer replaces the stack below outright, so a
+  stroke below it does not show until the refresh lands, about half a
+  second after the stroke ends plus the build. By design: showing the
+  unfiltered stack meanwhile would flicker on every dab.
+- A file opened in the UI may mark every built filter layer out of date
+  once, if the post-load depsgraph evaluation reports each image as
+  updated. Headless runs do not show it, and the cost would be one build
+  per layer that ends in the no-op commit. Unverified.
 - No region-limited invalidation and no low-resolution proxy. A refresh
   recomputes the whole image. Krita's rect-walk model and Photoshop's
   tile pyramid both need machinery this codebase has nothing of, and the
@@ -782,7 +854,7 @@ values differently from the float readback it replaced, by one step in
   band at 8 bits, and an HDR stack clips through a filter layer.
 - UDIM is refused, as everywhere else in `filters/` (PS-009).
 - Channel deletion still leaves layer nodes alive
-  (`nodetree/tree.py:202-206`); the sweep collects their images, the
+  (`nodetree/tree.py`); the sweep collects their images, the
   nodes stay. Pre-existing, out of scope.
 - `note_image_changed` marks a whole layer suspect, not a region, so a
   one-texel dab costs a full refresh.
@@ -809,10 +881,10 @@ values differently from the float readback it replaced, by one step in
   0 the stack below exactly; with backdrop alpha 0.5 and filtered alpha
   0.25 at Amount 0.5 it matches the premultiplied-lerp reference within
   the bake's tolerance.
-- `tests/test_filter_layer_parity.py`: for every mode in
-  `ALLOWED_BLEND_MODES`, the GPU composite of a subtree matches a Cycles
-  bake of the same subtree at 256² within 2/255. A mode that fails is not
-  in the list and falls back to the bake instead.
+- `tests/test_filter_blend.py`: for every mode in `ALLOWED_BLEND_MODES`,
+  the GPU blend matches a Cycles bake of the library group within 2/255.
+  A mode that fails is not in the list and goes to the bake path
+  instead.
 - A clipped layer above a filter layer composites onto the filter's
   pixels, and the stack below the filter is still emitted — the artifact
   has the lower layer's blend group and `Prev Color` linked.
@@ -822,9 +894,11 @@ values differently from the float readback it replaced, by one step in
 - A switched-off filter layer is not refreshed automatically. It stays
   marked out of date, and switching it back on is what asks for the
   refresh.
-- Painting into an image below marks the filter out of date within one
-  debounce; an undo that restores those pixels clears it through the
-  digest pass without a rebuild.
+- Painting into an image below marks the filter out of date and the auto
+  job refreshes it. A stroke undone before the refresh runs is refreshed
+  by a build that finds the same pixels and leaves the image untouched.
+- A saved and reopened file keeps a fresh filter layer fresh, and a file
+  saved out of date reopens out of date and refreshes.
 - Duplicating a filter layer gives an independent image with the same
   pixels; rebuilding either leaves the other unchanged.
 - Removing a filter layer removes its image and Ctrl+Z restores both with

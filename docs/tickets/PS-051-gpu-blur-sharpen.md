@@ -70,8 +70,18 @@ Parameters: radius/sigma, strength.
   linear blur. It is still exactly zero wherever the picture is flat,
   which is the property that matters, and it saves two full passes that
   would otherwise encode and decode around the blur.
+- **The Blur and Sharpen actions blur a byte layer in linear light.** A
+  byte sRGB layer stores encoded values, and blurring those directly
+  darkens every edge between two colours, so the same blur looked
+  different on a byte layer, a float layer and a filter layer. The
+  action wraps the blur passes in `DECODE_SRGB` and `ENCODE_SRGB` for a
+  byte sRGB image, which costs two cheap per-texel passes. A byte image
+  in another colour space (Non-Color data) is blurred as stored. This
+  departs from Blender's own Soften brush, which works on the stored
+  bytes.
 - **A masked action masks once, at the end.** `core.apply_passes` runs
-  one pass with the selection mask inline, as `apply_filter` always did,
+  one pass with the selection mask inline, as the single-filter path did
+  before it,
   and several passes unmasked followed by a `_COMPOSE` pass that lays
   the chain's result over the original through the mask. Masking every
   pass would be wrong rather than slow: pass two would read texels the

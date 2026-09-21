@@ -12,8 +12,9 @@ parity test -- and takes seconds.
 so a layer that cannot be built says why before any video memory is
 spent. Two outcomes are distinct on purpose:
 
-- an `InputPlan` on the ``BAKE`` path carries the reason in `reason`, and
-  the layer still builds, just not from a timer;
+- an `InputPlan` on the ``BAKE`` path carries the reason in `reason`.
+  Only the bake could build it, and the bake path is not built yet, so
+  `filters.layer_build.steps` refuses it with that reason for now;
 - `filters.core.Refused` means neither path can, and is shown to the
   user as written.
 
