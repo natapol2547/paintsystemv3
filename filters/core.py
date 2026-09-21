@@ -4,9 +4,9 @@
 `PixelSource.from_image` reads `Image.pixels` into a float32 array and
 uploads it unchanged. `run_pass` draws one full-target fragment pass in
 bands, and `filters.actions.apply_passes` reads the result back into the
-image. Nothing here converts colour: what the image
-stores is what the pass sees, so an identity filter writes the bytes it
-read and `Invert` gives exactly ``255 - k``. A byte image is carried in
+image. Nothing here converts colour: what the image stores is what the
+pass sees, so an identity filter writes the bytes it read and `Invert`
+gives exactly ``255 - k``. A byte image is carried in
 `RGBA16F`, whose 11 bits of mantissa round back to the byte they came
 from; a float image is carried in `RGBA32F` unchanged.
 

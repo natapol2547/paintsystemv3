@@ -112,12 +112,13 @@ def offscreen_state(blend: str = 'NONE'):
 def draw_in_bands(framebuffer: gpu.types.GPUFrameBuffer, height: int, draw_band) -> None:
     """Bind *framebuffer* and call ``draw_band(first, last)`` for each band of its rows.
 
-    A band is `BAND_ROWS` rows, read at call time so a test can change
-    it. After every band but the last, one texel is read back, which
-    makes the GPU finish that band before the next is queued. That
-    bounds the GPU time of any single command, so a slow software
-    rasteriser or a heavy pass is far less likely to trip a driver
-    watchdog (i915 preempts after 640 ms, Windows after 2 s).
+    A band is `BAND_ROWS` rows, read at call time so the view self-test
+    (`selection.view_raster.self_test_chain`) can change it. After every
+    band but the last, one texel is read back, which makes the GPU
+    finish that band before the next is queued. That bounds the GPU time
+    of any single command, so a slow software rasteriser or a heavy pass
+    is far less likely to trip a driver watchdog (i915 preempts after
+    640 ms, Windows after 2 s).
     """
     rows = BAND_ROWS
     # Four floats whatever the target: Vulkan writes every component of

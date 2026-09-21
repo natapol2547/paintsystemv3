@@ -503,6 +503,7 @@ def run_view_pass(spec: "raster.OpSpec", source, target, width: int, height: int
             "flags": 1 if view.through else 0}
     samplers = {"previous": placeholder if source is None else source, "positions": surface_map.position,
                 "normals": surface_map.normal, "distance_map": targets["distance"], "depth_map": depth_map}
+
     def draw_band(first, last):
         shader.bind()
         shader.uniform_block("view_block", block)
