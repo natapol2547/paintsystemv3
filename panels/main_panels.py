@@ -1,8 +1,7 @@
 import bpy
-from bpy.types import UIList
+from bpy.types import Panel, UIList
 
 from .brush_panels import draw_paint_sections
-from .common import get_icon, PaintSystemPanel
 from ..common import icon_kwargs
 from ..compiler.core import artifact_fingerprint
 from ..context import get_active_tree, parse_context
@@ -98,7 +97,7 @@ def _draw_compiled_info(layout, tree):
     box.operator("paint_system.compile_tree", **icon_kwargs('FILE_REFRESH'))
 
 
-class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
+class PAINTSYSTEM_PT_main_3dview(Panel):
     bl_label = "Paint System"
     bl_idname = "PAINTSYSTEM_PT_main_3dview"
     bl_space_type = 'VIEW_3D'
@@ -106,7 +105,7 @@ class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
     bl_category = "Paint System"
 
     def draw_header(self, context):
-        self.layout.label(icon_value=get_icon("sunflower"))
+        self.layout.label(text="", **icon_kwargs('sunflower'))
 
     def draw(self, context):
         layout = self.layout
@@ -137,7 +136,7 @@ class PAINTSYSTEM_PT_main_3dview(PaintSystemPanel):
         _draw_compiled_info(layout, tree)
 
 
-class PAINTSYSTEM_PT_main_node_editor(PaintSystemPanel):
+class PAINTSYSTEM_PT_main_node_editor(Panel):
     bl_label = "Paint System"
     bl_idname = "PAINTSYSTEM_PT_main_node_editor"
     bl_space_type = 'NODE_EDITOR'

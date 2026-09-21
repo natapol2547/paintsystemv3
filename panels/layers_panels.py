@@ -1,9 +1,8 @@
 from dataclasses import dataclass
 
 import bpy
-from bpy.types import Menu, UIList
+from bpy.types import Menu, Panel, UIList
 
-from .common import PaintSystemPanel
 from ..common import icon_kwargs
 from ..context import parse_context
 from ..nodes.layers.registry import layer_types
@@ -181,7 +180,7 @@ class LayersPanel:
             node.draw_source_settings(context, body)
 
 
-class PAINTSYSTEM_PT_layers_3dview(LayersPanel, PaintSystemPanel):
+class PAINTSYSTEM_PT_layers_3dview(LayersPanel, Panel):
     bl_idname = "PAINTSYSTEM_PT_layers_3dview"
     bl_space_type = 'VIEW_3D'
 
@@ -191,7 +190,7 @@ class PAINTSYSTEM_PT_layers_3dview(LayersPanel, PaintSystemPanel):
         return ps.tree is not None and ps.channel is not None
 
 
-class PAINTSYSTEM_PT_layers_node_editor(LayersPanel, PaintSystemPanel):
+class PAINTSYSTEM_PT_layers_node_editor(LayersPanel, Panel):
     bl_idname = "PAINTSYSTEM_PT_layers_node_editor"
     bl_space_type = 'NODE_EDITOR'
 
