@@ -61,7 +61,7 @@ Node locations follow the same rule, in the builder's layout and in
 `arrange_stack`, even though they are outside the IR and the fingerprint:
 laying a stack out rewrites the position of every layer, and nearly all of
 them keep the position they had. `NodeTreeBuilder._set_loc` and
-`_shift_loc` are the only things that move a node during a build, which is
+`_shift_x` are the only things that move a node during a build, which is
 what lets layout cache each node's bounding box for the length of one.
 
 The compiler never writes back into the document beyond the normalize

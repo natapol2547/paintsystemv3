@@ -39,7 +39,7 @@ What landed, in merge order:
   declared link: 332 of those reads per build, 80 to 108 ms of an edit.
 - **Layout writes only what moves.** `node.location` costs about 125 us
   even when the value is identical, and laying out a stack rewrites every
-  layer's position. `_set_loc` and `_shift_loc` skip a write that would
+  layer's position. `_set_loc` and `_shift_x` skip a write that would
   not move the node, node bounding boxes are cached for the length of a
   build, and the two recursive layout walks are iterative: a raise inside
   arrange aborts the compile before the fingerprint is stamped, and a
