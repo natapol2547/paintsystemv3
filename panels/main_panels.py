@@ -70,6 +70,7 @@ def _draw_selection_section(layout, context, tree):
     row.operator("paint_system.clear_pixels", text="Clear", **icon_kwargs('IMAGE_ALPHA'))
     row.operator("paint_system.fill_pixels", text="Fill", **icon_kwargs('SNAP_FACE'))
     row.operator("paint_system.invert_pixels", text="Invert Colors", **icon_kwargs('MOD_MASK'))
+    row.menu("PAINTSYSTEM_MT_invert_channels", text="", **icon_kwargs('DOWNARROW_HLT'))
     row = body.row(align=True)
     # Placeholder icons.
     row.operator("paint_system.blur_pixels", text="Blur", **icon_kwargs('MOD_SMOOTH'))

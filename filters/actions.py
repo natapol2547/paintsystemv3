@@ -159,6 +159,9 @@ def _passes(context, action: str, target: ActionTarget, channels, sigma, strengt
         return [(registry.FILL, {"color": (*colour, 1.0),
                                  "lock_alpha": int(target.layer.lock_alpha)})]
     if action == INVERT:
+        if channels[3] and target.layer.lock_alpha:
+            raise core.Refused("Inverting alpha changes transparency, and this layer has "
+                               "Lock Alpha on")
         return [(registry.INVERT, {
             "channels": tuple(1.0 if on else 0.0 for on in channels),
             # A float layer holds scene linear; inverting its sRGB

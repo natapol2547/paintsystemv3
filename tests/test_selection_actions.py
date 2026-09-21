@@ -13,6 +13,7 @@ The refusals and the polls need no GPU and always run.
 """
 import os
 import sys
+from types import SimpleNamespace
 
 import bpy
 import numpy as np
@@ -150,6 +151,36 @@ def test_invert_matches_the_byte_inversion():
     check(np.array_equal(after[:, 3], 255 - before[:, 3]), "alpha inverts when it is asked for")
     check(np.array_equal(after[:, :3], before[:, :3]), "the colours are left alone")
 
+    before = as_bytes(reset()).reshape(-1, 4)
+    bpy.ops.paint_system.invert_pixels(invert_r=False, invert_b=False)
+    after = as_bytes(read()).reshape(-1, 4)
+    check(np.array_equal(after[:, 1], 255 - before[:, 1]), "green inverts on its own")
+    check(np.array_equal(after[:, [0, 2, 3]], before[:, [0, 2, 3]]),
+          "and the other channels are left alone")
+
+
+def test_invert_menu_offers_each_channel():
+    section("the Invert Channels menu")
+    drawn = []
+
+    class Layout:
+        def operator(self, idname, text=""):
+            props = SimpleNamespace()
+            drawn.append((idname, text, props))
+            return props
+
+        def separator(self):
+            pass
+
+    bpy.types.PAINTSYSTEM_MT_invert_channels.draw(SimpleNamespace(layout=Layout()), bpy.context)
+    got = {text: (props.invert_r, props.invert_g, props.invert_b, props.invert_a)
+           for idname, text, props in drawn if idname == "paint_system.invert_pixels"}
+    check(got == {"Colors": (True, True, True, False),
+                  "Colors and Alpha": (True, True, True, True),
+                  "Red": (True, False, False, False), "Green": (False, True, False, False),
+                  "Blue": (False, False, True, False), "Alpha": (False, False, False, True)},
+          f"each entry runs Invert on its channels: {got}")
+
 
 def test_fill_stores_the_brush_color():
     section("Fill stores what a stroke of the current colour would store")
@@ -259,6 +290,9 @@ def test_refusals():
           == "Clear changes transparency, and this layer has Lock Alpha on",
           "Clear on a Lock Alpha layer is refused, because it could only do nothing")
     check(not bpy.ops.paint_system.clear_pixels.poll(), "and Clear is greyed out")
+    check(refusal(actions.INVERT, channels=(False, False, False, True))
+          == "Inverting alpha changes transparency, and this layer has Lock Alpha on",
+          "and so is inverting alpha")
     if HAS_GPU:
         # The only check here that asks a poll to pass. Background 4.2 to
         # 5.1 have no GPU context to run a filter on, and every poll says
@@ -352,6 +386,7 @@ def test_sharpen_runs_and_a_zero_radius_refuses():
 
 for test in (test_clear_covers_the_whole_layer,
              test_invert_matches_the_byte_inversion,
+             test_invert_menu_offers_each_channel,
              test_fill_stores_the_brush_color,
              test_selection_limits_the_action,
              test_a_selection_that_misses_the_layer_does_nothing,

@@ -152,6 +152,36 @@ def _rounded_rect(x0, y0, x1, y1, radius, segments=6):
     return points
 
 
+# Label and (red, green, blue, alpha) for each entry of the Invert menu.
+INVERT_CHOICES = (
+    ("Colors", (True, True, True, False)),
+    ("Colors and Alpha", (True, True, True, True)),
+    None,
+    ("Red", (True, False, False, False)),
+    # Inverting green switches a normal map between OpenGL and DirectX.
+    ("Green", (False, True, False, False)),
+    ("Blue", (False, False, True, False)),
+    ("Alpha", (False, False, False, True)),
+)
+
+
+class PAINTSYSTEM_MT_invert_channels(Menu):
+    """Invert the colours, or only some channels, of the active layer."""
+
+    bl_idname = "PAINTSYSTEM_MT_invert_channels"
+    bl_label = "Invert Channels"
+
+    def draw(self, context):
+        layout = self.layout
+        for choice in INVERT_CHOICES:
+            if choice is None:
+                layout.separator()
+                continue
+            label, (red, green, blue, alpha) = choice
+            op = layout.operator("paint_system.invert_pixels", text=label)
+            op.invert_r, op.invert_g, op.invert_b, op.invert_a = red, green, blue, alpha
+
+
 class PAINTSYSTEM_MT_action_bar(Menu):
     """What does not fit on the bar, and the way to put the bar away."""
 
@@ -162,6 +192,7 @@ class PAINTSYSTEM_MT_action_bar(Menu):
         layout = self.layout
         layout.operator("paint_system.select_all", text="Select All",
                         **icon_kwargs('SELECT_SET')).action = 'SELECT'
+        layout.menu(PAINTSYSTEM_MT_invert_channels.bl_idname, **icon_kwargs('MOD_MASK'))
         # Not buttons on the bar: both ask for a radius first, and a
         # gizmo that opens a dialog is not the one-click thing the bar
         # is for. Placeholder icons.
@@ -314,6 +345,7 @@ def draw_gizmo_popover(self, context):
 
 
 classes = (
+    PAINTSYSTEM_MT_invert_channels,
     PAINTSYSTEM_MT_action_bar,
     PAINTSYSTEM_GT_action_backdrop,
     PAINTSYSTEM_GGT_action_bar,
