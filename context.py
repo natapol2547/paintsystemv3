@@ -6,6 +6,7 @@ from bl_ui.properties_paint_common import UnifiedPaintPanel
 from bpy.props import CollectionProperty, PointerProperty
 from bpy.utils import register_classes_factory
 
+from .gpu_passes.texel_map import resolve_uv_map
 from .nodetree.stack_ops import StackItem
 from .props.stencil import PaintSystemStencilMeshBackup
 
@@ -158,14 +159,11 @@ def parse_context(context) -> PSContext:
 def layer_uv_layer(obj, layer) -> bpy.types.MeshUVLoopLayer | None:
     """The UV map of *obj*'s mesh that *layer*'s image is placed with, or None when it is missing.
 
-    An empty UV map name renders with the active render UV map, so that
-    one is the layer's.
+    `resolve_uv_map` holds the rule: the map the layer names, else the
+    active render map.
     """
-    uv_layers = obj.data.uv_layers
-    uv_name = getattr(layer, 'uv_map', '')
-    if uv_name:
-        return uv_layers.get(uv_name)
-    return next((uv for uv in uv_layers if uv.active_render), None)
+    name = resolve_uv_map(obj, getattr(layer, 'uv_map', ''))
+    return obj.data.uv_layers.get(name) if name else None
 
 
 def update_active_image(context) -> None:

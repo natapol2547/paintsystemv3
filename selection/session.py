@@ -39,6 +39,7 @@ import bpy
 
 from .. import context as ps_context
 from ..gpu_passes import core
+from ..gpu_passes.texel_map import resolve_uv_map
 from . import overlay, raster, stencil
 
 log = logging.getLogger(__name__)
@@ -156,10 +157,9 @@ def resolve_target(context) -> tuple[Target | None, str]:
         return None, UDIM
     uv_map = ""
     if ps.ps_object is not None:
-        uv_layer = ps_context.layer_uv_layer(ps.ps_object, layer)
-        if uv_layer is None:
+        uv_map = resolve_uv_map(ps.ps_object, getattr(layer, 'uv_map', ''))
+        if uv_map is None:
             return None, NO_UV_MAP
-        uv_map = uv_layer.name
     return Target(ps.tree, ps.ps_object, layer, image, uv_map, raster.image_size(image)), ""
 
 

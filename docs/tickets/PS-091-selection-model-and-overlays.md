@@ -111,7 +111,7 @@ way the artifact is derived from the tree.
   the way a Photoshop selection stays put while the user switches
   layers: the mask is built at the size of the active layer's image
   (`raster.image_size(image, tile)`) and sampled through that layer's
-  UV map (`context.layer_uv_layer`: the map the layer names, else the
+  UV map (`texel_map.resolve_uv_map`: the map the layer names, else the
   active render map). A stored image pointer would go stale on a layer
   switch and need a sync of its own. The operations:
   - `kind`: `BOX`, `ELLIPSE`, `LASSO`, `FACES`, `RASTER`, `TRANSFORM`,
