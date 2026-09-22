@@ -24,12 +24,25 @@ class PAINTSYSTEM_UL_channels(UIList):
         row.prop(item, "name", text="", emboss=False, **icon_kwargs(SOCKET_ICONS.get(item.type, 'NONE')))
 
 
-def _draw_channel_list(layout, node_tree):
-    row = layout.row()
+def _draw_channels_section(layout, tree):
+    """Draw the channel list in a section that can be collapsed.
+
+    While the section is closed, its header names the active channel, so
+    the channel being painted stays in view.
+    """
+    header, body = layout.panel("paint_system_channels", default_closed=False)
+    row = header.row()
+    row.label(text="Channels")
+    if body is None:
+        channel = tree.active_channel
+        if channel is not None:
+            row.label(text=channel.name, **icon_kwargs(SOCKET_ICONS.get(channel.type, 'NONE')))
+        return
+    row = body.row()
     row.template_list(
         "PAINTSYSTEM_UL_channels", "",
-        node_tree, "channels",
-        node_tree, "active_channel_index",
+        tree, "channels",
+        tree, "active_channel_index",
         rows=3,
     )
     col = row.column(align=True)
@@ -52,9 +65,11 @@ def _draw_paint_mode_row(layout, context):
 def _draw_selection_section(layout, context, tree):
     """Draw the Selection section with its select and pixel action buttons.
 
-    When the selection cannot be used, the section also says why.
+    When the selection cannot be used, the section also says why. It
+    starts closed: it only matters once something is selected, and the
+    error icon on its header still shows while it is closed.
     """
-    header, body = layout.panel("paint_system_selection", default_closed=False)
+    header, body = layout.panel("paint_system_selection", default_closed=True)
     row = header.row()
     row.label(text="Selection", **icon_kwargs('SELECT_SET'))
     state = selection_session.current()
@@ -132,8 +147,7 @@ class PAINTSYSTEM_PT_main_3dview(Panel):
         if obj is not None:
             _draw_paint_mode_row(layout, context)
         layout.separator()
-        layout.label(text="Channels")
-        _draw_channel_list(layout, tree)
+        _draw_channels_section(layout, tree)
         draw_paint_sections(layout, context)
         if context.mode == 'PAINT_TEXTURE':
             _draw_selection_section(layout, context, tree)
@@ -155,8 +169,7 @@ class PAINTSYSTEM_PT_main_node_editor(Panel):
         layout = self.layout
         tree = context.space_data.edit_tree
 
-        layout.label(text="Channels")
-        _draw_channel_list(layout, tree)
+        _draw_channels_section(layout, tree)
         _draw_compiled_info(layout, tree)
 
 

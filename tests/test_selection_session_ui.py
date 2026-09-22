@@ -35,9 +35,27 @@ _draw_section = main_panels._draw_selection_section
 _label = session.label
 
 
+class OpenSections:
+    """Hands the section a layout whose collapsible sub-panels are open.
+
+    The Selection section starts closed, and Python cannot open a layout
+    panel, so a closed body is drawn into a column of the real layout.
+    """
+
+    def __init__(self, layout):
+        self._layout = layout
+
+    def __getattr__(self, name):
+        return getattr(self._layout, name)
+
+    def panel(self, idname, **kwargs):
+        header, body = self._layout.panel(idname, **kwargs)
+        return header, body if body is not None else self._layout.column()
+
+
 def _wrapped_draw_section(layout, context, tree):
     try:
-        _draw_section(layout, context, tree)
+        _draw_section(OpenSections(layout), context, tree)
         section_draws.append(session.current().reason)
     except Exception:
         draw_errors.append(traceback.format_exc())

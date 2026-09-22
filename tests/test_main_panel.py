@@ -97,6 +97,30 @@ def test_the_panel_follows_the_mesh():
           f"but the cube's material and tree field (labels {labels(calls)})")
 
 
+def panels(calls):
+    return {args[0]: kwargs for name, args, kwargs in calls if name == "panel"}
+
+
+def test_sections_collapse():
+    section("the channel list and the Selection section can be collapsed")
+    bpy.context.view_layer.objects.active = cube
+    tree = cube.active_material.paint_system.tree
+    calls = draw_main_panel()
+    check(panels(calls).get("paint_system_channels") == {"default_closed": False},
+          f"the channel list is in a section that starts open (panels {panels(calls)})")
+    channel = tree.active_channel
+    check(channel is not None and channel.name in labels(calls),
+          f"while it is closed its header names the active channel (labels {labels(calls)})")
+    check(not any(name == "template_list" for name, _args, _kwargs in calls),
+          "and the list itself is not drawn")
+
+    calls = []
+    main_panels._draw_selection_section(RecordingLayout(calls), bpy.context, tree)
+    check(panels(calls).get("paint_system_selection") == {"default_closed": True},
+          f"the Selection section starts closed (panels {panels(calls)})")
+
+
 guarded(test_the_panel_follows_the_mesh)
+guarded(test_sections_collapse)
 
 finish("MAIN PANEL TEST")

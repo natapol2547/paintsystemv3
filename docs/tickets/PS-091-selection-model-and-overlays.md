@@ -441,6 +441,9 @@ material and never recompiles a shader.
   invalid" and "Leave Edit Mode to use the selection". A selection whose
   mask selects nothing shows the line "Nothing selected" with an info
   icon and no error icon.
+- The section starts closed (2026-09-23, at the user's request): it only
+  matters once something is selected, and the error icon on its header
+  still shows while it is closed.
 - The section does not draw feather or anti-alias: `ALL` and `INVERT`
   have no edge, and PS-093's tools carry feather, anti-alias and Through
   in their tool header.
