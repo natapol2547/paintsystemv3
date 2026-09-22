@@ -281,10 +281,10 @@ Normal template (`paintsystem/data.py:2739-2750`):
   `emit_vector_output(ctx, channel, ref)` called by the Group Input and
   Group Output emitters for VECTOR channels. Roles
   `"<channel uuid>:vin_*"` / `":vout_*"`.
-- `disable_output_transform` is not stored on the channel. Isolate channel
-  (PS-061) passes it through a compile option on the tree
-  (`tree.preview_channel`), so the artifact reflects preview state without
-  mutating channel data.
+- `disable_output_transform` is not stored on the channel. Preview Channel
+  (PS-061) is a compile option on the tree (`tree.preview_channel`), and
+  its Group Output emitter can pick what a vector channel shows, so the
+  artifact reflects preview state without mutating channel data.
 - Geometry layers writing normals use `normalize_normal` (PS-027) to match
   `normalize_input`.
 

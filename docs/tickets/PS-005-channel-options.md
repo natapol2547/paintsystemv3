@@ -260,8 +260,8 @@ Properties of `PaintSystemChannel` (`props/channel.py`):
   may have set it.
 - `color_space` Color / Non-Color, set from the type the same way. An
   image layer added to a Non-Color channel gets a Non-Color image
-  (`image_colorspace`). PS-061 should read it for the preview's view
-  transform, and PS-007 for bake images. Changing it leaves existing images
+  (`image_colorspace`). PS-061 reads it for the preview's view
+  transform, and PS-007 should read it for bake images. Changing it leaves existing images
   alone: giving painted bytes another colour space reinterprets them, it
   does not convert them.
 - `use_range` "Limit Range", `range_min` "Min" and `range_max` "Max", for

@@ -1,16 +1,20 @@
-# PS-061 Toggle paint mode and isolate channel
+# PS-061 Toggle paint mode and Preview Channel
 
 Epic G. Size M. Milestone M1.
 
 ## Status
 
-Partly done (M0 slice 6): `ops/paint_ops.py` ports `toggle_paint_mode`
-for meshes. It makes the object active and selected, leaves any other mode
-for Object mode, and otherwise enters Texture Paint. Entering sets 3D view
-shading to Rendered, or Material Preview under Cycles, then calls
-`update_active_image` (PS-060). There is no grease pencil variant. The main
-panel draws it as in v2: a large toggle, depressed in Texture Paint, and a
-save button beside it. Channel isolate is deferred until after the demo.
+Done. Toggle paint mode (M0 slice 6): `ops/paint_ops.py` ports
+`toggle_paint_mode` for meshes. It makes the object active and selected,
+leaves any other mode for Object mode, and otherwise enters Texture Paint.
+Entering sets 3D view shading to Rendered, or Material Preview under
+Cycles, then calls `update_active_image` (PS-060). There is no grease
+pencil variant. The main panel draws it as in v2: a large toggle,
+depressed in Texture Paint, and a save button beside it.
+
+Preview Channel, v3's isolate, as designed below
+(`paint_system.preview_channel` in `ops/paint_ops.py`, the display in
+`props/preview.py`, the Preview output in `nodes/io/group_nodes.py`).
 
 ## v2 behaviour
 
@@ -178,20 +182,123 @@ MATERIAL when the engine is exactly CYCLES. It calls
 ## v3 design
 
 - `paint_system.toggle_paint_mode` ported as is.
-- Isolate is a compile option rather than a material rewrite where
-  possible: `tree.preview_channel: StringProperty` (SKIP_SAVE). When set,
-  `interface_outputs` adds a `Preview` shader output and the Group Output
-  emitter connects an Emission of the previewed channel to it; the
-  operator links that output to the Material Output surface socket and
-  records the previous link by socket name on the material
-  (`ps_preview_restore`). Disable removes the link, restores the
-  original and clears the property. View transform handling as v2.
-- Because `preview_channel` is SKIP_SAVE, a file saved while isolated
-  reloads un-isolated with the restore data still on the material;
-  `on_load_post` runs the restore if `ps_preview_restore` is present.
+- "Preview Channel" (`paint_system.preview_channel`) replaces isolate. It
+  is a compile option plus one node per material, so the user's own
+  nodes and links are never touched:
+  - `tree.preview_channel` (BoolProperty, saved) adds a `Preview` shader
+    output at the end of the compiled interface. The Group Output
+    emitter feeds it an Emission of what the active channel outputs,
+    after the flatten of a channel without alpha. A Float channel's
+    colour goes through a float socket first (a Math node), so the
+    preview shows the value the material gets, not the colour painted.
+    A channel with alpha shows a checker behind the parts that are not
+    opaque, the way image editors show transparency, and an empty one
+    shows only the checker; v2 shows the straight colour there. The name
+    `Preview` is reserved, so a channel cannot take it.
+  - Turning it on adds a Material Output, tagged with the tree's uuid
+    (`ps_preview_tree`), to every material that runs the tree (found by
+    its group node), links the group's `Preview` output to it and makes
+    it the active output. Turning it off removes those nodes. Blender
+    would then activate the material's first output, so the preview
+    output records the name of the output that was active before it
+    (`ps_preview_restore`) and that one is activated again. If it was
+    renamed or deleted, Blender's pick stands. Nothing is relinked, so
+    the material's own links cannot be lost, as they can in v2. A
+    preview output that is no longer active, because another tree in
+    the same material previews too, leaves the active output alone, and
+    hands its record to the preview output that took over from it. So
+    two previews in one material can end in either order.
+  - The preview output joins the group node's frame, since a location
+    inside a frame is relative to it. A group node that runs a node
+    group without a `Preview` output, such as the artifact of an
+    appended copy of the material, gets no preview output.
+  - Starting a preview first removes any preview output left for the
+    tree, such as one in a material appended from a file saved while
+    previewing.
+  - Switching the active channel recompiles, so the preview follows it,
+    as in v2.
+  - The IR marks the preview's socket and nodes (`IR.adding_preview`).
+    A group layer that wraps a previewing tree hashes the tree's IR
+    without them (`compile_wrapped_tree`), so caches and filter layers
+    above it stay valid, whichever channel the wrapped tree previews.
+  - A copy of a previewing tree does not preview: `normalize_all_trees`
+    clears the flag when it gives the copy a uuid of its own. A linked
+    tree cannot preview, because the library would replace the edits
+    when the file opens.
+- Display: the preview shows values as they are stored. A Color channel
+  uses the Standard view transform and a Non-Color channel Raw, so a
+  roughness of 0.5 shows as the middle grey an image editor shows for it.
+  v2 always uses Standard, which shows data a step too bright. Look,
+  exposure and gamma are set to neutral too. The scene's own settings are
+  saved once, in `scene.paint_system.preview_display`, and put back when
+  the last preview ends, in every scene that saved one. A tree counts as
+  previewing while it has the flag and a preview output in some
+  material, so a flag with no output does not hold the display. A setting the
+  user changed while previewing is left as it is: the view transform is
+  compared with the one the preview set last, and exposure and gamma
+  with their neutral values. The look comes back with the view
+  transform, since setting a view transform resets it. Changing the
+  active channel or its colour space switches between Standard and Raw,
+  unless the user picked another view transform. A colour management
+  configuration without Standard or Raw leaves the view transform alone
+  and logs a warning. The preview then records the view transform left
+  on screen as its own, so the look still comes back at the end.
+- The operator sets 3D view shading as `toggle_paint_mode` does when the
+  view is in Solid or Wireframe, and keeps Material Preview and Rendered.
+- The button sits between Toggle Paint Mode and Save, icon only, with the
+  active channel's socket icon, depressed while previewing. It needs the
+  tree to be in the active material, so a nested tree cannot start one.
+- The state is saved with the file, as in v2: the flag, the output nodes
+  and the saved display all come back together, and the button shows the
+  preview is on. The ticket's earlier SKIP_SAVE idea does not work, since
+  SKIP_SAVE only applies to operator properties.
+- PS-006 decides what a vector channel previews; until then it is the
+  channel's output as a colour.
+
+## Known gaps
+
+- A material output that targets one engine (EEVEE or Cycles) wins over
+  the preview's All output in that engine, whichever is active, so such a
+  material does not preview there.
+- Deleting a tree while it previews leaves its preview outputs in the
+  materials and the saved display on the scene. Delete the Material
+  Output labelled "Preview Channel" by hand, and start and stop another
+  preview to put the display back.
+- A file saved while previewing renders the preview on a render farm,
+  as in v2.
 
 ## Acceptance
 
-- Isolate the Roughness channel: viewport shows the grey mask; disable
-  restores the Principled link and the view transform.
-- Saving while isolated and reloading shows the normal material.
+- `tests/test_preview_channel.py`:
+  - The material shows the Preview output through an output of its own,
+    and its own output is active again when the preview ends. Starting
+    again replaces a preview output left behind.
+  - A channel without alpha shows its values, a Float channel shows the
+    value the material gets, a half-opaque colour shows over the
+    checker, and an empty channel shows only the checker (baked pixels).
+    Switching the active channel compiles the preview of the new one.
+  - A Non-Color channel shows under Raw and a Color channel under
+    Standard, with no look, exposure or gamma. Switching the active
+    channel or its colour space follows; another channel's colour space
+    does not. The display comes back, and a view transform, exposure or
+    gamma the user picked while previewing is kept. A copy of the tree
+    does not preview, and a flag without a preview output does not hold
+    the display.
+  - Every material that runs the tree previews, the output joins the
+    group node's frame, and a group node without a `Preview` output is
+    skipped. Ending the preview activates the output that was active,
+    not the first, also when two previews in one material end in the
+    order they started. The display is saved once, comes back only when
+    the last preview ends, and comes back in every scene that saved one.
+  - A group layer's hash of a wrapped tree is the same with the preview
+    off, on, and on another channel.
+  - Without the Standard or Raw view transform, the preview keeps the
+    scene's view transform and still gives the look back.
+  - A tree no material runs cannot start a preview, and one that
+    previews can always end it. No channel can be called `Preview`.
+  - A file saved while previewing opens previewing, and ending the
+    preview there gives everything back.
+- `tests/test_main_panel.py`: the button sits between Toggle Paint Mode
+  and Save, icon only with the channel's socket icon, depressed while
+  previewing.
+- Mutation checked: each behaviour above fails its check when broken.

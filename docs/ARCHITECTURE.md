@@ -44,7 +44,9 @@ PaintSystemNodeTree  --compile-->  IR  --NodeTreeBuilder-->  ShaderNodeTree (tre
    depends on that no node or link records; it is hashed with the rest
    and never applied. The builder retypes an interface socket in place
    when its type changes. It keeps its identifier, so the links to it in
-   materials and in parent trees survive.
+   materials and in parent trees survive. For the same reason it renames
+   sockets in place when one side of the interface still lines up with
+   the IR by position and type, which is what a channel rename gives.
 
 The builder writes a value only when RNA does not already hold it (floats
 compared as float32, datablocks by identity), because every write on the
@@ -130,7 +132,15 @@ are always `NodeSocketColor`; only the compiled interface follows the
 channel type. A channel with `use_alpha` off (PS-005) has no alpha socket
 on either side: the Group Input gives alpha 1, so its stack starts from an
 opaque base, and the Group Output lays the result over the channel's input
-by its alpha (`link_flattened`) instead of dropping the alpha.
+by its alpha (`link_flattened`) instead of dropping the alpha. While
+`tree.preview_channel` is on (PS-061), the compiled group also has a
+`Preview` shader output, after the channels, that shows the active
+channel's output as emission. `paint_system.preview_channel` links it to a
+Material Output of its own in each material, so the material's nodes stay
+as they are. The IR marks that socket and its nodes (`IR.adding_preview`),
+and a group layer hashes the tree it wraps without them
+(`compile_wrapped_tree`). A parent tree never reads the preview, so its
+caches stay valid while the wrapped tree previews.
 
 Moves are computed from the same walk. `movement_options(items, node,
 direction)` lists what up or down can mean next to folders (skip a

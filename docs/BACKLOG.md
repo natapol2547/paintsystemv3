@@ -184,7 +184,7 @@ groups and templates (040-042), colour history (062).
 | ID | Title | Size | Depends on |
 |---|---|---|---|
 | [PS-060](tickets/PS-060-active-layer-sync.md) | Active layer to canvas, UV map and brush sync | M | 019 |
-| [PS-061](tickets/PS-061-toggle-paint-mode-isolate-channel.md) | Toggle paint mode and isolate channel | M | 040 |
+| [PS-061](tickets/PS-061-toggle-paint-mode-isolate-channel.md) | Toggle paint mode and Preview Channel (done) | M | 040 |
 | [PS-062](tickets/PS-062-color-history-hsv.md) | Colour history, HSV and hex colour, unified colour sync | S | – |
 | [PS-063](tickets/PS-063-layer-actions.md) | Layer actions (frame and marker based visibility) | M | – |
 | [PS-064](tickets/PS-064-empty-object-gizmos.md) | Empty object gizmos and the Paint System collection | M | – |
