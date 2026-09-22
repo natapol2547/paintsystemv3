@@ -79,9 +79,10 @@ def stamp(node):
 
 if available():
     try:
-        section("a stroke below it")
+        section("a new layer")
         tree = bpy.data.node_groups.new("Auto", 'PaintSystemNodeTree')
         tree.initialize()
+        quiet()
         with core.suspend_compile(tree):
             picture = tree.insert_layer_node(IMAGE)
             picture.image = create_managed_image("Auto Source", 8, 8)
@@ -89,12 +90,21 @@ if available():
             node = tree.insert_layer_node(FILTER)
             node.resolution = SIZE
         core.flush_now()
-        layer_build.build_layer(bpy.context, tree, node)
+        check(not derived.is_built(node.derived_image) and node.stale_reason == "",
+              "a new filter layer is unbuilt, which is not out of date")
+        check(node.needs_build and bpy.app.timers.is_registered(layer_job._tick),
+              "but it needs a build, and the compile that saw it scheduled one")
+        check(pump() and derived.is_built(node.derived_image), "the job builds it")
         core.flush_now()
+        check(not node.needs_build and node.derived_error == "",
+              f"and the layer is up to date: {node.stale_reason!r}")
+
+        section("a stroke below it")
         was = stamp(node)
         check(node.stale_reason == "" and node.auto_refresh,
               "a built layer starts up to date, with Auto Refresh on")
 
+        quiet()
         undo_pixels.write_pixels(picture.image, [0.8, 0.2, 0.1, 1.0] * 64)
         core.flush_now()
         check(node.stale_reason == "the pixels below changed",
@@ -337,7 +347,7 @@ if available():
         section("a refresh it must not attempt")
         # The auto path is hard-gated to the GPU composite. A Cycles bake
         # from a timer would lock the window for seconds with no way to
-        # stop it, so the layer opts itself out and says why.
+        # stop it, so the layer waits and says why.
         inner = bpy.data.node_groups.new("Auto Inner", 'PaintSystemNodeTree')
         inner.initialize()
         group = tree.nodes.new('PaintSystemGroupLayerNode')
@@ -347,14 +357,99 @@ if available():
         was = stamp(node)
         check(pump(), "the pass finishes rather than retrying")
         check(stamp(node) == was, "nothing was built")
-        check(not node.auto_refresh, "Auto Refresh turned itself off")
+        check(node.auto_refresh, "Auto Refresh stays on, for when the stack changes")
         check("Cycles bake" in node.derived_error,
               f"and the panel says why: {node.derived_error!r}")
 
+        node.auto_refresh = False
+        check(node.derived_error == "", "switching Auto Refresh off clears the message")
         node.auto_refresh = True
-        check(node.derived_error == "", "turning it back on clears the message")
+        core.flush_now()
+        check(pump() and "Cycles bake" in node.derived_error,
+              f"and switching it back on asks again: {node.derived_error!r}")
+
         tree.links.remove(picture.inputs['Color'].links[0])
         tree.nodes.remove(group)
+        core.flush_now()
+        check(pump(), "taking the group away lets the job run")
+        core.flush_now()
+        check(not node.needs_build and node.derived_error == "",
+              f"and clears the message: {node.derived_error!r}")
+
+        section("a refusal about the scene")
+        # A UV map the mesh does not have is about the mesh, not the
+        # stack. Fixing the mesh compiles no tree, so the depsgraph
+        # update is what has to ask again.
+        uv_maps = bpy.context.view_layer.objects.active.data.uv_layers
+        was = stamp(node)
+        node.uv_map = "Auto Map"
+        core.flush_now()
+        check(pump() and stamp(node) == was and node.auto_refresh
+              and "no UV map named 'Auto Map'" in node.derived_error,
+              f"a UV map the mesh lacks waits and says why: {node.derived_error!r}")
+
+        node.uv_map = ""
+        core.flush_now()
+        check(not node.needs_build and node.derived_error == "",
+              f"putting it back clears the message with no build: {node.derived_error!r}")
+        check(pump() and stamp(node) == was, "and nothing is rebuilt")
+
+        node.uv_map = "Auto Map"
+        core.flush_now()
+        pump()
+        quiet()
+        uv_maps["UVMap"].name = "Auto Map"
+        try:
+            bpy.context.view_layer.update()
+            check(bpy.app.timers.is_registered(layer_job._tick),
+                  "renaming the mesh's UV map to match asks again")
+            check(pump(), "the refresh runs to the end")
+            core.flush_now()
+            check(not node.needs_build and node.derived_error == "",
+                  f"and the layer is built: {node.stale_reason!r}, {node.derived_error!r}")
+        finally:
+            uv_maps["Auto Map"].name = "UVMap"
+        node.uv_map = ""
+        core.flush_now()
+        check(pump(), "going back to the render UV map rebuilds it")
+        core.flush_now()
+
+        section("a layer with nothing below")
+        # A refusal is about the stack, and the stack can change. The layer
+        # says why and waits, so a layer arriving below is enough.
+        lonely = bpy.data.node_groups.new("Auto Lonely", 'PaintSystemNodeTree')
+        lonely.initialize()
+        with core.suspend_compile(lonely):
+            alone = lonely.insert_layer_node(FILTER)
+            alone.resolution = SIZE
+        core.flush_now()
+        check(pump(), "the pass finishes rather than retrying")
+        check(not derived.is_built(alone.derived_image), "nothing was built")
+        check(alone.auto_refresh, "Auto Refresh stays on")
+        check("nothing below" in alone.derived_error,
+              f"and the panel says why: {alone.derived_error!r}")
+
+        with core.suspend_compile(lonely):
+            lonely.insert_layer_node(SOLID)
+            check(lonely.move_layer_node(alone, 'UP', 'SKIP'),
+                  "moving the filter layer above a new layer")
+        core.flush_now()
+        check(pump() and derived.is_built(alone.derived_image), "is enough for the job to build it")
+        core.flush_now()
+        check(not alone.needs_build and alone.derived_error == "",
+              f"and the message goes: {alone.derived_error!r}")
+
+        section("Clear Result")
+        # The job builds any layer with no pixels, so Clear has to switch
+        # Auto Refresh off or the result would come straight back.
+        bpy.context.scene.paint_system.active_node_tree = lonely
+        lonely.nodes.active = alone
+        check(bpy.ops.paint_system.clear_filter_result('EXEC_DEFAULT') == {'FINISHED'},
+              "Clear Result drops the image")
+        core.flush_now()
+        check(pump() and not derived.is_built(alone.derived_image) and not alone.auto_refresh,
+              "and turns Auto Refresh off, so the job leaves it cleared")
+        bpy.data.node_groups.remove(lonely)
         core.flush_now()
 
         section("a refresh that does not settle")

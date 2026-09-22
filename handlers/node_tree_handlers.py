@@ -64,7 +64,7 @@ def save_image(image: bpy.types.Image) -> None:
 
 @bpy.app.handlers.persistent
 def on_depsgraph_update_post(scene, depsgraph=None):
-    """Initialise new trees, and pass geometry and image changes on.
+    """Initialise new trees, and pass geometry, image and scene changes on.
 
     A tree created from the node editor header gets no init call, so it
     is initialised here.
@@ -105,6 +105,9 @@ def on_depsgraph_update_post(scene, depsgraph=None):
         # through a stroke. A pass with nothing to do costs one scan and
         # then unregisters itself.
         layer_job.notify()
+    # A filter layer refused for want of an active mesh or a UV map waits
+    # for the scene to change, and such a change compiles no tree.
+    layer_job.scene_changed()
     # The live selection looks up a layer's UV map by name, and renaming
     # or removing a UV map shows up only as a geometry update. While the
     # selection cannot be used for one of the `GEOMETRY_REASONS`, any

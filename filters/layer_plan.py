@@ -109,7 +109,13 @@ def resolve_input(context, tree, node) -> InputPlan:
         raise Refused(f"There is nothing below '{node.name}' to filter")
     source = link.from_node
 
+    # A context without a screen has no `object` member. The automatic
+    # refresh runs from a timer, whose context may have no screen, so it
+    # falls back to the view layer's active object, which is the same one.
     obj = getattr(context, 'object', None)
+    view_layer = getattr(context, 'view_layer', None)
+    if obj is None and view_layer is not None:
+        obj = view_layer.objects.active
     if obj is not None and obj.type != 'MESH':
         obj = None
 

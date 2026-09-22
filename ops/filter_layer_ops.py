@@ -51,13 +51,15 @@ def filter_layer(context, tree):
 
 
 def _resume_auto_refresh(node):
-    """Turn Auto Refresh back on if the automatic refresh had turned it off.
+    """Clear the automatic refresh's message, and turn Auto Refresh back on if the job turned it off.
 
-    Called after a successful Update. When the automatic refresh gives up
-    on a layer, it turns Auto Refresh off and sets `derived_error` to a
-    message asking the user to press Update. Nothing else sets that
-    message. So a message here means the job turned Auto Refresh off, not
-    the user, and a build that just worked should turn it back on.
+    Called after a successful Update. Only the job sets `derived_error`.
+    With Auto Refresh still on, the message says why the job could not
+    build the layer. With it off, the job gave up and turned it off:
+    switching Auto Refresh off by hand clears the message, so a message
+    never sits next to a choice the user made. Either way, a build that
+    just worked means the message is out of date and Auto Refresh
+    belongs on.
     """
     if node.derived_error:
         node.derived_error = ""
@@ -209,8 +211,9 @@ class PAINTSYSTEM_OT_cancel_filter_refresh(Operator):
 class PAINTSYSTEM_OT_clear_filter_result(FilterLayerAction, Operator):
     bl_idname = "paint_system.clear_filter_result"
     bl_label = "Clear Result"
-    bl_description = ("Drop this layer's filtered image. The layer stays where it is and "
-                      "passes the layers below through until it is built again")
+    bl_description = ("Drop this layer's filtered image and turn Auto Refresh off. The layer "
+                      "stays where it is and passes the layers below through until it is "
+                      "built again")
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
@@ -219,6 +222,11 @@ class PAINTSYSTEM_OT_clear_filter_result(FilterLayerAction, Operator):
         image = node.derived_image
         if image is None:
             return {'CANCELLED'}
+        if layer_job.running_on(node):
+            layer_job.cancel_all()
+        # The job builds any layer with no pixels, so with Auto Refresh
+        # left on the result would come straight back.
+        node.auto_refresh = False
         node.derived_image = None
         if image.users == 0:
             bpy.data.images.remove(image)

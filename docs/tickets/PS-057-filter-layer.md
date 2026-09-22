@@ -45,10 +45,11 @@ below assumes all four:
   offer per-filter blending, so expect a follow-up ticket; the Filter Mix
   group is shaped so that adding modes swaps its middle and touches
   nothing else.
-- **Auto refresh on by default.** A stroke below a filter layer
-  refreshes it when the stroke ends. The refresh is hard-gated to the
-  GPU composite path so it can never start a Cycles bake, and
-  `auto_refresh` is per layer for the cases where waiting is preferable.
+- **Auto refresh on by default.** A new filter layer builds itself once
+  things go quiet, and a stroke below one refreshes it when the stroke
+  ends. The refresh is hard-gated to the GPU composite path so it can
+  never start a Cycles bake, and `auto_refresh` is per layer for the
+  cases where waiting is preferable.
 - **The derived image is packed into the `.blend`.** A reopened file
   shows the filter without rebuilding, and undo or redo past a build
   gives real pixels rather than black. The cost is one full-resolution
@@ -196,16 +197,20 @@ Derived bookkeeping on the node:
   recomputes it for free after a reload, and a file saved out of date
   must reopen out of date rather than show a fresh badge over old
   pixels.
-- `derived_error: StringProperty` — why the last automatic refresh
-  stopped, shown in the panel until the next one. Only the auto job
-  writes it, and every time it does it also switches Auto Refresh off,
-  so a non-empty value means the job switched it off rather than the
-  user. A successful Update relies on that to switch Auto Refresh back
-  on (`ops/filter_layer_ops.py::_resume_auto_refresh`).
+- `derived_error: StringProperty` — why the automatic refresh could not
+  build the layer, shown in the panel. Only the auto job writes it. With
+  Auto Refresh still on, it is a refusal the job keeps checking on every
+  change, and it clears once the layer builds or no longer needs to.
+  With Auto Refresh off, the job gave up and switched it off: switching
+  Auto Refresh by hand either way clears the message, so a message never
+  sits next to a choice the user made. A successful Update clears it and
+  switches Auto Refresh back on
+  (`ops/filter_layer_ops.py::_resume_auto_refresh`).
 
 `stale_reason` on the node combines the two: the structural reason when
 there is one, otherwise "the pixels below changed" when the pixel flag is
-set, and always empty for an unbuilt layer.
+set, and always empty for an unbuilt layer. `needs_build` is what the
+auto job asks: out of date, or not built at all.
 
 `paint_image` stays None. That is load-bearing and needs no new code:
 `context.update_active_image` already skips a layer with no image, and
@@ -308,9 +313,10 @@ and `build_bake_tree` keeps working over a tree containing filter layers.
 `emit_source` also recomputes the structural fingerprint parts, compares
 them with the stamp, and writes `derived_stale_reason` when the answer
 differs, on the "write only when the value changes" rule. The same spot
-tells the auto job about the result: a layer out of date calls
-`layer_job.notify()` when it has Auto Refresh on and is switched on, and
-a layer up to date calls `layer_job.settled()`. Almost every way a
+tells the auto job about the result: a layer that needs a build (out of
+date, or never built) calls `layer_job.notify()` when it has Auto
+Refresh on and is switched on, and a layer up to date calls
+`layer_job.settled()`. Almost every way a
 filter layer goes out of date ends in a compile, so this is where the
 auto job normally learns of work; the exceptions are under Rebuild.
 
@@ -478,7 +484,9 @@ layer row shows an `ERROR` badge while out of date and a refresh icon
 while the auto job builds it (`draw_row_state`).
 `paint_system.clear_filter_result` drops the derived image and returns
 the layer to pass-through, so a wedged layer is recoverable without
-deleting it.
+deleting it. It also switches Auto Refresh off, because the auto job
+builds any layer with no pixels and would bring the result straight
+back.
 
 ### Rebuild
 
@@ -495,8 +503,8 @@ script or a call with no window.
 
 Update first cancels any automatic refresh, because two builds of one
 layer would race for the same image. After a successful build it also
-switches Auto Refresh back on if the auto job was the one that turned it
-off (`derived_error` set, see the data model).
+clears the auto job's message and switches Auto Refresh back on if the
+job had turned it off (`derived_error` set, see the data model).
 
 The steps: resolve (nothing allocated yet, `Refused` by name), composite,
 the kind's passes or its own build, the sRGB encode into a byte target,
@@ -529,9 +537,10 @@ what a button labelled Update should do.
 **Automatically**, by `filters/layer_job.py`, the same generator pulled
 from a `bpy.app.timers` tick: debounced 0.4 s, 0.02 s of build per tick,
 gated by `auto_refresh`. A candidate is a filter layer that is switched
-on, has Auto Refresh on, is not locked, is out of date, and is not being
-built by the Update button (`freshness.building`), taken bottom of each
-stack first. Three hard rules:
+on, has Auto Refresh on, is not locked, is out of date or not built yet
+(`needs_build`), and is not being built by the Update button
+(`freshness.building`), taken bottom of each stack first. So adding a
+filter layer is enough to get its pixels. Three hard rules:
 
 - A switched-off layer is never a candidate. It renders as a
   pass-through, so a refresh would spend a whole composite and its video
@@ -553,9 +562,22 @@ stack first. Three hard rules:
   goes and not what the tree compiles to.
 
 - The auto path runs **only** when `resolve_input` reports the composite
-  path. A layer whose stack needs a bake gets Auto Refresh switched off
-  and a message naming the reason, so a background refresh can never
-  lock Blender for ten seconds.
+  path. A layer whose stack needs a bake gets a message naming the
+  reason and is skipped, so a background refresh can never lock Blender
+  for ten seconds. Any other refusal from `resolve_input`, such as
+  nothing below the layer, is handled the same way. Auto Refresh stays
+  on, and the layer waits: it builds as soon as the stack or the scene
+  allows it. A refusal is about something that changes; switching Auto
+  Refresh off would leave a layer added to an empty folder waiting for
+  an Update nobody knows to press. A refusal about the stack is asked
+  again by the next compile. One about the scene (no active mesh, or a
+  mesh without the UV map a layer names) compiles no tree when it is
+  fixed, so `on_depsgraph_update_post` calls `layer_job.scene_changed()`,
+  which asks again while any layer is waiting. `resolve_input` falls
+  back to the view layer's active object, because a timer's context may
+  have no screen and so no `context.object`. A build that has started
+  and then fails or is refused still switches Auto Refresh off, because
+  trying again would repeat the same failure.
 - The viewport keeps showing the previous pixels for the whole job, and
   the commit is one atomic write, so no intermediate state is ever
   visible.
@@ -614,7 +636,8 @@ job would interrupt whatever the user was doing.
 
 **Create.** Nothing is allocated in `create()`. A new filter layer has
 `derived_image = None` and compiles as a pass-through, so adding one is
-instant and cannot fail. The image is made in the commit step through
+instant and cannot fail. With Auto Refresh on, the auto job then builds
+it once things go quiet. The image is made in the commit step through
 `create_managed_image`, at one texel because the packed PNG brings its
 own size, and switched to a file source when the PNG is packed. It holds
 bytes in sRGB like a painted layer image, which halves memory against

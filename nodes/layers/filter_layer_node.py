@@ -21,14 +21,17 @@ from ...nodetree.stack_ops import feeding_link
 
 
 def _auto_refresh_changed(self, context):
-    """Clear the error and ask for a refresh when Auto Refresh is turned on.
+    """Clear the job's message, and ask for a refresh when Auto Refresh is turned on.
 
-    This is how a layer that the refresh job gave up on is retried.
+    Turning it on is how a layer that the refresh job gave up on is
+    retried. Turning it off clears the message too, so a message on a
+    layer with Auto Refresh off always means the job switched it off.
+    `ops.filter_layer_ops._resume_auto_refresh` relies on that.
     """
-    if self.auto_refresh:
+    if self.derived_error:
         self.derived_error = ""
-        if self.enabled:
-            layer_job.notify()
+    if self.auto_refresh and self.enabled:
+        layer_job.notify()
 
 
 def _enabled_changed(self, context):
@@ -42,7 +45,7 @@ def _enabled_changed(self, context):
     Auto Refresh on and nothing happening.
     """
     mark_tree_dirty(self, context)
-    if self.enabled and self.auto_refresh and self.stale_reason:
+    if self.enabled and self.auto_refresh and self.needs_build:
         layer_job.notify()
 
 
@@ -56,7 +59,7 @@ def _lock_changed(self, context):
     catches up.
     """
     update_painting(self, context)
-    if not self.lock_layer and self.enabled and self.auto_refresh and self.stale_reason:
+    if not self.lock_layer and self.enabled and self.auto_refresh and self.needs_build:
         layer_job.notify()
 
 
@@ -288,6 +291,16 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             return self.derived_stale_reason
         return PIXEL_REASON if self.derived_stale_pixels else ""
 
+    @property
+    def needs_build(self) -> bool:
+        """Whether the layer is out of date or has never been built.
+
+        Auto Refresh builds both. A new filter layer is not out of date,
+        because it shows nothing it could be wrong about, but it still has
+        no pixels until something builds it.
+        """
+        return not is_built(self.derived_image) or bool(self.stale_reason)
+
     # -- ui ---------------------------------------------------------------------
 
     def draw_label(self):
@@ -354,7 +367,7 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         box.prop(self, "auto_refresh")
         if self.derived_error:
             box.label(text=self.derived_error, **icon_kwargs('ERROR'))
-        elif stale and self.auto_refresh and not (self.enabled and not self.lock_layer):
+        elif self.needs_build and self.auto_refresh and not (self.enabled and not self.lock_layer):
             # Without this, the layer sits out of date with Auto Refresh on
             # and nothing happening. That looks broken, but it is a
             # deliberate saving. Check both conditions, because
@@ -417,10 +430,11 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             self.derived_stale_reason = reason
         # The compile is also where the auto refresh learns there is work.
         # Every way a filter layer goes out of date ends up here, whether
-        # structural or painted. That includes work it already had.
-        # Switching the layer back on marks the tree, so this runs and asks
-        # for the refresh that was held back while the layer was off.
-        if self.stale_reason:
+        # structural or painted. That includes work it already had, and a
+        # new layer that has never been built. Switching the layer back on
+        # marks the tree, so this runs and asks for the refresh that was
+        # held back while the layer was off.
+        if self.needs_build:
             if self.auto_refresh and self.enabled:
                 layer_job.notify()
         else:

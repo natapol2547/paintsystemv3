@@ -1,15 +1,23 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Refreshes out-of-date filter layers automatically (PS-057).
+"""Builds filter layers automatically when they are new or out of date (PS-057).
 
 Runs the same build generator that `ops.filter_layer_ops` drives from a
-modal operator, but from a `bpy.app.timers` tick. The goal: paint under
-a filter layer, stop, and a moment later the filter shows the new paint.
-It must never make Blender feel broken, so it has these limits.
+modal operator, but from a `bpy.app.timers` tick. The goal: add a filter
+layer, or paint under one, stop, and a moment later the filter shows the
+result. It must never make Blender feel broken, so it has these limits.
 
 - **Composite path only.** A layer whose input needs a Cycles bake is
   left alone, with a message saying so. A background render would lock
   the window for seconds with no way to cancel it. This is decided
   before anything is allocated.
+- **Refusals wait.** A layer that cannot be built right now, such as one
+  with nothing below it or with no active mesh to resolve its UV map
+  on, shows the reason and keeps Auto Refresh on. The next change to the
+  tree or the scene asks again, so adding a layer below it, or selecting
+  the mesh, is enough. A build that has started and then fails, is
+  refused, or does not settle switches Auto Refresh off instead. Trying
+  it again would repeat the same failure, often after allocating GPU
+  memory.
 - **Only a GPU context already known to work.** `gpu.init()` crashes
   instead of raising on some builds without a driver
   (`gpu_passes/core.py`). So this path asks `gpu_known()` and is never
@@ -77,6 +85,9 @@ _poked = False
 _builds: dict[str, int] = {}
 # Node uuid to builds of it dropped in a row, see RESTART_LIMIT.
 _restarts: dict[str, int] = {}
+# Whether a layer was refused and is waiting for a change that lets it
+# build. Only a pass that looked at every layer may lower it.
+_waiting = False
 
 
 class _Job:
@@ -147,11 +158,30 @@ def settled(node) -> None:
     This is also how a running job learns that its layer went back to
     what the job read, for example a setting nudged and then returned.
     Then nothing is out of date, so no `notify` call would tell the job.
+
+    A refusal message on a layer with Auto Refresh on is cleared here.
+    The layer no longer needs a build, so the reason it could not have
+    one no longer matters.
     """
     global _poked
     _builds.pop(node.uuid, None)
+    if node.auto_refresh:
+        _set_error(node, "")
     if running_on(node):
         _poked = True
+
+
+def scene_changed() -> None:
+    """Ask again for any layer that is waiting. Called on every depsgraph update.
+
+    Some refusals are about the scene rather than the tree: no active
+    mesh, or a mesh without the UV map a layer names. Selecting the mesh
+    or adding the UV map compiles no tree, so no `notify` call would
+    come. This costs nothing while no layer waits. While a job runs it
+    does nothing, because the pass after the job looks at every layer.
+    """
+    if _waiting and _job is None:
+        notify()
 
 
 def running() -> bool:
@@ -258,22 +288,29 @@ def _start():
     """The next layer to refresh, as a job, or None when there is none.
 
     Resolving allocates nothing, so a layer that cannot be refreshed says
-    so here and the pass moves on to the next one.
+    so here and the pass moves on to the next one. It keeps Auto Refresh
+    on and waits. A change to its tree compiles it, which asks again. A
+    change in the scene reaches `scene_changed` instead. Resolving is
+    cheap enough to repeat after every change.
     """
+    global _waiting
     if gpu_known() is not True:
         # Never be the first to call `gpu.init()`. It crashes instead of
         # raising where there is no usable driver, and a timer is the
         # worst place to find that out.
         return None
+    waiting = False
     for tree, node in _candidates():
         try:
             plan = layer_plan.resolve_input(bpy.context, tree, node)
         except Refused as refusal:
-            _give_up(node, str(refusal))
+            _set_error(node, str(refusal))
+            waiting = True
             continue
         if not plan.is_composite:
-            _give_up(node, f"Update needed: filtering this needs a Cycles bake, "
-                           f"because {plan.reason}")
+            _set_error(node, f"Update needed: filtering this needs a Cycles bake, "
+                             f"because {plan.reason}")
+            waiting = True
             continue
         if _builds.get(node.uuid, 0) >= BUILD_LIMIT:
             _give_up(node, "Refreshing this layer did not settle; press Update to try again")
@@ -283,13 +320,17 @@ def _start():
         # the compile that clears this count runs inside the build's own
         # last unit.
         _builds[node.uuid] = _builds.get(node.uuid, 0) + 1
-        log.debug("refreshing %s: %s", node.name, node.stale_reason)
+        log.debug("refreshing %s: %s", node.name, node.stale_reason or "not built yet")
+        # This pass stops here, before it has seen every layer, so it can
+        # only raise the flag. The pass after this build lowers it.
+        _waiting = _waiting or waiting
         return _Job(tree, node, plan)
+    _waiting = waiting
     return None
 
 
 def _candidates():
-    """Filter layers that need a refresh, the bottom of each stack first.
+    """Filter layers that are new or out of date, the bottom of each stack first.
 
     Bottom first, because a filter layer below an out-of-date one must be
     rebuilt first. Otherwise the upper layer filters pixels that are
@@ -319,7 +360,7 @@ def _candidates():
                 if getattr(node, 'ps_type', "") != 'FILTER':
                     continue
                 if (node.enabled and node.auto_refresh and not node.lock_layer
-                        and node.stale_reason and not freshness.building(node.uuid)):
+                        and node.needs_build and not freshness.building(node.uuid)):
                     yield tree, node
 
 
