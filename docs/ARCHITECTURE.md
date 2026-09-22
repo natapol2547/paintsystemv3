@@ -31,15 +31,21 @@ PaintSystemNodeTree  --compile-->  IR  --NodeTreeBuilder-->  ShaderNodeTree (tre
    unique node uuids, io nodes present, channel uuids.
 2. `build_ir` walks upstream from the active Group Output in topological
    order and calls `node.emit(ctx)` on each node. Nodes append to the IR and
-   register which IR sockets provide their outputs; downstream nodes link to
-   those via `ctx.upstream(socket)` / `ctx.connect_input(...)`.
+   register which IR sockets provide their outputs; downstream nodes read
+   those back through `ctx.rgba_input(socket)`, `ctx.connect_input(...)`
+   or `ctx.link_channel(...)`.
 3. `IR.fingerprint()` hashes the result. If it differs from the
    fingerprint stored on the artifact (`ps_fingerprint`), `IR.apply`
    patches the artifact through the diff-based `NodeTreeBuilder`
    (identifiers are `"<node uuid>:<role>"`). The fingerprint lives on the
    artifact so it always describes the nodes next to it. A reused node
    keeps the value of any input the IR does not set, so an emitter sets
-   an input on every compile or never.
+   an input on every compile or never. `IR.meta` holds facts the artifact
+   depends on that no node or link records; it is hashed with the rest
+   and never applied. A group layer stores its child's interface socket
+   types there, because a child channel that changes type gets a new
+   compiled socket, Blender drops the parent's links to the old one, and
+   nothing else in the parent's IR would change to rebuild them.
 
 The builder writes a value only when RNA does not already hold it (floats
 compared as float32, datablocks by identity), because every write on the
@@ -74,12 +80,15 @@ phase is one call into a shared no-op, so the switch costs nothing.
 
 ## Layer stack (`nodetree/stack_ops.py`)
 
-The stack is the graph; there is no parent or order property. The top
-layer feeds a channel socket on the active Group Output, each layer takes
-the stack below it on `Color`/`Alpha`, and a folder
-(`PaintSystemFolderLayerNode`) takes the top of its content on
-`Content Color`/`Content Alpha`. The bottom layer of a folder has nothing
-linked below it, which reads as a transparent backdrop. A folder composites
+The stack is the graph; there is no parent or order property. Every link
+in a Paint System tree carries one RGBA value, the way the compositor
+does: colour and alpha travel together and there are no alpha sockets.
+The top layer feeds a channel socket on the active Group Output, each
+layer takes the stack below it on `Color` and gives its result on its one
+`Color` output, and a folder (`PaintSystemFolderLayerNode`) takes the top
+of its content on `Content Color`. `Mask` is always a layer's last input.
+The bottom layer of a folder has nothing linked below it, which reads as a
+transparent backdrop. A folder composites
 its content like any layer composites its source, so its opacity, blend
 mode and `enabled` apply to the whole content without touching the child
 layers.
@@ -87,9 +96,16 @@ layers.
 `tree.stack(channel)` walks this top first and returns `StackItem(node,
 level, parent, index_in_parent)`, each folder followed by its content.
 Structural edits (`insert_on_top`, `insert_above`, `insert_into`, `remove`)
-are link operations that keep two invariants: a layer's `Color` output
-feeds at most one slot, and a slot's alpha input is linked from the alpha
-partner of whatever feeds its colour input.
+are link operations that keep one invariant: a layer's `Color` output
+feeds at most one slot. A slot is any input of a layer except `Mask`, or
+an input of the Group Output or a group layer. Links into a mask, or into
+a reroute or other node, are not slots, so the stack walk and the edits
+leave them alone and a layer can mask another while it sits in a stack.
+A move that would loop such a link back into the layer it came from is
+refused (`stack_ops.move`). Apart from the nodes that create them, the
+accessors in `stack_ops` (`below_input`, `stack_output`, `content_input`,
+`channel_input`) are the only code that names the sockets a stack runs
+through; `Mask` is read by name.
 
 The walks read a socket's links through `socket_links` rather than through
 `NodeSocket.links`: that property is implemented in Python and scans the
@@ -97,18 +113,22 @@ whole tree, so a walk down a stack is quadratic in its link count. The
 `link_index` context manager maps a tree's links by socket in one pass and
 `socket_links` reads that map, falling back to the property for any tree
 without one. An index may only cover a read-only stretch — `build_ir`
-installs one for the length of a build, and a block that goes on to edit
-links calls `invalidate` before its first write — because a stale map is
-a wrong graph, not a slow one. Indexes are keyed by tree pointer, so a
+installs one for the length of a build, and no code edits links inside
+one — because a stale map is a wrong graph, not a slow one. Indexes are keyed by tree pointer, so a
 compile of a child tree during a parent's build cannot clobber the
 parent's.
 
-Hand edits in the node editor can break the second invariant. The compiler
-reads alpha through the colour link regardless (`CompileContext.source`),
-and `repair_alpha_links` tidies the links at the start of the next stack
-edit. It does not run during a compile: compiles can run after the edit's
-undo step was pushed, where changing the document would reintroduce the
-stale-undo problem described under Triggers.
+Because one link carries both halves, a hand edit in the node editor
+cannot leave a colour and its alpha pointing at different layers, and
+nothing has to repair the links afterwards. The compiler splits the value
+where it needs to: it records each Paint System output as a (colour,
+alpha) pair of IR references, keyed by node uuid and socket identifier
+(`CompileContext.set_output`), and a consumer reads the pair back through
+`rgba_input`, `connect_input` or `link_channel`. The compiled node group
+keeps `<channel>` and `<channel> Alpha` sockets, so materials still see
+the colour and alpha separately. Channel sockets in the Paint System tree
+are always `NodeSocketColor`; only the compiled interface follows the
+channel type.
 
 Moves are computed from the same walk. `movement_options(items, node,
 direction)` lists what up or down can mean next to folders (skip a
@@ -293,7 +313,8 @@ When `cache_enabled` and `cache_hash == subtree_hash`, the compiler emits a
 single Image Texture for the node and does not walk its upstream. When the
 hash mismatches the live graph is emitted and `cache_stale` is set.
 
-Baking builds a temporary group with the node's live Color/Alpha outputs,
+Baking builds a temporary group whose Color and Alpha outputs are the two
+halves of the node's live `Color` output,
 routes it through an Emission shader in a throwaway material, Cycles-bakes
 color and alpha into the cache image, then stores the subtree hash.
 

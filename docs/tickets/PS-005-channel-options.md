@@ -248,9 +248,14 @@ Behaviour the UI implies:
 - Add to `PaintSystemChannel`: `use_alpha` (default True for COLOR, False
   otherwise), `color_space`, `use_max_min`, `factor_min`, `factor_max`,
   `default_value` (FloatVector size 4, used as the interface input default).
-- `channel_socket_specs` already emits value + alpha sockets on the Paint
-  System side. Keep both internally; `interface_outputs` in
-  `compiler/core.py` skips the alpha output when `use_alpha` is False.
+- The Paint System tree has one RGBA socket per channel (PS-098), so
+  `use_alpha` touches no socket there. It changes only the compiled
+  interface (`interface_socket_specs` in `props/channel.py`) and the two
+  places that cross it, `CompileContext.link_channel` and
+  `set_channel_output`. With it off, neither side of the compiled group
+  has a `<name> Alpha` socket, the Group Input feeds alpha 1 into the
+  bottom of the stack as in v2, and the Group Output drops the alpha
+  half of what reaches it.
 - `interface_inputs`/`interface_outputs` set subtype `FACTOR` and min/max
   when `use_max_min`, and `NONE` otherwise. Colour channels with
   `color_space == 'NONCOLOR'` are still `NodeSocketColor`; the value only

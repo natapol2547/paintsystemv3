@@ -117,7 +117,7 @@ each fatal alone, and all three were confirmed against running code
 during the design spikes:
 
 - The cache swallows the blend. `build_bake_tree` bakes
-  `ctx.output_ref(bake_target, ...)` and `is_cached` exempts the bake
+  `ctx.output(stack_output(bake_target))` and `is_cached` exempts the bake
   target, so the target emits its full `emit_blend`
   (`compiler/core.py::build_ir`, `compiler/bake.py`): opacity, blend
   mode, `enabled`, Mask and Clip end up *inside* the baked pixels. Every
@@ -128,7 +128,7 @@ during the design spikes:
   which a filter layer becomes the moment
   anyone clips a layer to it. Removing that refusal makes the whole stack
   below the clip base compile to transparent black, silently:
-  `ctx.upstream` returns None and `input_source` falls back to the socket
+  nothing is recorded upstream and `rgba_input` falls back to the socket
   default. For an ordinary layer the refusal
   costs performance; for a filter layer it would cost the feature.
 - A stale ordinary cache falls back to a pixel-equivalent live graph
@@ -967,7 +967,12 @@ values differently from the float readback it replaced, by one step in
 - The Cycles fallback (Path B) is not built. A filter layer over a group
   layer, a surface-data layer, a linked mask or a blend mode without a
   parity test is refused. The auto job's message for it still starts
-  "Update needed", which Update cannot satisfy yet.
+  "Update needed", which Update cannot satisfy yet. When it is built, it
+  must bake what feeds the filter (`feeding_link(below_input(node))`),
+  not the filter itself: `build_ir`'s bake branch reads
+  `ctx.output(stack_output(bake_target))`, which is the target's own
+  blended result, and it only knows how to find that on a layer, not on
+  a group layer or the Group Input.
 - At Amount 1 a filter layer replaces the stack below outright, so a
   stroke below it does not show until the refresh lands, about half a
   second after the stroke ends plus the build. By design: showing the

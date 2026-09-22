@@ -10,12 +10,11 @@ Done (M0 slice 3; moves followed in slice 4, see PS-012):
 `tree.stack()` and `tests/test_stack.py`. Deviations from the design
 below:
 
-- `normalize_tree` does not repair alpha links. Compiles can run after
-  the edit's undo step was pushed, and links created inside
-  `NodeTree.update` are dropped anyway. The compiler reads alpha through
-  the colour link instead (`CompileContext.source`), and
-  `repair_alpha_links` runs at the start of `insert_layer_node` and
-  `remove_layer_node`.
+- PS-098 removed the Alpha sockets: every link now carries one RGBA
+  value, a layer has `Color` and `Mask` inputs and one `Color` output,
+  and a folder adds `Content Color` before `Mask`. There are no alpha
+  links left to keep in step, so the alpha repair this ticket first
+  shipped is gone. The design below still names the old sockets.
 - The stack walk and the compiler ignore `NodeLink.is_valid` and skip only
   muted links, because a link created by the edit being compiled is not
   validated yet inside `NodeTree.update`.
@@ -76,8 +75,8 @@ the same tree means one artifact, one undo history, one uuid namespace.
   order and levels for the same layout.
 - Done: inserting into an empty folder, into a folder at top and at
   bottom, removing a folder with children (children are removed with it,
-  as in v2 `delete_item`) all leave alpha links following colour links
-  (`repair_alpha_links` finds nothing to fix).
+  as in v2 `delete_item`) all leave every layer feeding exactly one slot
+  (`check_one_link` in `tests/test_stack.py`).
 - Done: compiled output equals a flat stack when the folder is MIX at
   opacity 1; folder opacity scales and a disabled folder hides its content.
 - Done: `arrange_stack` lays the stack out right to left from the Group
