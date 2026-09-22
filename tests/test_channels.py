@@ -128,6 +128,20 @@ def test_rename():
     check(fed_by(tree, "Color") == second and fed_by(tree, "Paint") == layer,
           "a layer added to the new channel leaves the renamed one alone")
 
+    tree = new_tree("Channels Rename Material")
+    nt, bsdf, group = material_for(tree)
+    rgb = nt.nodes.new('ShaderNodeRGB')
+    nt.links.new(rgb.outputs[0], group.inputs["Color"])
+    nt.links.new(group.outputs["Color Alpha"], bsdf.inputs['Alpha'])
+    identifiers = [s.identifier for s in (*group.inputs, *group.outputs)]
+    tree.channels[0].name = "Paint"
+    compile_tree(tree)
+    check([s.name for s in group.outputs] == ["Paint", "Paint Alpha"]
+          and [s.identifier for s in (*group.inputs, *group.outputs)] == identifiers,
+          f"the compiled sockets are renamed in place {[s.name for s in group.outputs]}")
+    check(group.inputs["Paint"].is_linked and bsdf.inputs['Base Color'].is_linked and bsdf.inputs['Alpha'].is_linked,
+          "so the material keeps its links to them")
+
 
 def test_type():
     section("changing a channel's type")

@@ -283,6 +283,24 @@ class NodeTreeBuilder:
             for instr in self._socket_instructions
         }
 
+        # A renamed channel changes socket names and nothing else. The IR
+        # only knows names, so a side whose sockets still line up by
+        # position and type is taken as renamed, and its sockets are
+        # renamed in place. They keep their identifiers, so group nodes
+        # keep their links. Removing and creating them would drop the
+        # links.
+        current = _flat_sockets()
+        for in_out in ('OUTPUT', 'INPUT'):
+            have = [sock for sock in current if sock.in_out == in_out]
+            want = [instr for instr in self._socket_instructions if instr.in_out == in_out]
+            if len(have) != len(want) or any(
+                    sock.socket_type != instr.socket_type for sock, instr in zip(have, want)):
+                continue
+            have_names = {sock.name for sock in have}
+            for sock, instr in zip(have, want):
+                if (sock.name, in_out) not in desired_keys and instr.name not in have_names:
+                    sock.name = instr.name
+
         # Remove sockets that are no longer desired, and retype the rest
         for sock in _flat_sockets():
             key: SocketKey = (sock.name, sock.in_out)
