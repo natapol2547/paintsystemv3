@@ -21,7 +21,8 @@ result. It must never make Blender feel broken, so it has these limits.
 - **Only a GPU context already known to work.** `gpu.init()` crashes
   instead of raising on some builds without a driver
   (`gpu_passes/core.py`). So this path asks `gpu_known()` and is never
-  the first caller to find out.
+  the first caller to find out. It also waits while no context is
+  bound, which on 5.3 happens for a moment after a file is read.
 - **Debounced and budgeted.** A build starts only after things have
   been quiet for `DEBOUNCE` seconds, and each tick spends about `BUDGET`
   seconds on it. The viewport shows the previous pixels for the whole
@@ -58,7 +59,7 @@ import time
 import bpy
 
 from ..compiler.core import ps_trees
-from ..gpu_passes.core import gpu_known
+from ..gpu_passes.core import context_active, gpu_known
 from . import freshness, layer_build, layer_plan
 from .core import Refused
 
@@ -220,6 +221,14 @@ def cancel_all() -> None:
 
 def _tick():
     global _job, _poked
+    if gpu_known() is True and not context_active():
+        # Blender 5.3 has no GPU context between reading a file and the
+        # event loop's next pass over a window. A build now would fail,
+        # and the job would switch Auto Refresh off for a layer that is
+        # fine. So wait for that pass, which comes soon in a window.
+        # Nothing here touches the GPU in the meantime, not even closing
+        # a job.
+        return DEBOUNCE
     if _job is not None and _node_of(_job) is None:
         _drop(_job)
     if _job is not None and _overtaken(_job):

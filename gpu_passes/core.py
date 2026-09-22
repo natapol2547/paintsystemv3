@@ -1,6 +1,6 @@
 """Helpers shared by every GPU pass.
 
-Three things differ between the Blender versions the addon supports.
+Four things differ between the Blender versions the addon supports.
 They are handled here, so each pass does not have to:
 
 - Background Blender starts with no GPU context. 4.2 to 5.1 have no way
@@ -10,8 +10,11 @@ They are handled here, so each pass does not have to:
   on failure. But on 5.2.1 and 5.3 alpha, when EGL has no usable
   driver, it crashes Blender with a segfault instead. So
   `gpu_available()`, which calls it, is only called on a path that is
-  about to draw. `gpu_known()` answers without starting a context. A
-  windowed session always has a context.
+  about to draw. `gpu_known()` answers without starting a context.
+- A windowed session has a context, but from 5.3 on not at every
+  moment. Reading a file unbinds it until the event loop next handles
+  or draws a window, and a timer can run in between. `context_active()`
+  checks for that.
 - On 4.2, `GPUFrameBuffer.read_color` reports reversed strides for a
   multi-dimensional `Buffer`. So reads go through a one-dimensional
   buffer and numpy does the reshape (PS-096 spike 4).
@@ -172,6 +175,30 @@ def gpu_known() -> bool | None:
     if not hasattr(gpu, 'init'):
         return False
     return None
+
+
+def context_active() -> bool:
+    """True when a GPU context is bound right now, so GPU calls can run.
+
+    Blender 5.3 unbinds the context while it reads a file (Blender
+    commit baafdc000115). It binds it again the next time the event loop
+    handles a window's events or draws. Until then, creating a texture
+    raises and most other GPU calls crash. An operator run from the UI
+    never sees the gap, because the event loop binds the window's
+    context before it handles that window's events. A timer, a load
+    handler, or a script, and any operator one of them calls, can run in
+    the gap.
+
+    An empty framebuffer is the cheapest probe. Its constructor checks
+    for a bound context before anything else, and it allocates nothing
+    on the GPU until it is bound. Call this only when `gpu_known()` is
+    True.
+    """
+    try:
+        gpu.types.GPUFrameBuffer()
+    except (RuntimeError, SystemError):
+        return False
+    return True
 
 
 def _read(framebuffer, width: int, first: int, count: int, slot: int, channels: int,

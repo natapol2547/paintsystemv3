@@ -234,6 +234,24 @@ def test_failed_allocation_refuses():
           f"apply_passes raises Refused, which the operators report ({message})")
     check(np.array_equal(read(image), before), "and the image is left as it was")
 
+    # Blender raises the same error when no GPU context is bound, which
+    # happens on 5.3 right after a file is read. That is not a memory
+    # problem, and the message must not say it is.
+    real_active = core.context_active
+    core.gpu = types.SimpleNamespace(types=types.SimpleNamespace(
+        GPUTexture=fail, Buffer=gpu.types.Buffer))
+    core.context_active = lambda: False
+    try:
+        actions.apply_passes([(IDENTITY, {})], image)
+        message = None
+    except core.Refused as error:
+        message = str(error)
+    finally:
+        core.gpu = real
+        core.context_active = real_active
+    check(message is not None and "No GPU context" in message,
+          f"without a context it says so instead ({message})")
+
 
 def test_release():
     section("the shaders are given back")

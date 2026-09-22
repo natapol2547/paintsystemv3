@@ -609,6 +609,21 @@ self-healing, and worth keeping that way.
 about to draw calls `gpu_available()`, because `gpu.init()` crashes
 rather than raises on 5.2.1 and 5.3 with no usable driver.
 
+From 5.3 on (Blender commit baafdc000115), reading a file also unbinds
+a windowed session's GPU context, and it stays unbound until the event
+loop next handles a window's events or draws. Timers, load handlers and
+scripts can run in that gap, and so can any operator they call. An
+operator run from the UI cannot, because the event loop binds the
+window's context before it handles that window's events. So each tick
+of the auto job first asks `gpu_passes.core.context_active()` and, with
+no context, waits a debounce without touching the GPU, not even to
+close a job. Before this, the first texture of a build raised, the
+build failed, and the job switched Auto Refresh off with a message
+blaming GPU memory. `filters.core.new_texture` now tells the two cases
+apart. The gap is short in a running Blender, where the window loop
+draws right after the read. A test script runs before that loop starts,
+so `tests/test_filter_auto.py` draws the window itself after a reopen.
+
 ### Refusals
 
 Raised as `filters.core.Refused`, mostly from `resolve_input` before
@@ -619,6 +634,8 @@ job would interrupt whatever the user was doing.
 
 - "This Blender has no GPU context to run a filter on" (the Update
   button's poll)
+- "No GPU context is active right now; try again in a moment" (a texture
+  allocation with no bound context, see above)
 - "There is nothing below 'X' to filter"
 - "Filter layers only work on colour channels"
 - "Image 'Y' below is a UDIM image, which is not supported yet" — the

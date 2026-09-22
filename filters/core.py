@@ -39,8 +39,8 @@ import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
-from ..gpu_passes.core import (BAND_VERTEX_SOURCE, UNIT_QUAD, draw_in_bands, offscreen_state,
-                               release_unused_sampler, unused_sampler)
+from ..gpu_passes.core import (BAND_VERTEX_SOURCE, UNIT_QUAD, context_active, draw_in_bands,
+                               offscreen_state, release_unused_sampler, unused_sampler)
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +56,9 @@ def new_texture(size, image_format: str, *, data=None) -> gpu.types.GPUTexture:
 
     Blender raises a bare `RuntimeError` when an allocation fails. The
     operators only catch `Refused`, so this turns a large image on a small
-    GPU into a message rather than a traceback.
+    GPU into a message rather than a traceback. The same error comes when
+    no GPU context is bound (see `context_active`), which is a different
+    problem and gets its own message.
     """
     # Blender 4.2 to 5.0 reject `data=None`, so pass it only when there is some.
     extra = {} if data is None else {"data": data}
@@ -65,6 +67,8 @@ def new_texture(size, image_format: str, *, data=None) -> gpu.types.GPUTexture:
     except RuntimeError as error:
         log.warning("Could not allocate a %sx%s %s texture: %s",
                     size[0], size[1], image_format, error)
+        if not context_active():
+            raise Refused("No GPU context is active right now; try again in a moment") from error
         raise Refused("The GPU does not have enough memory for an image this size") from error
 
 _PRELUDE = """

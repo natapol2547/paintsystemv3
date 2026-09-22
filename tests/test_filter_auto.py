@@ -184,6 +184,40 @@ if available():
         check(pump() and stamp(node) != was, "and it catches up")
         core.flush_now()
 
+        section("no GPU context for a moment")
+        # Blender 5.3 unbinds the GPU context when it reads a file, and a
+        # window binds it again on its next draw. A background session
+        # keeps its context, so the gap is faked here. The job must wait
+        # it out rather than fail the build and give up on the layer.
+        was = stamp(node)
+        budget, layer_job.BUDGET = layer_job.BUDGET, 0.0
+        real_active = layer_job.context_active
+        try:
+            layer_job.context_active = lambda: False
+            undo_pixels.write_pixels(picture.image, [0.6, 0.3, 0.8, 1.0] * 64)
+            core.flush_now()
+            layer_job._deadline = 0.0
+            check(layer_job._tick() is not None and not layer_job.running(),
+                  "a refresh due with no context waits, with the timer kept")
+            check(node.auto_refresh and node.derived_error == "" and stamp(node) == was,
+                  f"and leaves the layer alone, Auto Refresh on: {node.derived_error!r}")
+
+            layer_job.context_active = real_active
+            layer_job._tick()
+            job = layer_job._job
+            check(layer_job.running_on(node), "with a context the build starts")
+            # One unit per tick, so a tick that ran a unit either returns
+            # 0.0 or, on the last unit, ends the job.
+            layer_job.context_active = lambda: False
+            check(layer_job._tick() == layer_job.DEBOUNCE and layer_job._job is job,
+                  "a build in flight waits too, without running a unit")
+        finally:
+            layer_job.context_active = real_active
+            layer_job.BUDGET = budget
+        check(pump() and stamp(node) != was and node.derived_error == "",
+              f"and it finishes once the context is back: {node.derived_error!r}")
+        core.flush_now()
+
         section("cancelled part way")
         # One unit per tick, so the build is certain to still be running
         # after the first one. The commit is the last unit, which is what
@@ -637,10 +671,30 @@ if available():
             bpy.context.view_layer.update()
             return refetch()
 
+        def context_lost():
+            """Whether the file read left no GPU context bound, as Blender 5.3 does."""
+            return not bpy.app.background and not gpu_core.context_active()
+
+        def redraw():
+            """Draw the window, which binds its GPU context again.
+
+            In a running Blender the window loop draws right after a file
+            read, well before the job's debounce runs out. This script
+            runs before that loop starts, so it asks for the draw itself.
+            The operator binds the window's context before it draws.
+            `DRAW_WIN` finds the screen through the window, so an
+            override that names only the window is enough.
+            """
+            with bpy.context.temp_override(window=bpy.context.window_manager.windows[0]):
+                bpy.ops.wm.redraw_timer(type='DRAW_WIN', iterations=1)
+
         was = stamp(node)
         tree, node, picture = reopen("fresh.blend")
         check(node.stale_reason == "", f"a layer saved up to date reopens up to date: "
                                        f"{node.stale_reason!r}")
+        if context_lost():
+            redraw()
+            check(gpu_core.context_active(), "drawing the window binds the GPU context again")
         check(pump() and stamp(node) == was, "and the job has nothing to build")
 
         # A background session reopens with undo off until the first push.
@@ -658,6 +712,14 @@ if available():
         tree, node, picture = reopen("stale.blend")
         check(node.stale_reason == "the pixels below changed",
               f"a layer saved out of date reopens out of date: {node.stale_reason!r}")
+        if context_lost():
+            layer_job._deadline = 0.0
+            check(layer_job._tick() is not None and not layer_job.running(),
+                  "until a window draws, the job waits for a GPU context")
+            check(node.auto_refresh and node.derived_error == "",
+                  f"and keeps Auto Refresh on: {node.derived_error!r}")
+            redraw()
+            check(gpu_core.context_active(), "drawing the window binds the GPU context again")
         check(pump() and stamp(node) != was and node.stale_reason == "",
               f"and the job brings it up to date: {node.stale_reason!r}")
 
