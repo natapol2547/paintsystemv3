@@ -7,7 +7,7 @@ from bpy_extras.node_utils import connect_sockets
 
 from . import stack_ops
 from ..common import blender_icon
-from ..props.channel import PaintSystemChannel, channel_socket_specs, channel_alpha_name
+from ..props.channel import PaintSystemChannel, channel_socket_specs
 from ..props.selection import PaintSystemSelection
 from ..compiler.core import ensure_tree_uuid, mark_dirty, ps_trees, suspend_compile, tree_updated
 
@@ -208,9 +208,8 @@ class PaintSystemNodeTree(NodeTree):
             input_node = self.get_input_node()
             output_node = self.get_output_node()
             if input_node and output_node:
-                for sock_name in (channel.name, channel_alpha_name(channel.name)):
-                    connect_sockets(stack_ops.socket_named(input_node.outputs, sock_name),
-                                    stack_ops.socket_named(output_node.inputs, sock_name))
+                connect_sockets(stack_ops.socket_named(input_node.outputs, channel.name),
+                                stack_ops.socket_named(output_node.inputs, channel.name))
         return channel
 
     def can_move_active_channel(self, offset: int) -> bool:
@@ -277,7 +276,6 @@ class PaintSystemNodeTree(NodeTree):
         """
         channel_name = self._channel_name(channel_name)
         with suspend_compile(self):
-            stack_ops.repair_alpha_links(self)
             node = self.nodes.new(bl_idname)
             if target is not None and target.is_folder:
                 stack_ops.insert_into(self, target, node)
@@ -295,7 +293,6 @@ class PaintSystemNodeTree(NodeTree):
         """Remove a layer (a folder with its content) and close the gap."""
         channel_name = self._channel_name(channel_name)
         with suspend_compile(self):
-            stack_ops.repair_alpha_links(self)
             stack_ops.remove(self, node)
             if channel_name is not None:
                 stack_ops.arrange_stack(self, channel_name)
@@ -307,13 +304,12 @@ class PaintSystemNodeTree(NodeTree):
         *direction* is ``'UP'`` or ``'DOWN'``. *action* picks one of the
         moves ``stack_ops.movement_options`` offers. A folder takes its
         content along. Returns False, and changes nothing, when the move is
-        not offered.
+        not offered or would loop a mask link (see ``stack_ops.move``).
         """
         channel_name = self._channel_name(channel_name)
         if channel_name is None:
             return False
         with suspend_compile(self):
-            stack_ops.repair_alpha_links(self)
             moved = stack_ops.move(self, channel_name, node, direction, action)
             if moved:
                 stack_ops.arrange_stack(self, channel_name)

@@ -17,7 +17,7 @@ from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items, layer_filt
 from ...filters.painter.brushes import brush_items
 from ...filters.registry import BLUR_MAX_EFFECTIVE_SIGMA
 from ...filters import layer_job, layer_plan
-from ...nodetree.stack_ops import feeding_link
+from ...nodetree.stack_ops import below_input, feeding_link
 
 
 def _auto_refresh_changed(self, context):
@@ -457,7 +457,7 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         if not is_built(image):
             reason = ""
         else:
-            link = feeding_link(self.inputs['Color'])
+            link = feeding_link(below_input(self))
             stored = str(image.get(FINGERPRINT_KEY, ""))
             # A build that needed a mesh took it from the Object, which it
             # filled in. A build that did not is compared without one.

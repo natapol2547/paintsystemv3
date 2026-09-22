@@ -178,7 +178,11 @@ class LayerMoveOperator:
                 self.report({'WARNING'}, "Several moves are possible; choose one")
                 return {'CANCELLED'}
             action = options[0].action
+        if action not in {option.action for option in options}:
+            return {'CANCELLED'}
         if not ps.tree.move_layer_node(ps.layer, self.direction, action):
+            # The move was on offer, so only the mask loop check refused it.
+            self.report({'WARNING'}, "This move would make a loop through a mask link")
             return {'CANCELLED'}
         return {'FINISHED'}
 

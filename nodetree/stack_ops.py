@@ -3,24 +3,22 @@
 Entry points: ``stack`` walks it. ``attach``, ``detach``, ``insert_*``,
 ``remove`` and ``move`` edit it. ``arrange_stack`` lays it out.
 
-The links are the stack. The top layer feeds a channel's socket on the
-active Group Output. Each layer takes the stack below it on its ``Color``
-and ``Alpha`` inputs. A folder takes the top of its content on
-``Content Color`` and ``Content Alpha``. Such a pair of inputs is a slot.
-The bottom layer of a folder has nothing linked below it. The compiler
-reads that as a transparent backdrop.
+The links are the stack, and each link carries one RGBA value. The top
+layer feeds a channel's socket on the active Group Output. Each layer
+takes the stack below it on its ``Color`` input. A folder takes the top
+of its content on ``Content Color``. An input that takes a stack is a
+slot: any input of a layer except its ``Mask``, or an input of the Group
+Output or a group layer (``is_slot``). Reroutes and other nodes are never
+slots. The bottom layer of a folder has nothing linked below it. The
+compiler reads that as a transparent backdrop.
 
-Edits keep two rules:
+Edits keep one rule: a layer's ``Color`` output feeds at most one slot.
+It may also feed masks, and edits leave those links alone. A move that
+would loop such a link back into the layer is refused.
 
-- A layer's ``Color`` output feeds at most one slot.
-- A slot's alpha input is linked from the alpha partner of whatever feeds
-  its colour input. It is unlinked when the colour input is.
-
-Hand edits in the node editor can break the second rule. The compiler
-reads alpha through the colour link anyway (``CompileContext.source``).
-``repair_alpha_links`` fixes the links before the next stack edit. It
-cannot run from ``NodeTree.update``, because Blender drops links created
-there.
+The socket accessors (``below_input``, ``stack_output``,
+``content_input``, ``channel_input``) are the only code here that names
+the sockets a stack runs through.
 
 Callers batch edits in ``suspend_compile`` so the tree compiles once.
 """
@@ -32,10 +30,7 @@ from dataclasses import dataclass
 import bpy
 
 from ..compiler.builder import same_value
-from ..props.channel import channel_alpha_name
 
-
-LAYER_SOCKET_PAIRS = {'Color': 'Alpha', 'Content Color': 'Content Alpha'}
 
 COLUMN_WIDTH = 260
 ROW_HEIGHT = 320
@@ -51,8 +46,7 @@ ROW_HEIGHT = 320
 # Indexes are keyed by tree pointer. So a nested compile of a child tree
 # cannot overwrite the index a parent build installed. A tree without an
 # index falls back to ``NodeSocket.links``. An index must never outlive a
-# link edit, so a block that edits calls ``invalidate`` before its first
-# change.
+# link edit, so only read-only walks may install one.
 
 _link_indexes: dict[int, dict[int, tuple]] = {}
 
@@ -75,7 +69,7 @@ def _build_link_index(tree) -> dict[int, tuple]:
     with the same id keep tree order. Sorting the inputs here gives the
     same order. Muted and invalid links are kept, exactly as the property
     returns them. ``feeding_link`` filters them itself, and
-    ``consumer_slot`` does not filter them.
+    ``consumer_input`` does not filter them.
     """
     by_socket: defaultdict[int, list] = defaultdict(list)
     inputs: set[int] = set()
@@ -95,9 +89,7 @@ class link_index:
     """Read *tree*'s links from an index inside the ``with`` block.
 
     Nested blocks on the same tree share the outermost block's index. Only
-    read-only walks may install one. A block that then edits links calls
-    ``invalidate`` first. That drops the index for the enclosing blocks
-    too, so their reads go back to ``NodeSocket.links``.
+    read-only walks may install one.
     """
 
     def __init__(self, tree):
@@ -110,11 +102,6 @@ class link_index:
             _link_indexes[self.key] = _build_link_index(self.tree)
             self._owner = True
         return self
-
-    def invalidate(self) -> None:
-        """Drop the index because the tree's links are about to change."""
-        _link_indexes.pop(self.key, None)
-        self._owner = False
 
     def __exit__(self, *exc) -> bool:
         if self._owner:
@@ -158,15 +145,6 @@ def tree_references(tree, target, _visited=None) -> bool:
     return False
 
 
-def alpha_partner(node, color_name: str) -> str | None:
-    """Name of the socket that carries the alpha of *node*'s socket *color_name*."""
-    if is_layer(node):
-        return LAYER_SOCKET_PAIRS.get(color_name)
-    if color_name.endswith(" Alpha"):
-        return None
-    return channel_alpha_name(color_name)
-
-
 def socket_named(sockets, name: str):
     """The socket in *sockets* called *name*, or None.
 
@@ -175,17 +153,6 @@ def socket_named(sockets, name: str):
     identifier, so those lookups can return another channel's socket.
     """
     return next((socket for socket in sockets if socket.name == name), None)
-
-
-def paired_color_input(socket):
-    """The colour input whose alpha partner is the input *socket*, or None."""
-    if socket.is_output:
-        return None
-    node = socket.node
-    for color_in in node.inputs:
-        if color_in != socket and alpha_partner(node, color_in.name) == socket.name:
-            return color_in
-    return None
 
 
 def feeding_link(socket) -> bpy.types.NodeLink | None:
@@ -224,53 +191,88 @@ def producing_link(socket) -> bpy.types.NodeLink | None:
 # ── Walking ──────────────────────────────────────────────────────────
 
 
-def channel_slot(tree, channel_name: str):
+def below_input(node):
+    """The input a layer takes the stack below it on."""
+    return node.inputs['Color']
+
+
+def stack_output(node):
+    """The output a layer gives its stack on."""
+    return node.outputs['Color']
+
+
+def content_input(folder):
+    """The input a folder takes the top of its content on."""
+    return folder.inputs['Content Color']
+
+
+def channel_sockets(sockets, channels):
+    """Yield (channel, socket) for each of *channels* that has a socket in *sockets*.
+
+    For the sockets of a Group Input, a Group Output or a group layer,
+    which are found by name (see ``socket_named``).
+    """
+    for channel in channels:
+        socket = socket_named(sockets, channel.name)
+        if socket is not None:
+            yield channel, socket
+
+
+def channel_input(tree, channel_name: str):
+    """The active Group Output's socket for *channel_name*, or None."""
     output = tree.get_output_node()
-    color_in = socket_named(output.inputs, channel_name) if output is not None else None
-    if color_in is None:
-        return None
-    return color_in, socket_named(output.inputs, channel_alpha_name(channel_name))
+    return socket_named(output.inputs, channel_name) if output is not None else None
 
 
-def content_slot(folder):
-    return folder.inputs['Content Color'], folder.inputs['Content Alpha']
+def is_slot(socket) -> bool:
+    """Whether the input *socket* takes a stack.
+
+    That is every input of a layer except its ``Mask``, and the channel
+    sockets of a Group Output or a group layer. Other nodes, reroutes
+    included, are never part of a stack, since the walks do not pass
+    through them.
+    """
+    node = socket.node
+    if is_layer(node):
+        return socket.identifier != 'Mask'
+    return node.bl_idname in {'PaintSystemGroupOutputNode', 'PaintSystemGroupLayerNode'}
 
 
-def below_slot(node):
-    return node.inputs['Color'], node.inputs['Alpha']
+def consumer_input(node):
+    """The slot *node*'s stack output feeds, or None.
 
-
-def consumer_slot(node):
-    """The slot *node*'s ``Color`` output feeds, or None."""
-    for link in socket_links(node.outputs['Color']):
-        partner = alpha_partner(link.to_node, link.to_socket.name)
-        return link.to_socket, socket_named(link.to_node.inputs, partner) if partner else None
+    Links into masks are skipped. A mask reads the layer's value without
+    putting the layer in a stack.
+    """
+    for link in socket_links(stack_output(node)):
+        if is_slot(link.to_socket):
+            return link.to_socket
     return None
 
 
 def layers_down_from(socket, visited: set[str]):
-    """Layer nodes feeding *socket* and each other through ``Color``, top first.
+    """Layer nodes feeding *socket* and each other through their stack sockets, top first.
 
     *visited* is shared across a whole walk, folders included, so a cycle
     hand-made in the node editor ends the chain instead of looping.
     """
     while True:
         link = feeding_link(socket)
-        if link is None or link.from_socket.name != 'Color':
+        if link is None:
             return
         node = link.from_node
         if not is_layer(node) or node.name in visited:
             return
         visited.add(node.name)
         yield node
-        socket = node.inputs['Color']
+        socket = below_input(node)
 
 
 def stack(tree, channel_name: str) -> list[StackItem]:
     """Every layer in the channel, top first, each folder followed by its content."""
-    slot = channel_slot(tree, channel_name)
+    top = channel_input(tree, channel_name)
     items: list[StackItem] = []
-    if slot is None:
+    if top is None:
         return items
     visited: set[str] = set()
 
@@ -279,10 +281,10 @@ def stack(tree, channel_name: str) -> list[StackItem]:
             item = StackItem(node, level, parent, index)
             items.append(item)
             if is_folder(node):
-                walk(node.inputs['Content Color'], level + 1, item)
+                walk(content_input(node), level + 1, item)
 
     with link_index(tree):
-        walk(slot[0], 0, None)
+        walk(top, 0, None)
     return items
 
 
@@ -292,7 +294,7 @@ def descendants(folder) -> list[bpy.types.Node]:
     visited: set[str] = set()
 
     def walk(node):
-        for child in layers_down_from(node.inputs['Content Color'], visited):
+        for child in layers_down_from(content_input(node), visited):
             found.append(child)
             if is_folder(child):
                 walk(child)
@@ -314,17 +316,17 @@ def descendants(folder) -> list[bpy.types.Node]:
 
 def layer_below(node):
     """The layer *node* composites over within its folder or channel, or None."""
-    link = feeding_link(node.inputs['Color'])
-    if link is None or link.from_socket.name != 'Color' or not is_layer(link.from_node):
+    link = feeding_link(below_input(node))
+    if link is None or not is_layer(link.from_node):
         return None
     return link.from_node
 
 
 def layer_above(node):
     """The layer compositing over *node* within its folder or channel, or None."""
-    for link in socket_links(node.outputs['Color']):
+    for link in socket_links(stack_output(node)):
         consumer = link.to_node
-        if (is_layer(consumer) and link.to_socket.name == 'Color'
+        if (is_layer(consumer) and link.to_socket == below_input(consumer)
                 and feeding_link(link.to_socket) == link):
             return consumer
     return None
@@ -364,71 +366,57 @@ def feeds_clip_run(node) -> bool:
 
 
 def attach(tree, node, slot) -> None:
-    """Put the detached *node* into *slot*.
+    """Put the detached *node* into the input *slot*.
 
     Whatever fed the slot now feeds *node*.
     """
-    color_in, alpha_in = slot
-    link = feeding_link(color_in)
-    below_color = link.from_socket if link else None
-    link = feeding_link(alpha_in) if alpha_in is not None else None
-    below_alpha = link.from_socket if link else None
-
-    if below_color is not None:
-        tree.links.new(below_color, node.inputs['Color'])
-    if below_alpha is not None:
-        tree.links.new(below_alpha, node.inputs['Alpha'])
-    tree.links.new(node.outputs['Color'], color_in)
-    if alpha_in is not None:
-        tree.links.new(node.outputs['Alpha'], alpha_in)
+    link = feeding_link(slot)
+    if link is not None:
+        tree.links.new(link.from_socket, below_input(node))
+    tree.links.new(stack_output(node), slot)
 
 
 def detach(tree, node) -> None:
-    """Take *node* out of the stack and close the gap behind it."""
-    slot = consumer_slot(node)
-    link = feeding_link(node.inputs['Color'])
-    below_color = link.from_socket if link else None
-    link = feeding_link(node.inputs['Alpha'])
-    below_alpha = link.from_socket if link else None
+    """Take *node* out of the stack and close the gap behind it.
 
-    for socket in (node.outputs['Color'], node.outputs['Alpha'],
-                   node.inputs['Color'], node.inputs['Alpha']):
-        for link in list(socket.links):
-            tree.links.remove(link)
-    if slot is None:
-        return
-    color_in, alpha_in = slot
-    if below_color is not None:
-        tree.links.new(below_color, color_in)
-    if below_alpha is not None and alpha_in is not None:
-        tree.links.new(below_alpha, alpha_in)
+    Links from *node* into masks stay.
+    """
+    slot = consumer_input(node)
+    link = feeding_link(below_input(node))
+    below = link.from_socket if link else None
+
+    doomed = list(below_input(node).links)
+    doomed += [link for link in stack_output(node).links if is_slot(link.to_socket)]
+    for link in doomed:
+        tree.links.remove(link)
+    if slot is not None and below is not None:
+        tree.links.new(below, slot)
 
 
 def insert_on_top(tree, node, channel_name: str) -> None:
-    slot = channel_slot(tree, channel_name)
+    slot = channel_input(tree, channel_name)
     if slot is not None:
         attach(tree, node, slot)
 
 
 def insert_above(tree, node, target) -> None:
     """Place *node* directly above *target*, at the same level."""
-    slot = consumer_slot(target)
+    slot = consumer_input(target)
     if slot is not None:
         attach(tree, node, slot)
     else:
-        tree.links.new(target.outputs['Color'], node.inputs['Color'])
-        tree.links.new(target.outputs['Alpha'], node.inputs['Alpha'])
+        tree.links.new(stack_output(target), below_input(node))
 
 
 def insert_below(tree, node, target) -> None:
     """Place *node* directly below *target*, at the same level."""
-    attach(tree, node, below_slot(target))
+    attach(tree, node, below_input(target))
 
 
 def insert_into(tree, folder, node, *, at_top: bool = True) -> None:
     """Place *node* inside *folder*, at the top or the bottom of its content."""
-    content = [] if at_top else list(layers_down_from(folder.inputs['Content Color'], set()))
-    attach(tree, node, below_slot(content[-1]) if content else content_slot(folder))
+    content = [] if at_top else list(layers_down_from(content_input(folder), set()))
+    attach(tree, node, below_input(content[-1]) if content else content_input(folder))
 
 
 def remove(tree, node) -> None:
@@ -536,15 +524,44 @@ def movement_options(items: list[StackItem], node, direction: str) -> list[MoveO
     return options
 
 
+def reads_from(node, source) -> bool:
+    """Whether *node* reads *source* through any of its inputs, masks included.
+
+    Follows every link upstream, through reroutes, until it runs out.
+    """
+    seen: set[str] = set()
+    pending = [node]
+    with link_index(node.id_data):
+        while pending:
+            for socket in pending.pop().inputs:
+                link = producing_link(socket)
+                if link is None:
+                    continue
+                if link.from_node == source:
+                    return True
+                if link.from_node.name not in seen:
+                    seen.add(link.from_node.name)
+                    pending.append(link.from_node)
+    return False
+
+
 def move(tree, channel_name: str, node, direction: str, action: str) -> bool:
     """Make the *action* move that ``movement_options`` offers *node*.
 
-    Returns False if no such move is offered.
+    Returns False if no such move is offered, or if it would loop a link
+    into a mask back into *node*. That happens when a layer moves above a
+    layer it masks: it would read the masked layer's result and feed its
+    mask at the same time. The compiler cannot order that, so the layer is
+    put back where it was.
     """
     option = next((option for option in movement_options(stack(tree, channel_name), node, direction)
                    if option.action == action), None)
     if option is None:
         return False
+    # Checking after the move sees the real links. Predicting the loop
+    # would mean simulating every kind of placement.
+    home = consumer_input(node)
+    looped = reads_from(node, node)
     detach(tree, node)
     if option.placement == 'ABOVE':
         insert_above(tree, node, option.target)
@@ -552,45 +569,11 @@ def move(tree, channel_name: str, node, direction: str, action: str) -> bool:
         insert_below(tree, node, option.target)
     else:
         insert_into(tree, option.target, node, at_top=option.placement == 'INTO_TOP')
-    return True
-
-
-def repair_alpha_links(tree) -> int:
-    """Make every slot's alpha input follow its colour input.
-
-    Returns the number of fixes.
-    """
-    fixes = 0
-    # The scan reads through an index. The first fix edits links and drops
-    # the index.
-    index = link_index(tree)
-    with index:
-        for node in tree.nodes:
-            for color_in in node.inputs:
-                partner = alpha_partner(node, color_in.name)
-                alpha_in = socket_named(node.inputs, partner) if partner else None
-                if alpha_in is None:
-                    continue
-                link = feeding_link(color_in)
-                if link is None:
-                    expected = None
-                else:
-                    source_partner = alpha_partner(link.from_node, link.from_socket.name)
-                    expected = socket_named(link.from_node.outputs, source_partner) if source_partner else None
-                    if expected is None:
-                        continue
-                current = feeding_link(alpha_in)
-                if current is not None and expected is not None and current.from_socket == expected:
-                    continue
-                if current is None and expected is None:
-                    continue
-                index.invalidate()
-                for stale in list(alpha_in.links):
-                    tree.links.remove(stale)
-                if expected is not None:
-                    tree.links.new(expected, alpha_in)
-                fixes += 1
-    return fixes
+    if looped or not reads_from(node, node):
+        return True
+    detach(tree, node)
+    attach(tree, node, home)
+    return False
 
 
 def _move_node(node, x: float, y: float) -> None:

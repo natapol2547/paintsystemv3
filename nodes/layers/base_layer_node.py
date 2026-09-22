@@ -5,7 +5,7 @@ from ..base_node import PaintSystemBaseNode, mark_tree_dirty
 from ...common import icon_kwargs
 from ...compiler.library import layer_blend_group
 from ...context import update_active_image
-from ...nodetree.stack_ops import clip_base, feeds_clip_run
+from ...nodetree.stack_ops import below_input, clip_base, feeds_clip_run, stack_output
 
 
 def update_painting(self, context):
@@ -83,14 +83,15 @@ def emit_mix_group(ctx, node, role: str, group, amount_socket: str, amount: floa
                    color, alpha, *, clip: bool):
     """Emit the library mix *group* to put (color, alpha) over *node*'s stack.
 
-    The group reads the stack below from *node*'s ``Color`` and ``Alpha``
-    inputs, and the mask from its ``Mask`` input. *amount* goes to the
-    *amount_socket* input. *clip* keeps the backdrop's alpha. Returns the
-    colour and alpha refs of the result.
+    The group reads the stack below from *node*'s ``Color`` input, and the
+    mask from its ``Mask`` input. *amount* goes to the *amount_socket*
+    input. *clip* keeps the backdrop's alpha. Returns the colour and alpha
+    refs of the result.
     """
     mix = ctx.emit_node(node, role, 'ShaderNodeGroup', properties={'node_tree': group})
-    ctx.connect_input(node.inputs['Color'], mix, 'Prev Color')
-    ctx.connect_input(node.inputs['Alpha'], mix, 'Prev Alpha')
+    prev_color, prev_alpha = ctx.rgba_input(below_input(node))
+    ctx.link_or_set(prev_color, mix, 'Prev Color')
+    ctx.link_or_set(prev_alpha, mix, 'Prev Alpha')
     ctx.connect_input(node.inputs['Mask'], mix, 'Mask')
     ctx.link_or_set(color, mix, 'Color')
     ctx.link_or_set(alpha, mix, 'Alpha')
@@ -102,7 +103,10 @@ def emit_mix_group(ctx, node, role: str, group, amount_socket: str, amount: floa
 
 
 class PaintSystemLayerNode(PaintSystemBaseNode):
-    """A layer. It takes the stack below (Color/Alpha) and outputs a new stack.
+    """A layer. It takes the stack below on ``Color`` and outputs a new stack.
+
+    Each link carries the stack as one RGBA value. ``Mask`` is always the
+    last input.
 
     Subclasses implement ``emit_source(ctx)``, which returns
     ``(color, alpha)``. Each is an IR ref or a constant. Blending is shared
@@ -187,10 +191,8 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     def init(self, context):
         super().init(context)
         new_hidden_input(self, 'NodeSocketColor', "Color", (0, 0, 0, 0))
-        new_hidden_input(self, 'NodeSocketFloat', "Alpha", 0.0)
         new_hidden_input(self, 'NodeSocketFloat', "Mask", 1.0)
         self.outputs.new('NodeSocketColor', "Color")
-        self.outputs.new('NodeSocketFloat', "Alpha")
 
     @classmethod
     def create(cls, tree, target=None, ps_object=None, **options):
@@ -271,8 +273,7 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
                 self.cache_stale = False
             color, alpha = emit_image_texture(ctx, self, 'cache', self.cache_image,
                                               self.cache_uv_map)
-            ctx.alias_output(self, 'Color', color)
-            ctx.alias_output(self, 'Alpha', alpha)
+            ctx.set_output(stack_output(self), color, alpha)
             return
         stale = bool(self.cache_enabled and self.cache_image is not None)
         if self.cache_stale != stale:
@@ -291,11 +292,10 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         # Otherwise this is a clip base. The clipped layers above composite
         # onto its content. The top clipped layer then blends the result
         # using this base's settings.
-        ctx.alias_output(self, 'Color', color)
-        ctx.alias_output(self, 'Alpha', alpha)
+        ctx.set_output(stack_output(self), color, alpha)
 
     def emit_blend(self, ctx, color, alpha, *, clip=False):
-        """Blend (color, alpha) over this layer's ``Color``/``Alpha`` inputs.
+        """Blend (color, alpha) over the stack on this layer's ``Color`` input.
 
         Uses this layer's blend mode, opacity and mask, and returns the
         result's colour and alpha refs. *clip* keeps the backdrop's alpha.

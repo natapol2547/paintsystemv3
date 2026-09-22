@@ -24,9 +24,8 @@ import bpy
 from .builder import BuildStats
 from .ir import IR, Ref, SocketId, hash_payload, _serialize
 from .profile import phase
-from ..nodetree.stack_ops import (alpha_partner, feeding_link, feeds_clip_run, link_index,
-                                  paired_color_input, producing_link)
-from ..props.channel import channel_socket_specs
+from ..nodetree.stack_ops import feeding_link, feeds_clip_run, link_index, producing_link, stack_output
+from ..props.channel import channel_alpha_name, interface_socket_specs
 
 log = logging.getLogger(__name__)
 
@@ -80,8 +79,7 @@ def normalize_tree(tree) -> None:
 
     Links are not repaired here. A compile can run after the edit's undo
     step was pushed (see ``tree_updated``), and then it must not change the
-    document. Instead, the compiler reads around broken alpha links
-    (``CompileContext.source``), and stack edits repair them.
+    document.
     """
     ensure_tree_uuid(tree)
     seen: set[str] = set()
@@ -113,14 +111,14 @@ def normalize_all_trees() -> None:
 class CompileContext:
     """State passed to every node's ``emit`` during one IR build.
 
-    It records which IR socket provides each Paint System node output, so
-    nodes further down the graph can link to them.
+    It records the (colour, alpha) IR sockets that provide each Paint
+    System node output, so nodes further down the graph can link to them.
     """
 
     def __init__(self, ir: IR, *, bake_target=None) -> None:
         self.ir = ir
         self.bake_target = bake_target
-        self._outputs: dict[tuple[str, str], Ref] = {}
+        self._outputs: dict[tuple[str, str], tuple[Ref, Ref]] = {}
         self._subtree_hashes: dict[str, str] = {}
 
     # -- emitting -------------------------------------------------------
@@ -144,80 +142,93 @@ class CompileContext:
         else:
             self.ir.set_input(to_id, to_socket, default_value=_copy_value(source))
 
-    def set_output(self, node, socket_name: str, ir_id: str, ir_socket: SocketId) -> None:
-        self._outputs[(node.uuid, socket_name)] = (ir_id, ir_socket)
+    # -- outputs ----------------------------------------------------------
+    #
+    # A link in the Paint System tree carries one RGBA value. In the shader
+    # it is two sockets, a colour and an alpha. So every Paint System output
+    # is recorded as a (colour, alpha) pair of refs, keyed by the output's
+    # identifier. Its name is not used, because a renamed channel socket
+    # keeps its old identifier and another socket may take the old name.
 
-    def alias_output(self, node, socket_name: str, source: Ref | Any) -> None:
-        """Expose *source* (a Ref or a constant) as one of *node*'s outputs."""
-        if _is_ref(source):
-            self._outputs[(node.uuid, socket_name)] = source
+    def set_output(self, socket, color: Ref | Any, alpha: Ref | Any) -> None:
+        """Record (*color*, *alpha*) as the value of the Paint System output *socket*.
+
+        Each is an IR ref or a constant.
+        """
+        self._outputs[(socket.node.uuid, socket.identifier)] = (
+            self._as_ref(socket, 'color', color), self._as_ref(socket, 'alpha', alpha))
+
+    def _as_ref(self, socket, half: str, value: Ref | Any) -> Ref:
+        if _is_ref(value):
+            return value
+        # A constant needs a real socket to link from, so emit a Value or
+        # RGB node for it.
+        role = f"const:{socket.identifier}:{half}"
+        if isinstance(value, (int, float)):
+            nid = self.emit_node(socket.node, role, 'ShaderNodeValue',
+                                 outputs={0: {'default_value': float(value)}})
         else:
-            # A constant needs a real socket to link from, so emit a Value
-            # or RGB node for it.
-            role = f"const:{socket_name}"
-            if isinstance(source, (int, float)):
-                nid = self.emit_node(node, role, 'ShaderNodeValue',
-                                     outputs={0: {'default_value': float(source)}})
-            else:
-                nid = self.emit_node(node, role, 'ShaderNodeRGB',
-                                     outputs={0: {'default_value': _copy_value(source)}})
-            self._outputs[(node.uuid, socket_name)] = (nid, 0)
+            nid = self.emit_node(socket.node, role, 'ShaderNodeRGB',
+                                 outputs={0: {'default_value': _copy_value(value)}})
+        return nid, 0
 
-    def output_ref(self, node, socket_name: str) -> Ref | None:
-        return self._outputs.get((node.uuid, socket_name))
+    def set_channel_output(self, socket, channel, ir_id: str) -> None:
+        """Record *channel*'s two sockets on the IR node *ir_id* as the value of *socket*."""
+        self.set_output(socket, (ir_id, channel.name), (ir_id, channel_alpha_name(channel.name)))
+
+    def output(self, socket) -> tuple[Ref, Ref] | None:
+        """The (colour, alpha) refs recorded for the output *socket*, or None."""
+        node_uuid = getattr(socket.node, 'uuid', None)
+        if node_uuid is None:
+            return None
+        return self._outputs.get((node_uuid, socket.identifier))
 
     # -- reading inputs -------------------------------------------------
 
-    def source(self, socket) -> tuple[bpy.types.Node, str] | None:
-        """Return the (node, output name) that *socket* reads from, or None.
+    def _upstream(self, socket) -> tuple[Ref, Ref] | None:
+        """Return the (colour, alpha) refs that feed *socket*, or None if unlinked.
 
-        Usually that is the other end of the socket's link. The alpha input
-        of a slot (a colour and alpha input pair) is different, because
-        alpha follows colour. It reads the alpha partner of whatever feeds
-        the paired colour input, and nothing when the colour input is
-        unlinked. So a hand edit that relinks only the colour still
-        composites correctly. When that node has no alpha partner output,
-        the alpha input's own link is used.
-
-        Reroutes are skipped. The node returned is the one behind them.
+        Reroutes are skipped. Only Paint System nodes emit IR, so a link
+        from any other kind of node reads as unlinked.
         """
-        color_in = paired_color_input(socket)
-        if color_in is not None:
-            link = producing_link(color_in)
-            if link is None:
-                return None
-            partner = alpha_partner(link.from_node, link.from_socket.name)
-            if partner is not None and partner in link.from_node.outputs:
-                return link.from_node, partner
         link = producing_link(socket)
         if link is None:
             return None
-        return link.from_node, link.from_socket.name
+        return self.output(link.from_socket)
 
-    def upstream(self, socket) -> Ref | None:
-        """Return the IR reference that feeds *socket*, or None if unlinked.
+    def rgba_input(self, socket) -> tuple[Ref | Any, Ref | Any]:
+        """Return (colour, alpha) for the colour input *socket*.
 
-        Only Paint System nodes emit IR, so a link from any other kind of
-        node reads as unlinked.
+        Unlinked, the socket's default value gives the colour and its
+        fourth component the alpha.
         """
-        source = self.source(socket)
-        if source is None:
-            return None
-        node, output_name = source
-        node_uuid = getattr(node, 'uuid', None)
-        if node_uuid is None:
-            return None
-        return self._outputs.get((node_uuid, output_name))
-
-    def input_source(self, socket) -> Ref | Any:
-        """Ref when linked, else the socket's default value."""
-        ref = self.upstream(socket)
-        if ref is not None:
-            return ref
-        return _copy_value(socket.default_value)
+        pair = self._upstream(socket)
+        if pair is not None:
+            return pair
+        value = _copy_value(socket.default_value)
+        return value, value[3]
 
     def connect_input(self, socket, to_id: str, to_socket: SocketId) -> None:
-        self.link_or_set(self.input_source(socket), to_id, to_socket)
+        """Link or set a one-value input, such as a layer's ``Mask``.
+
+        Linked, it reads the colour half, and the shader converts that to
+        the input's type.
+        """
+        pair = self._upstream(socket)
+        self.link_or_set(pair[0] if pair is not None else _copy_value(socket.default_value),
+                         to_id, to_socket)
+
+    def link_channel(self, socket, channel, to_id: str) -> None:
+        """Link what feeds *socket* into *channel*'s two sockets on the IR node *to_id*.
+
+        An unlinked *socket* links nothing, so *to_id* keeps the defaults
+        of the compiled interface.
+        """
+        pair = self._upstream(socket)
+        if pair is not None:
+            color, alpha = pair
+            self.link(color, to_id, channel.name)
+            self.link(alpha, to_id, channel_alpha_name(channel.name))
 
     # -- caching --------------------------------------------------------
 
@@ -318,14 +329,12 @@ def _copy_value(value: Any) -> Any:
 
 
 def interface_inputs(ir: IR, channels) -> None:
-    for name, socket_type, props in channel_socket_specs(channels):
-        props = dict(props)
-        props.pop('hide_value', None)
+    for name, socket_type, props in interface_socket_specs(channels):
         ir.add_socket('INPUT', socket_type, name, **props)
 
 
 def interface_outputs(ir: IR, channels) -> None:
-    for name, socket_type, _ in channel_socket_specs(channels):
+    for name, socket_type, _ in interface_socket_specs(channels):
         ir.add_socket('OUTPUT', socket_type, name)
 
 
@@ -343,9 +352,9 @@ def topological_order(start, ctx: CompileContext) -> list:
         visited.add(node.name)
         if not ctx.is_cached(node):
             for sock in node.inputs:
-                source = ctx.source(sock)
-                if source is not None:
-                    visit(source[0])
+                link = producing_link(sock)
+                if link is not None:
+                    visit(link.from_node)
         order.append(node)
 
     visit(start)
@@ -353,7 +362,7 @@ def topological_order(start, ctx: CompileContext) -> list:
 
 
 def build_ir(tree, *, bake_target=None) -> IR:
-    """Build the IR for *tree*, or for *bake_target*'s subtree when given."""
+    """Build the IR for *tree*, or for the subtree of the layer *bake_target* when given."""
     # The build only reads *tree*'s links, so one link index serves the
     # whole walk. A nested compile of a child tree installs its own index,
     # under its own key.
@@ -388,10 +397,11 @@ def _build_ir(tree, *, bake_target=None) -> IR:
 
     if bake_target is not None:
         out_id = ir.add_node('bake:out', 'NodeGroupOutput').id
-        for socket_name in ('Color', 'Alpha'):
-            ref = ctx.output_ref(bake_target, socket_name)
-            if ref is not None:
-                ir.link(ref, out_id, socket_name)
+        pair = ctx.output(stack_output(bake_target))
+        if pair is not None:
+            color, alpha = pair
+            ir.link(color, out_id, 'Color')
+            ir.link(alpha, out_id, 'Alpha')
     # Not part of the fingerprint. The bake reads subtree hashes from it.
     ir.ctx = ctx
     return ir

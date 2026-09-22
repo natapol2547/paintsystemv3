@@ -317,9 +317,11 @@ try:
         move_layer(tree.stack()[1].node, 'UP', 'MOVE_INTO')
 
     def relink_color_by_hand():
-        """A node editor edit that moves a Color link and leaves Alpha behind.
+        """A node editor edit that relinks the top two rows into a loop.
 
-        Odd but valid: the next stack edit repairs the alpha links.
+        The output reads the second row, the second row reads the top one,
+        and the top one still reads the second. The walks must stop at the
+        loop, and the artifact must still match a compile from scratch.
         """
         top, second = (item.node for item in tree.stack()[:2])
         output = tree.get_output_node()
@@ -362,9 +364,9 @@ try:
     step("moved into the folder", move_into_folder)
     step("folder removed", lambda: tree.remove_layer_node(held.pop('folder')))
 
-    section("hand edits and repair")
-    step("colour relinked by hand", relink_color_by_hand)
-    step("repaired by the next insert", lambda: tree.insert_layer_node(SOLID))
+    section("hand edits")
+    step("relinked into a loop by hand", relink_color_by_hand)
+    step("insert over the hand-made loop", lambda: tree.insert_layer_node(SOLID))
     step("forced recompile", lambda: core.compile_tree(tree, force=True))
 
     section("coverage")

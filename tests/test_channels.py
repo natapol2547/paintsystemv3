@@ -13,10 +13,11 @@ import sys
 import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import check, finish, guarded, register_addon, section  # noqa: E402
+from harness import check, finish, guarded, import_from, register_addon, section  # noqa: E402
 
 register_addon()
 ops = bpy.ops.paint_system
+compile_tree = import_from("compiler.core").compile_tree
 
 
 def new_tree(name):
@@ -31,13 +32,13 @@ def names(tree):
     return [channel.name for channel in tree.channels]
 
 
-def expected_sockets(channel_names):
-    return [name for channel in channel_names for name in (channel, f"{channel} Alpha")]
-
-
 def sockets_follow(tree):
-    """Whether the Group Input outputs and Group Output inputs match the channels, in order."""
-    want = expected_sockets(names(tree))
+    """Whether the Group Input outputs and Group Output inputs match the channels, in order.
+
+    Each channel is one RGBA socket; the compiled node group splits it into
+    the channel and its alpha.
+    """
+    want = names(tree)
     return ([s.name for s in tree.get_input_node().outputs] == want
             and [s.name for s in tree.get_output_node().inputs] == want)
 
@@ -73,10 +74,9 @@ def test_add():
           f"the new channel goes below the active one and becomes active {names(tree)}")
     check(tree.channels[1].type == 'FLOAT' and tree.channels[1].uuid, "it has its type and a uuid")
     check(sockets_follow(tree), "the group sockets follow the new channel")
-    inputs = tree.get_output_node().inputs
-    check(all(inputs[name].is_linked and inputs[name].links[0].from_node == tree.get_input_node()
-              for name in ("Rough", "Rough Alpha")),
-          "the new channel passes its input straight through")
+    check(fed_by(tree, "Rough") == tree.get_input_node(), "the new channel passes its input straight through")
+    check(all(s.bl_idname == 'NodeSocketColor' for s in tree.get_output_node().inputs),
+          "a float channel's socket is RGBA like every other")
 
     tree.active_channel_index = 0
     ops.add_channel('EXEC_DEFAULT', name="Mask")
@@ -121,9 +121,21 @@ def test_rename():
     check([item.node for item in tree.stack("Paint")] == [layer] and tree.stack("Color") == [],
           "each channel's stack reads from its own socket")
     second = tree.insert_layer_node('PaintSystemSolidColorLayerNode', "Color")
-    check(fed_by(tree, "Color") == second and fed_by(tree, "Color Alpha") == second
-          and fed_by(tree, "Paint") == layer and fed_by(tree, "Paint Alpha") == layer,
+    check(fed_by(tree, "Color") == second and fed_by(tree, "Paint") == layer,
           "a layer added to the new channel leaves the renamed one alone")
+
+
+def test_type():
+    section("changing a channel's type")
+    tree = new_tree("Channels Type")
+    layer = tree.insert_layer_node('PaintSystemSolidColorLayerNode', "Color")
+    tree.channels[0].type = 'FLOAT'
+    check(fed_by(tree, "Color") == layer and sockets_follow(tree), "a type change keeps the channel's links")
+    check(tree.get_output_node().inputs[0].bl_idname == 'NodeSocketColor', "the channel's socket stays RGBA")
+    compile_tree(tree)
+    outputs = {s.name: s.bl_socket_idname for s in tree.compiled.interface.items_tree if s.in_out == 'OUTPUT'}
+    check(outputs == {"Color": 'NodeSocketFloat', "Color Alpha": 'NodeSocketFloat'},
+          f"the compiled node group takes the new type, with the alpha beside it {outputs}")
 
 
 def test_move():
@@ -185,6 +197,7 @@ def test_remove():
 
 guarded(test_add)
 guarded(test_rename)
+guarded(test_type)
 guarded(test_move)
 guarded(test_remove)
 finish("CHANNELS TEST")

@@ -42,8 +42,8 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 
 from ..gpu_passes.core import UNIT_QUAD, offscreen_state, release_unused_sampler, unused_sampler
-from ..nodetree.stack_ops import (clip_base, feeding_link, feeds_clip_run,
-                                  layers_down_from, link_index)
+from ..nodetree.stack_ops import (below_input, clip_base, content_input, feeding_link,
+                                  feeds_clip_run, layers_down_from, link_index)
 from . import blend_glsl, derived
 from .core import PREMULTIPLIED, Refused, new_texture, storage_of
 
@@ -124,7 +124,7 @@ def plan_below(node) -> ChainPlan:
     """
     tree = node.id_data
     with link_index(tree):
-        return _plan_chain(node.inputs['Color'], set(), tree.get_input_node())
+        return _plan_chain(below_input(node), set(), tree.get_input_node())
 
 
 def _plan_chain(socket, visited: set[str], group_input) -> ChainPlan:
@@ -134,7 +134,7 @@ def _plan_chain(socket, visited: set[str], group_input) -> ChainPlan:
     # it, so without this check the plan would silently miss a layer.
     # The Group Input is the only node allowed under a channel. It is
     # the transparent backdrop the walk starts from anyway.
-    bottom = feeding_link(nodes[-1].inputs['Color'] if nodes else socket)
+    bottom = feeding_link(below_input(nodes[-1]) if nodes else socket)
     if bottom is not None and bottom.from_node != group_input:
         below = bottom.from_node
         raise Unsupported(f"'{below.name}' below is a {below.bl_label}, "
@@ -186,7 +186,7 @@ def _plan_layer(layer, positions, visited, group_input, *, holds_run: bool) -> L
     fill = TRANSPARENT
     uv_map = ""
     if ps_type == 'FOLDER':
-        content = _plan_chain(layer.inputs['Content Color'], visited, group_input)
+        content = _plan_chain(content_input(layer), visited, group_input)
     elif ps_type == 'SOLID_COLOR':
         red, green, blue, alpha = layer.fill_color
         fill = (red, green, blue, alpha)

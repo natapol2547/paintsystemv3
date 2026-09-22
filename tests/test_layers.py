@@ -63,8 +63,11 @@ def check_current(tree, label):
     check(core.artifact_fingerprint(tree) == core.build_ir(tree).fingerprint(), f"{label}: artifact is current")
 
 
-def check_alpha_mirrors(tree, label):
-    check(stack_ops.repair_alpha_links(tree) == 0, f"{label}: alpha links follow colour links")
+def check_one_link(tree, label):
+    fed = [link.to_socket for item in tree.stack()
+           for link in stack_ops.stack_output(item.node).links if stack_ops.is_slot(link.to_socket)]
+    check(len(fed) == len(tree.stack()) and len({socket.as_pointer() for socket in fed}) == len(fed),
+          f"{label}: every layer feeds one slot, and no slot is fed twice")
 
 
 compiles = []
@@ -133,7 +136,7 @@ try:
         check(layout(tree) == want, f"{label}: {layout(tree)}")
         check(compiles == [tree.name], f"{label}: compiled once {compiles}")
         check_current(tree, label)
-        check_alpha_mirrors(tree, label)
+        check_one_link(tree, label)
 
     tree = build("Leap")
     tree.move_layer_node(tree.nodes["B"], 'UP', 'SKIP')

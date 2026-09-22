@@ -29,25 +29,35 @@ def channel_alpha_name(channel_name: str) -> str:
     return f"{channel_name} Alpha"
 
 
-def channel_socket_specs(channels) -> list[tuple[str, str, dict]]:
-    """Socket layout implied by *channels*: (name, socket bl_idname, properties).
+def interface_socket_specs(channels) -> list[tuple[str, str, dict]]:
+    """The compiled tree's interface: (name, socket bl_idname, properties).
 
-    Every channel contributes a value socket and an alpha socket. The same
-    layout is used for the custom Group Input/Output nodes, for
-    PaintSystemGroupLayerNode sockets, and for the compiled tree interface.
+    Every channel contributes a socket of its own type and an alpha socket.
     """
     specs: list[tuple[str, str, dict]] = []
     for ch in channels:
-        socket_type = channel_socket_type(ch.type)
-        props = {'hide_value': True}
+        props = {}
         if ch.type == 'COLOR':
             props['default_value'] = (0.0, 0.0, 0.0, 0.0)
         elif ch.type == 'FLOAT':
             props['default_value'] = 0.0
-        specs.append((ch.name, socket_type, props))
-        specs.append((channel_alpha_name(ch.name), 'NodeSocketFloat',
-                      {'hide_value': True, 'default_value': 0.0}))
+        specs.append((ch.name, channel_socket_type(ch.type), props))
+        specs.append((channel_alpha_name(ch.name), 'NodeSocketFloat', {'default_value': 0.0}))
     return specs
+
+
+def channel_socket_specs(channels) -> list[tuple[str, str, dict]]:
+    """The Paint System tree's channel sockets: (name, socket bl_idname, properties).
+
+    The custom Group Input/Output nodes and PaintSystemGroupLayerNode use
+    this layout. Every link in a Paint System tree carries one RGBA value,
+    whatever the channel's type, so each channel is one colour socket. The
+    compiler splits it into the typed socket and the alpha socket of
+    ``interface_socket_specs``. The sockets are only ever linked, so they
+    hide their value fields.
+    """
+    return [(ch.name, 'NodeSocketColor', {'hide_value': True, 'default_value': (0.0, 0.0, 0.0, 0.0)})
+            for ch in channels]
 
 
 def get_next_unique_name(name: str, list_of_names: list[str]) -> str:

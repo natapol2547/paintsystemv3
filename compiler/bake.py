@@ -3,8 +3,9 @@
 In the compiled tree, a cached node and everything upstream of it are
 replaced by this image. The rest of the tree stays live.
 
-The compiler builds a temporary shader group whose outputs are the target
-node's live Color and Alpha, ignoring the node's own cache. A throwaway
+The compiler builds a temporary shader group whose Color and Alpha outputs
+are the two halves of the target node's live Color output, ignoring the
+node's own cache. A throwaway
 material sends that through an Emission shader. Cycles bakes it twice,
 once for colour and once for alpha, and numpy merges the two images.
 

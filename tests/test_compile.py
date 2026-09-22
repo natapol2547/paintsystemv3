@@ -61,7 +61,7 @@ try:
     gin, gout = tree.get_input_node(), tree.get_output_node()
     check(gin is not None and gout is not None, "io nodes created")
     check([c.name for c in tree.channels] == ['Color'], "default Color channel")
-    check([s.name for s in gout.inputs] == ['Color', 'Color Alpha'], "output sockets follow channel specs")
+    check([s.name for s in gout.inputs] == ['Color'], "one output socket per channel")
     check(gout.inputs['Color'].links[0].from_node == gin, "passthrough link input->output")
 
     section("first compile")
@@ -83,7 +83,8 @@ try:
     texs = compiled_nodes(tree, 'ShaderNodeTexImage')
     check(len(texs) == 1 and texs[0].image == image, "image texture bound to layer image")
     out = compiled_nodes(tree, 'NodeGroupOutput')[0]
-    check(out.inputs['Color'].is_linked and out.inputs['Color Alpha'].is_linked, "group output linked")
+    check(out.inputs['Color'].is_linked and out.inputs['Color Alpha'].is_linked,
+          "the artifact splits the channel into its colour and alpha outputs")
     iface = [(s.in_out, s.name) for s in art.interface.items_tree]
     check(('OUTPUT', 'Color') in iface and ('INPUT', 'Color Alpha') in iface, "interface sockets from channels")
     lib_count = len([ng for ng in bpy.data.node_groups if is_library_group(ng)])
@@ -134,14 +135,13 @@ try:
 
     section("channels")
     tree.create_channel('Rough', 'FLOAT')
-    check([s.name for s in gout.inputs] == ['Color', 'Color Alpha', 'Rough', 'Rough Alpha'],
-          "io sockets follow new channel")
+    check([s.name for s in gout.inputs] == ['Color', 'Rough'], "io sockets follow new channel")
     check(gout.inputs['Color'].links[0].from_node == img_layer, "existing links preserved on channel add")
     compile_tree(tree)
     iface = [(s.in_out, s.name, s.bl_socket_idname) for s in art.interface.items_tree]
     check(('OUTPUT', 'Rough', 'NodeSocketFloat') in iface, "float channel in interface")
     tree.channels[1].name = 'Roughness'
-    check([s.name for s in gout.inputs][2:] == ['Roughness', 'Roughness Alpha'], "channel rename renames sockets")
+    check([s.name for s in gout.inputs][1:] == ['Roughness'], "channel rename renames sockets")
     check(gout.inputs['Roughness'].links[0].from_node == gin, "rename keeps passthrough link")
 
     section("nested group")
@@ -151,7 +151,7 @@ try:
     child_solid.fill_color = (0.0, 1.0, 0.0, 1.0)
     group = tree.nodes.new('PaintSystemGroupLayerNode')
     group.node_tree = child
-    check([s.name for s in group.inputs] == ['Color', 'Color Alpha'], "group node sockets from child channels")
+    check([s.name for s in group.inputs] == ['Color'], "group node sockets from child channels")
     tree.links.new(img_layer.outputs['Color'], group.inputs['Color'])
     tree.links.new(group.outputs['Color'], gout.inputs['Color'])
     fp_before_child = compile_tree(tree)
@@ -168,6 +168,19 @@ try:
         check(artifact_fingerprint(child) != child_fp, "parent compile brings a stale child up to date")
     child.create_channel('Mask', 'FLOAT')
     check('Mask' in [s.name for s in group.outputs], "child channel change propagates to parent group node sockets")
+    group_id = f"{group.uuid}:group"
+    tree.links.new(group.outputs['Mask'], gout.inputs['Roughness'])
+    compile_tree(tree)
+    mask_feeds = [('Roughness', group_id, 'Mask'), ('Roughness Alpha', group_id, 'Mask Alpha')]
+    feeds = [feed for feed in output_feeds(tree) if feed[0].startswith('Roughness')]
+    check(feeds == mask_feeds, f"a float child channel feeds the parent's channel and its alpha ({feeds})")
+    # The child's artifact recreates a socket whose type changed, which
+    # drops the parent's links to it; the parent has to notice and relink.
+    child.channels['Mask'].type = 'COLOR'
+    compile_tree(tree)
+    feeds = [feed for feed in output_feeds(tree) if feed[0].startswith('Roughness')]
+    check(feeds == mask_feeds, f"retyping a child channel keeps the parent's links to it ({feeds})")
+    tree.links.new(gin.outputs['Roughness'], gout.inputs['Roughness'])
 
     section("normalize")
     dup = tree.nodes.new('PaintSystemSolidColorLayerNode')
@@ -307,13 +320,11 @@ try:
     rerouted.links.new(routed_layer.outputs['Color'], near.inputs[0])
     rerouted.links.new(near.outputs[0], far.inputs[0])
     rerouted.links.new(far.outputs[0], routed_out.inputs['Color'])
-    # With only the colour routed, the alpha has to come from behind the reroutes.
-    rerouted.links.remove(routed_out.inputs['Color Alpha'].links[0])
     check(force_compile_ok(rerouted), "a tree with reroutes compiles")
     blend_id = f"{routed_layer.uuid}:blend"
     feeds = output_feeds(rerouted)
     check(feeds == [('Color', blend_id, 'Color'), ('Color Alpha', blend_id, 'Alpha')],
-          f"reroutes compile as a direct link, and alpha follows the colour through them ({feeds})")
+          f"reroutes compile as a direct link that carries the colour and the alpha ({feeds})")
 
     foreign = rerouted.nodes.new('NodeGroupInput')
     rerouted.links.new(foreign.outputs[0], routed_layer.inputs['Color'])

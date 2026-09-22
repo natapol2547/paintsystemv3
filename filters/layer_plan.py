@@ -45,7 +45,7 @@ import bpy
 from ..context import get_ps_object, uses_tree
 from ..gpu_passes.core import gpu_known
 from ..gpu_passes.texel_map import resolve_uv_map
-from ..nodetree.stack_ops import consumer_slot, feeding_link, is_layer, link_index
+from ..nodetree.stack_ops import below_input, consumer_input, feeding_link, is_layer, link_index
 from . import composite
 from .core import Refused
 
@@ -95,10 +95,9 @@ def channel_of(tree, node):
     with link_index(tree):
         current = node
         while True:
-            slot = consumer_slot(current)
-            if slot is None:
+            socket = consumer_input(current)
+            if socket is None:
                 return None
-            socket = slot[0]
             if socket.node == output:
                 return next((channel for channel in tree.channels
                              if channel.name == socket.name), None)
@@ -119,7 +118,7 @@ def resolve_input(context, tree, node) -> InputPlan:
     if channel is not None and channel.type != 'COLOR':
         raise Refused("Filter layers only work on colour channels")
 
-    link = feeding_link(node.inputs['Color'])
+    link = feeding_link(below_input(node))
     if link is None:
         raise Refused(f"There is nothing below '{node.name}' to filter")
     source = link.from_node

@@ -46,13 +46,15 @@ def folder(tree, name, target=None):
     return node
 
 
-def check_alpha_mirrors(tree, label):
-    check(stack_ops.repair_alpha_links(tree) == 0, f"{label}: alpha links already follow colour links")
+def check_one_link(tree, label):
+    """Every layer in the stack feeds exactly one slot, through its Color output."""
     for item in tree.stack():
-        slot = stack_ops.consumer_slot(item.node)
-        alpha_in = slot[1] if slot else None
-        ok = alpha_in is not None and alpha_in.links and alpha_in.links[0].from_socket == item.node.outputs['Alpha']
-        check(ok, f"{label}: {item.node.name} alpha feeds its consumer's alpha")
+        node = item.node
+        slots = [link.to_socket for link in stack_ops.stack_output(node).links
+                 if stack_ops.is_slot(link.to_socket)]
+        check(len(slots) == 1 and slots[0] == stack_ops.consumer_input(node),
+              f"{label}: {node.name} feeds one slot")
+        check([socket.name for socket in node.outputs] == ["Color"], f"{label}: {node.name} has one output")
 
 
 def composite(tree):
@@ -86,7 +88,10 @@ try:
     check(not tree.nodes["B"].inputs['Color'].is_linked, "bottom layer of a folder has nothing below it")
     check([n.name for n in stack_ops.descendants(f)] == ["G", "C", "B"], "descendants include nested content")
     check(tree.nodes["C"].location.y > g.location.y > a.location.y, "folder content is laid out above its folder")
-    check_alpha_mirrors(tree, "after inserts")
+    check([socket.name for socket in a.inputs] == ["Color", "Mask"], "a layer takes Color, then Mask")
+    check([socket.name for socket in f.inputs] == ["Color", "Content Color", "Mask"],
+          "a folder takes Color, then Content Color, with Mask last")
+    check_one_link(tree, "after inserts")
 
     section("insert into folders")
     e = tree.nodes.new(SOLID)
@@ -97,16 +102,16 @@ try:
     h = folder(tree, "H")
     solid(tree, "I", target=h)
     check(layout(tree)[:2] == [("H", 0, None, 0), ("I", 1, "H", 0)], "insert into an empty folder")
-    check_alpha_mirrors(tree, "after folder inserts")
+    check_one_link(tree, "after folder inserts")
 
     section("remove")
     tree.remove_layer_node(f)
     check([name for name, *_ in layout(tree)] == ["H", "I", "D", "A"], f"removing a folder removes its content {layout(tree)}")
     check(all(name not in tree.nodes for name in "FGCBE"), "folder content nodes are deleted")
-    check(stack_ops.consumer_slot(a)[0].node == d, "the gap closes around the removed folder")
+    check(stack_ops.consumer_input(a).node == d, "the gap closes around the removed folder")
     tree.remove_layer_node(tree.nodes["I"])
     check(not h.inputs['Content Color'].is_linked, "removing the only child empties the folder")
-    check_alpha_mirrors(tree, "after removes")
+    check_one_link(tree, "after removes")
     core.compile_tree(tree)
     check(core.artifact_fingerprint(tree) == core.build_ir(tree).fingerprint(), "compiles after the edits")
 
@@ -132,24 +137,86 @@ try:
     check_pixel("an empty folder is transparent", composite(nested), want)
     nested.remove_layer_node(empty)
 
-    section("alpha follows colour")
+    section("group layer compositing")
+    child = new_tree("Child")
+    solid(child, "Top", (0.0, 0.0, 1.0, 0.5))
+    parent = new_tree("Parent")
+    base = solid(parent, "Base", RED)
+    group = parent.nodes.new('PaintSystemGroupLayerNode')
+    group.node_tree = child
+    parent.links.new(base.outputs['Color'], group.inputs['Color'])
+    parent.links.new(group.outputs['Color'], parent.get_output_node().inputs['Color'])
+    check_pixel("a group layer composites its tree over the colour and alpha it takes in",
+                composite(parent), want)
+
+    section("hand-made links")
     output = nested.get_output_node()
     nested.links.new(inner.outputs['Color'], output.inputs['Color'])
-    check(output.inputs['Color Alpha'].links[0].from_node == box, "a hand-made colour link leaves the alpha link alone")
     core.flush_now()
     check(core.artifact_fingerprint(nested) == core.build_ir(nested).fingerprint(),
           "the hand edit compiles on the next tick")
-    check_pixel("the output alpha follows the colour link", composite(nested), (0.0, 0.0, 1.0, 0.5))
-    check(stack_ops.repair_alpha_links(nested) == 1, "repair fixes the one stale alpha link")
-    check(output.inputs['Color Alpha'].links[0].from_node == inner, "repaired alpha link comes from the colour source")
+    check_pixel("one link carries the colour and the alpha", composite(nested), (0.0, 0.0, 1.0, 0.5))
     nested.links.remove(output.inputs['Color'].links[0])
-    check_pixel("an unlinked colour reads no alpha", composite(nested), (0.0, 0.0, 0.0, 0.0))
-    stack_ops.repair_alpha_links(nested)
-    check(not output.inputs['Color Alpha'].is_linked, "repair unlinks the alpha of an unlinked colour")
-    with core.suspend_compile(nested):
-        nested.links.new(box.outputs['Color'], output.inputs['Color'])
-        nested.links.new(box.outputs['Alpha'], output.inputs['Color Alpha'])
+    check_pixel("an unlinked channel is transparent", composite(nested), (0.0, 0.0, 0.0, 0.0))
+    nested.links.new(box.outputs['Color'], output.inputs['Color'])
     check_pixel("relinking the folder restores the stack", composite(nested), want)
+
+    section("mask links")
+    # A layer can also feed another layer's Mask. That link is not part of
+    # the stack, so edits must neither follow it nor remove it. It is made
+    # before the stack link here, so it comes first in the output's links.
+    masked = new_tree("Masked")
+    top = solid(masked, "Top")
+    bottom = masked.nodes.new(SOLID)
+    bottom.name = "Bottom"
+    masked.links.new(bottom.outputs['Color'], top.inputs['Mask'])
+    with core.suspend_compile(masked):
+        stack_ops.insert_below(masked, bottom, top)
+    check(stack_ops.consumer_input(bottom) == top.inputs['Color'], "the stack skips a link into a mask")
+    mid = solid(masked, "Mid", target=bottom)
+    check([name for name, *_ in layout(masked)] == ["Top", "Mid", "Bottom"], "a layer inserts above the masking layer")
+    check(masked.move_layer_node(mid, 'DOWN', 'SKIP'), "the layer above it moves down")
+    check([name for name, *_ in layout(masked)] == ["Top", "Bottom", "Mid"], f"past it {layout(masked)}")
+    check(top.inputs['Mask'].is_linked and top.inputs['Mask'].links[0].from_node == bottom,
+          "the mask link survives the insert and the move")
+    check(masked.move_layer_node(bottom, 'DOWN', 'SKIP'), "the layer feeding the mask moves down")
+    check([name for name, *_ in layout(masked)] == ["Top", "Mid", "Bottom"], f"past Mid {layout(masked)}")
+    check(top.inputs['Mask'].is_linked and top.inputs['Mask'].links[0].from_node == bottom,
+          "moving the layer that feeds a mask keeps the mask link")
+    check(masked.move_layer_node(bottom, 'UP', 'SKIP'), "and moves back up")
+
+    def bottom_feeds():
+        return sorted((link.to_node.name, link.to_socket.identifier)
+                      for link in stack_ops.stack_output(bottom).links)
+
+    fed = bottom_feeds()
+    check(not masked.move_layer_node(bottom, 'UP', 'SKIP'),
+          "a layer cannot move above the layer it masks, which would loop the mask link")
+    check(not masked.move_layer_node(top, 'DOWN', 'SKIP'),
+          "nor can the masked layer move below the layer that masks it")
+    check([name for name, *_ in layout(masked)] == ["Top", "Bottom", "Mid"] and bottom_feeds() == fed,
+          f"the refused moves leave the stack and the links as they were {layout(masked)}")
+    check_one_link(masked, "with a mask link")
+    core.compile_tree(masked)
+    blend = next(n for n in masked.compiled.nodes if n.get("ps_identifier") == f"{top.uuid}:blend")
+    check(blend.inputs['Mask'].is_linked, "the compiled mask reads the layer")
+
+    reroute = masked.nodes.new('NodeReroute')
+    masked.links.new(bottom.outputs['Color'], reroute.inputs[0])
+    masked.links.new(reroute.outputs[0], top.inputs['Mask'])
+    check(not stack_ops.is_slot(reroute.inputs[0]), "a reroute is never a stack slot")
+    # Down and back up leaves the reroute link first on the output, so the
+    # insert below has to skip it to find the stack.
+    check(masked.move_layer_node(bottom, 'DOWN', 'SKIP') and masked.move_layer_node(bottom, 'UP', 'SKIP'),
+          "the layer feeding the reroute moves down and back")
+    check(reroute.inputs[0].is_linked and reroute.inputs[0].links[0].from_node == bottom,
+          "a move keeps the reroute link")
+    extra = solid(masked, "Extra", target=bottom)
+    check([name for name, *_ in layout(masked)] == ["Top", "Extra", "Bottom", "Mid"],
+          f"so an insert above the layer feeding it goes into the stack {layout(masked)}")
+    check(reroute.inputs[0].links[0].from_node == bottom, "and the reroute still reads the same layer")
+    masked.remove_layer_node(extra)
+    check(reroute.inputs[0].is_linked, "a remove leaves it too")
 
     section("editing state stays out of the shader")
     base = nested.nodes["Base"]

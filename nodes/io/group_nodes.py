@@ -4,6 +4,7 @@ from bpy.props import BoolProperty
 from bpy.utils import register_classes_factory
 from ..base_node import PaintSystemBaseNode
 from ...common import blender_icon, icon_kwargs
+from ...nodetree.stack_ops import channel_sockets
 
 
 class PaintSystemGroupNode(PaintSystemBaseNode):
@@ -21,8 +22,8 @@ class PaintSystemGroupInputNode(PaintSystemGroupNode, Node):
 
     def emit(self, ctx):
         nid = ctx.emit_node(self, 'in', 'NodeGroupInput')
-        for sock in self.outputs:
-            ctx.set_output(self, sock.name, nid, sock.name)
+        for channel, sock in channel_sockets(self.outputs, self.id_data.channels):
+            ctx.set_channel_output(sock, channel, nid)
 
 
 class PaintSystemGroupOutputNode(PaintSystemGroupNode, Node):
@@ -43,10 +44,8 @@ class PaintSystemGroupOutputNode(PaintSystemGroupNode, Node):
 
     def emit(self, ctx):
         nid = ctx.emit_node(self, 'out', 'NodeGroupOutput')
-        for sock in self.inputs:
-            ref = ctx.upstream(sock)
-            if ref is not None:
-                ctx.link(ref, nid, sock.name)
+        for channel, sock in channel_sockets(self.inputs, self.id_data.channels):
+            ctx.link_channel(sock, channel, nid)
 
 
 classes = (

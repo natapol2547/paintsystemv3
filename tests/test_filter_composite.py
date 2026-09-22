@@ -240,7 +240,7 @@ if available():
 
         section("what falls back to the bake")
         # Any link into Mask, from a layer below so the graph stays acyclic.
-        tree.links.new(bottom.outputs['Alpha'], over_run.inputs['Mask'])
+        tree.links.new(bottom.outputs['Color'], over_run.inputs['Mask'])
         try:
             composite.plan_below(top)
             check(False, "a linked mask plans")

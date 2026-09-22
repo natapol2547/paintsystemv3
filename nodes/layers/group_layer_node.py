@@ -6,8 +6,8 @@ from bpy.utils import register_classes_factory
 
 from ..base_node import PaintSystemBaseNode
 from ...common import blender_icon, icon_kwargs
-from ...props.channel import channel_socket_specs
-from ...nodetree.stack_ops import tree_references
+from ...props.channel import channel_socket_specs, interface_socket_specs
+from ...nodetree.stack_ops import channel_sockets, tree_references
 from ...nodetree.tree import sync_sockets
 from ...compiler.core import compile_tree, mark_dirty
 
@@ -24,8 +24,9 @@ def _on_tree_changed(self, context):
 class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
     """A layer that wraps another PaintSystemNodeTree.
 
-    The wrapped tree's channels become this node's socket pairs. At compile
-    time the wrapped tree is compiled first and instanced as a ShaderNodeGroup.
+    Each channel of the wrapped tree becomes one RGBA input and one output
+    on this node. At compile time the wrapped tree is compiled first and
+    instanced as a ShaderNodeGroup.
     """
     bl_idname = 'PaintSystemGroupLayerNode'
     bl_label = 'Group'
@@ -84,10 +85,17 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
         compile_tree(child)
         gid = ctx.emit_node(self, 'group', 'ShaderNodeGroup',
                             properties={'node_tree': child.compiled})
-        for sock in self.inputs:
-            ctx.connect_input(sock, gid, sock.name)
-        for sock in self.outputs:
-            ctx.set_output(self, sock.name, gid, sock.name)
+        # When a child channel changes type, its compiled socket is made
+        # again and Blender drops the links to the old one. This node's
+        # links in the Paint System tree stay the same, so the child's
+        # socket types go into the fingerprint too. Otherwise nothing would
+        # rebuild this tree and the dropped links would stay missing.
+        ctx.ir.meta[f"interface:{gid}"] = [(name, socket_type) for name, socket_type, _
+                                           in interface_socket_specs(child.channels)]
+        for channel, sock in channel_sockets(self.inputs, child.channels):
+            ctx.link_channel(sock, channel, gid)
+        for channel, sock in channel_sockets(self.outputs, child.channels):
+            ctx.set_channel_output(sock, channel, gid)
 
 
 classes = (
