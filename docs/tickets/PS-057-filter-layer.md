@@ -595,6 +595,10 @@ The job holds the tree name, node name and uuid, and re-fetches the node
 when it needs it (PS-090's datablock rule). `cancel_all()` runs from
 `on_restore_pre`, so before every undo, redo and file load, and also
 when Update starts, from the Cancel button, and on unregister. The
+build generator itself still holds the node and tree it started with,
+so each tick first checks the node is still there and drops the job
+(`_drop`) if the layer or its tree was removed; its commit would
+otherwise write through freed memory and crash Blender. The
 commit packs, stamps and calls `mark_dirty(tree)` — the repo's existing
 timer-safe compile path. A pixel write the timer makes after an undo
 step was pushed is lost on a Ctrl+Z together with its stamp, which

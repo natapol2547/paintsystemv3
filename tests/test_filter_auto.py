@@ -452,6 +452,57 @@ if available():
         bpy.data.node_groups.remove(lonely)
         core.flush_now()
 
+        section("removed part way")
+        # A build holds the node and the tree it started with. Once either
+        # is removed, its commit would write through freed memory and
+        # crash Blender, so the next tick has to drop it first.
+
+        def doomed_layer(name):
+            """A new tree with a filter layer whose first refresh is two units in.
+
+            The first unit compiles the layer, which is still out of date,
+            and that pokes the job. The second tick spends the poke, so a
+            removal after it is noticed only by looking for the node.
+            """
+            doomed = bpy.data.node_groups.new(name, 'PaintSystemNodeTree')
+            doomed.initialize()
+            with core.suspend_compile(doomed):
+                doomed.insert_layer_node(SOLID)
+                layer = doomed.insert_layer_node(FILTER)
+                layer.resolution = SIZE
+            core.flush_now()
+            layer_job._deadline = 0.0
+            layer_job._tick()
+            layer_job._tick()
+            return doomed, layer
+
+        def tick_out():
+            """Tick until the job ends, and say whether it ended at once."""
+            ticks = 0
+            while layer_job.running() and ticks < 2000:
+                layer_job._tick()
+                ticks += 1
+            return ticks == 1
+
+        budget, layer_job.BUDGET = layer_job.BUDGET, 0.0
+        try:
+            doomed, layer = doomed_layer("Auto Doomed")
+            check(layer_job.running_on(layer), "a new layer's refresh is in flight")
+            doomed.remove_layer_node(layer)
+            core.flush_now()
+            check(tick_out(), "removing the layer drops it at the next tick")
+            bpy.data.node_groups.remove(doomed)
+
+            doomed, layer = doomed_layer("Auto Doomed Tree")
+            check(layer_job.running_on(layer), "another new layer's refresh is in flight")
+            bpy.data.node_groups.remove(doomed)
+            core.flush_now()
+            check(tick_out(), "and removing its tree drops that one")
+        finally:
+            layer_job.BUDGET = budget
+        core.flush_now()
+        check(pump(), "with nothing left for the job to do")
+
         section("a refresh that does not settle")
         # A build whose stamp cannot satisfy the check that asked for it
         # would rebuild forever. The counter that stops that is cleared by

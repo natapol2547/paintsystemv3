@@ -43,7 +43,9 @@ result. It must never make Blender feel broken, so it has these limits.
 
 Undo, redo and a file read call `cancel_all`. A job holds the tree and
 the node it started with, and those references do not survive a restore
-(PS-090), so no job may survive one either. A pixel write the timer made
+(PS-090), so no job may survive one either. For the same reason, a job
+whose layer or tree was removed is dropped by the next tick before it
+runs another unit (`_drop`). A pixel write the timer made
 after an undo step was pushed is lost on Ctrl+Z together with its stamp.
 The layer is then out of date and schedules another refresh, so this
 heals itself. Keep it that way.
@@ -218,6 +220,8 @@ def cancel_all() -> None:
 
 def _tick():
     global _job, _poked
+    if _job is not None and _node_of(_job) is None:
+        _drop(_job)
     if _job is not None and _overtaken(_job):
         _restart(_job)
     if _job is None:
@@ -270,6 +274,24 @@ def _restart(job) -> None:
     _uncount(job)
     _restarts[job.uuid] = _restarts.get(job.uuid, 0) + 1
     log.debug("restarting the refresh of %s: what it read has moved", job.node_name)
+
+
+def _drop(job) -> None:
+    """Drop *job*, because its layer or its tree is gone.
+
+    The build holds the node and the tree it started with. After either
+    is removed, the next unit, and above all the commit, would write
+    through a pointer to freed memory and crash Blender. Closing the
+    build is safe, because that only frees its textures. A renamed layer
+    looks gone too. It still needs a build, and the pass that follows
+    finds it under its new name.
+    """
+    global _job
+    _job = None
+    job.close()
+    _builds.pop(job.uuid, None)
+    _restarts.pop(job.uuid, None)
+    log.debug("dropped the refresh of %s: the layer is gone", job.node_name)
 
 
 def _uncount(job) -> None:
