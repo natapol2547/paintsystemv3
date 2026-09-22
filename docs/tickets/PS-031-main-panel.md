@@ -292,6 +292,24 @@ Other preferences that change this panel:
   log level (`utils/logging.py:29`). No v2 panel draws a compiled-info
   block.
 
+Registered but never drawn:
+
+- `paint_system.new_material` "New Material"
+  (`operators/utils_operators.py:92-103`, REGISTER and UNDO, in the
+  `classes` tuple at `operators/utils_operators.py:518`). No panel,
+  menu or keymap calls it, so it is dead, and the main panel is not
+  missing a button for it. The commented-out button in the legacy
+  material row (`panels/main_panels.py:188`) is
+  `object.material_slot_add`, not this operator. It is a
+  `MultiMaterialOperator` (`operators/common.py:32-77`), so its
+  `process_material` runs for the Paint System object and, with
+  `multiple_objects` on by default, each selected mesh, skipping an
+  object whose active material was already processed. It adds a
+  material slot, creates a material named "New Material", and makes
+  `bpy.data.materials[-1]` the object's active material. That is the
+  last material by name, which is not necessarily the one just
+  created. Nothing needs to be ported.
+
 ## v3 design
 
 - Rewrite `panels/main_panels.py::PAINTSYSTEM_PT_main_3dview` to the v2

@@ -29,6 +29,41 @@ So the thing this ticket adds — an effect that reads the whole composite
 below it and stays editable — did not exist in v2 and has no behaviour to
 match.
 
+### v2 UI
+
+All paths are relative to `~/paintsystem`.
+
+- There is no filter layer to draw. `LAYER_TYPE_ENUM` has no filter
+  type (`paintsystem/data.py:99-111`). The Add Layer menu
+  (`MAT_MT_AddLayerMenu`, `panels/layers_panels.py:843-884`) offers
+  Folder, Solid Color, the Image, Gradient, Texture, Adjustment and
+  Geometry submenus, Fake Light, Attribute Color, Random Color and
+  Custom Layer, and nothing that filters.
+- The image filters are reached through `MAT_MT_ImageFilterMenu`:
+  "Filters" in the header of the layer settings "Image" section, and
+  "Apply Image Filters" in the bake box. PS-051 and PS-053 describe the
+  menu, the dialogs and what they write. One qualification to the
+  summary above: with Use Baked on, the filters read the channel's
+  bake image, not the layer's pixels (`operators/common.py:303-322`).
+  Blur and Sharpen then write their result into the active layer's
+  image, while the Brush Painter writes it into the bake
+  (`operators/image_operators.py:197, 227, 396-399`). Invert Colors
+  and Fill Image, the other two items of the same menu, change the
+  image in place rather than a copy
+  (`operators/image_operators.py:35-42, 143-158`).
+- Dead filter data. `paintsystem/data.py` defines `FILTER_TYPE_ENUM`
+  (`:197-201`) with "Blur" (BLUR), "Edge Enhance" (EDGE_ENHANCE) and
+  "Sharpen" (SHARPEN), and a `Filter` PropertyGroup (`:2989-3005`) with
+  `name`, `type` "Filter Type" over that enum, `radius` "Radius"
+  (float, default 1.0) and `iterations` "Iterations" (int, default 1).
+  `Filter` is not in the module's `classes` tuple (`:3304-3318`), no
+  `CollectionProperty` or `PointerProperty` refers to it, and nothing
+  else reads the enum, so both are dead. Edge Enhance has no
+  implementation anywhere in v2:
+  `operators/image_filters/basic_filters.py` holds only the blur, the
+  sharpen and a `smooth_image` (`basic_filters.py:86-100`) that
+  nothing calls.
+
 ## Decisions
 
 Four open questions were settled before the work started, and the design

@@ -9,6 +9,102 @@ Epic F. Size M. Milestone M3.
 unsharp mask against a sigma 1.0 blur with the original alpha restored.
 Parameters: radius/sigma, strength.
 
+### v2 UI
+
+All paths are relative to `~/paintsystem`. Line numbers without a file
+refer to `operators/image_operators.py`.
+
+Menu. Blur is reached only through `MAT_MT_ImageFilterMenu`
+(`panels/layers_panels.py:686-705`, bl_label "Image Filter Menu",
+registered at `panels/layers_panels.py:930`). Its poll is `get_image`
+(`panels/layers_panels.py:677-684`): the active channel's bake image
+when Use Baked is on, else the active layer's image. It sets
+`operator_context = 'INVOKE_REGION_WIN'` and lists, in order:
+
+- `paint_system.brush_painter` "Brush Painter" (BRUSH_DATA), see PS-053.
+- `paint_system.gaussian_blur` "Gaussian Blur" (FILTER).
+- `paint_system.invert_colors` "Invert Colors" (MOD_MASK).
+- `paint_system.fill_image` "Fill Image" (SNAP_FACE).
+
+Two buttons open it, both `wm.call_menu` with
+`name = "MAT_MT_ImageFilterMenu"`:
+
+- "Filters" (no icon), in a left-aligned row in the header of the layer
+  settings "Image" section. That section is
+  `layout.panel("image_settings_panel", default_closed=True)` with the
+  label "Image" and the custom `image` icon, drawn for IMAGE layers
+  only. The button is in the header, so it shows whether the section
+  is open or closed (`panels/layers_panels.py:304-306, 331-333`). The
+  section sits inside `MAT_PT_Layers`'s "Layer Settings" section
+  (`layout.panel("layer_settings_panel")`, open by default,
+  `panels/layers_panels.py:671-674`), and the whole layer settings
+  layout is disabled while the layer is locked
+  (`panels/layers_panels.py:174`). The layer settings are not drawn
+  while Use Baked is on.
+- "Apply Image Filters" (IMAGE_DATA), in the bake box `MAT_PT_Layers`
+  draws for a mesh whose active channel uses its bake image. The box's
+  column holds `image_node_settings` for the bake image, this button,
+  and `paint_system.delete_bake_image` "Delete" (TRASH). The panel then
+  returns, so no layer list or layer settings follow
+  (`panels/layers_panels.py:633-641`).
+
+Sharpen has no entry point. `paint_system.sharpen_image` is registered
+(`:465-470`), but no menu, button or keymap refers to it; the only
+keymap entries are the Shift+RMB panel, `color_sample` and
+`toggle_brush_erase_alpha` (`keymaps.py:37-77`). It could be run only
+from Python or from Blender's operator search, which lists operators
+that are in no menu only when Developer Extras is on.
+
+Dialogs. Each `invoke` is a bare `invoke_props_dialog(self)`: default
+width, titled with the bl_label, no property split, one field
+(`:200-205, 230-235`).
+
+- "Gaussian Blur" (`paint_system.gaussian_blur`, `:178-205`, REGISTER
+  and UNDO): `gaussian_sigma` "Gaussian Sigma", float, default 3.0,
+  range 0.1-10.0, `step=0.1` (`:184`; Blender reads a float step in
+  hundredths, so the increment is 0.001).
+- "Sharpen Image" (`paint_system.sharpen_image`, `:208-235`, REGISTER
+  and UNDO): `sharpen_amount` "Sharpen Amount", float, default 1.0,
+  range 0.1-10.0, `step=0.1` (`:214`). There is no radius field: the
+  unsharp mask always blurs at sigma 1.0
+  (`operators/image_filters/basic_filters.py:69`). "Radius/sigma,
+  strength" above is Blur's sigma and Sharpen's amount; no v2 dialog
+  has both.
+
+What OK does (`:186-198, 216-228`):
+
+- Neither `invoke` calls `invoke_get_image`, so `image_name` stays
+  empty and `get_image` (`operators/common.py:303-322`) picks the
+  image: the channel's bake image when Use Baked is on, else the active
+  layer's image. Without one it reports "Layer Does not have an image"
+  (ERROR) and cancels. A dirty image is first saved, or packed when it
+  has no file (`operators/common.py:319-320`,
+  `paintsystem/image.py:108-119`).
+- The filter runs per UDIM tile on the float pixels, clamped to 0-1
+  (`operators/image_filters/basic_filters.py:34, 55-63`). A
+  single-tile image is read through `Image.pixels`; a multi-tile one is
+  saved and each tile file read back, and the result is written back
+  through tile files the same way (`paintsystem/image.py:151-243,
+  340-394`). Blur multiplies colour by alpha, blurs all four channels
+  and divides back, giving black colour where the blurred alpha is at
+  most 1e-6 (`basic_filters.py:33-49`). The kernel is cut off at
+  `max(1, int(2 * sigma))` texels and the edge is clamped
+  (`basic_filters.py:6-21`). Sharpen clamps its result to 0-1 and
+  restores the original alpha (`basic_filters.py:70-73`).
+- The result is written into `image.copy()`, and the copy is assigned
+  to `active_layer.image` (`:195-197, 225-227`). The original image
+  stays in the file with one user fewer. The assignment runs the
+  layer's `update_node_tree` (`paintsystem/data.py:1013-1017`).
+- Bug: with Use Baked on, the source is the bake image, but the
+  filtered copy still goes to `active_layer.image`. The layer's own
+  image is replaced by a blurred copy of the bake, and the bake image,
+  which is what the channel shows while Use Baked is on, is unchanged.
+  With no active layer the assignment raises. The Brush Painter
+  handles the same case correctly (`:396-399`).
+- `smooth_image` (`basic_filters.py:86-100`, a blur at sigma
+  `0.8 + 0.2 * amount`) is defined but nothing calls it, so it is
+  dead.
+
 ## v3 design
 
 - Blur: a separable fragment pass run once per axis, as

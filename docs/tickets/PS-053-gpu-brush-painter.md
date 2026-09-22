@@ -15,6 +15,143 @@ Per-tile numpy stamping with positions/scales/rotations derived from the
 image gradient field; UV-seam index mirrors stamps across seams. Minutes
 at 4K.
 
+### v2 UI
+
+All paths are relative to `~/paintsystem`. Line numbers without a file
+refer to `operators/image_operators.py`; "core" means
+`operators/image_filters/brush_painter_core.py`.
+
+Entry point: "Brush Painter" (BRUSH_DATA), the first item of
+`MAT_MT_ImageFilterMenu` (`panels/layers_panels.py:686-705`). The menu
+opens from "Filters" in the header of the layer settings "Image"
+section, or from "Apply Image Filters" in the bake box while Use Baked
+is on. PS-051's v2 UI section describes both.
+
+Operator `paint_system.brush_painter` (`:238-455`), bl_label "Brush
+Painter", REGISTER and UNDO. `invoke` (`:402-404`) calls
+`invoke_get_image` (`operators/common.py:293-301`), which stores the
+name of the channel's bake image when Use Baked is on, else of the
+active layer's image. It then opens `invoke_props_dialog` at the
+default width.
+
+Dialog (`draw`, `:406-455`), property split on and decorate off, three
+boxes in order:
+
+1. Brush source, one column:
+   - `brush_mode` "Brush Mode", a dropdown (`:255-265`): "Brush Preset"
+     (PRESET, BRUSH_DATA, the default), "Brush Folder" (FOLDER, custom
+     `folder`), "Single Brush" (SINGLE, GREASEPENCIL), "Circular"
+     (DEFAULT, custom `channel`).
+   - PRESET: `presets` as "Preset", a dropdown of the folder names in
+     `operators/image_filters/brush_presets` ("Gouache Short 1",
+     "Gouache Short 2"). The list is read once, when the class is
+     defined, in unsorted `os.listdir` order, and the enum has no
+     explicit default, so the first entry the file system returns is
+     the default (`:267-271`,
+     `operators/image_filters/__init__.py:6-13`).
+   - FOLDER: `brush_folder_path` "Brush Folder" (DIR_PATH).
+   - SINGLE: `brush_texture_path` "Single Brush Texture" (FILE_PATH).
+   - DEFAULT adds nothing.
+2. A centred row with the label "Brush Parameters" (BRUSH_DATA), then
+   one column:
+   - `brush_coverage_density` as "Coverage Density", slider, default
+     0.7, range 0.1-1.0.
+   - `steps` "Steps", default 4, range 1-20.
+   - `use_hsv_shift` "Use HSV Shift", default off. When on, "Hue
+     Shift", "Saturation Shift" and "Value Shift" follow as sliders,
+     0-1, default 0. They are SKIP_SAVE, so they reset on every call
+     (`:288-291`). They are jitter, not an offset: each stamp's
+     sampled colour gets a random hue shift within plus or minus half
+     of Hue Shift times 360 degrees, and random saturation and value
+     shifts within plus or minus half of their values (core
+     `:411-486`, the draws at `:442-457`).
+   - `use_random_seed` "Use Random Seed", default off. When on,
+     `random_seed` "Random Seed" follows, default 42, range 0-1000000.
+   - `custom_image_gradient` "Use Custom Image Gradient", default off.
+     When on, a `prop_search` of `custom_image_name` over
+     `bpy.data.images` follows, text "Image" (`:293-294, 434-436`).
+   - `use_uv_seam_duplication` "Use UV Seam Duplication", default off.
+   - `use_random_rotation` "Random Rotation", default off. When on,
+     `random_rotation_range` "Rotation Range" follows as a slider,
+     default 360, range 0-360; a stamp deviates by up to half of it
+     either way (`:300-311`).
+3. A centred row with the label "Advanced Settings" (TOOL_SETTINGS),
+   then `split(factor=0.5)` with property split off:
+   - Left column: `min_brush_scale` "Min Scale" (default 0.03) and
+     `max_brush_scale` "Max Scale" (default 0.1), sliders over
+     0.001-1.0, then `gradient_threshold` "Gradient Threshold", slider,
+     default 0, range 0-1.
+   - Right column: `start_opacity` "Start Opacity" (default 0.4) and
+     `end_opacity` "End Opacity" (default 1.0), sliders over 0-1, then
+     `gaussian_sigma` "Gaussian Sigma", an integer field, default 3,
+     range 0-10.
+
+No field sets a fixed rotation: `brush_rotation_offset` stays 0.0
+(core `:87`).
+
+What OK does (`execute`, `:334-400`):
+
+- Brush source (`:361-375`, core `:1290-1295`). PRESET loads every
+  png, jpg, jpeg, bmp and tiff in the preset folder (core `:286-315`).
+  FOLDER and SINGLE use their path when it exists; otherwise they
+  report "Brush folder not found: <path>" or "Brush texture not found:
+  <path>" (WARNING) and fall back; an empty path falls back without a
+  report. DEFAULT, and every fallback, paints with a soft circle with
+  a linear falloff, built as a 50-pixel mask and resized per step like
+  any brush (core `:247-254, 1249-1250`). A brush image that loads
+  with four channels uses its alpha as the mask, otherwise its grey
+  value, and a non-square one is padded to a square (core
+  `:256-284`).
+- Steps (core `:1237-1271`, `:375-392`). Step k of n paints at a scale
+  interpolated from Max Scale down to Min Scale and an opacity from
+  Start to End Opacity; with one step, Min Scale at End Opacity. The
+  brush size is that scale times the tile's shorter side. The stamp
+  count is the tile area times Coverage Density over 0.7 times the
+  brushes' average covered area, clamped to at least 50 and at most
+  an eighth of the tile area. A stamp is skipped when the blurred
+  colour at its centre has alpha at most 1e-6, or when the gradient
+  magnitude there, normalised by the tile's strongest, is below
+  Gradient Threshold (core `:991-1005, 365-371`).
+- Target. A copy of the image `get_image` returns is painted. The copy
+  replaces the channel's bake image when Use Baked is on, else the
+  active layer's image (`:383, 396-399`). Unlike Blur and Sharpen,
+  this handles the bake case.
+- Custom image gradient (`:337-339`, core `:1302-1306`). The image
+  named in the field is read; an empty or unknown name silently falls
+  back to the painted image's own gradient. For each UDIM tile whose
+  number also exists in the custom image, that tile is blurred,
+  premultiplied, at Gaussian Sigma. Its luma is then blurred again and
+  passed through Sobel (core `:942-947, 359-373`). That magnitude and
+  angle drive the Gradient Threshold skip and the stroke angle (core
+  `:1000-1007`). The stamp colour is still sampled from the painted
+  image's own blur (core `:991`). The custom image is not resized: it
+  is indexed with the painted image's texel coordinates, so a smaller
+  image raises an index error and a larger one contributes only its
+  top-left region.
+- Seam duplication (`:313-332, 384-393`, core `:1326-1327`). The UV map
+  comes from the active layer: PS_UVMap for AUTO when it exists, the
+  layer's `uv_map_name` for UV, and none for any other coordinate type,
+  in which case no seam index is built and nothing says so. The index
+  is built from `ps_object.data`, the original mesh rather than the
+  evaluated one (core `:699-722`). In bake mode it still uses the
+  active layer's UV map, not the channel's `bake_uv_map`.
+- Progress. The callback calls `wm.progress_begin(0, total)` at the
+  first stamp and `progress_update` after every stamp, skipped ones
+  included, which drives the cursor counter; `progress_end` runs after
+  (`:377-395`, core `:1359-1361`).
+- Seed. With Use Random Seed on, NumPy's global generator is seeded
+  with `random_seed + step` before each step's positions are drawn
+  (core `:1254-1255`). Every step of every tile is planned this way
+  before any stamp is drawn (core `:1313-1324`), so tiles of the same
+  size get the same positions. Brush choice, colour jitter and
+  rotation jitter are then drawn from the same global stream while
+  stamping (core `:1340, 442-457, 1009-1011`). The colour jitter is
+  drawn before the skip checks and the rotation after them (core
+  `:991-1011`), so a stamp skipped for transparency or the threshold
+  draws no rotation. With Random Rotation on, a change to the picture
+  therefore changes the brush and jitter of every later stamp, but not
+  where any stamp lands. With the toggle off, every run differs.
+
 ## v3 design
 
 Decided on 2026-09-21. The painter is a filter layer kind, Painterly,
