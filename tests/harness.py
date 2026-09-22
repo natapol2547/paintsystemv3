@@ -124,11 +124,13 @@ def bake_plane():
     return obj
 
 
-def bake_group(node_group, *, color="Color", alpha="Color Alpha", inputs=None, size=8):
+def bake_group(node_group, *, color="Color", alpha="Color Alpha", inputs=None, size=8, shader=None):
     """Bake a shader group's colour and alpha outputs on the bake plane.
 
     Returns ``size * size`` RGBA rows (linear values, row-major from the
     bottom-left). ``inputs`` sets unlinked group node input values by name.
+    With *shader*, the group's shader output of that name drives the
+    material instead, and the rows hold the light it emits, with alpha 1.
     """
     import numpy as np
 
@@ -151,8 +153,9 @@ def bake_group(node_group, *, color="Color", alpha="Color Alpha", inputs=None, s
     obj.data.materials.clear()
     obj.data.materials.append(mat)
 
+    sockets = (color, alpha) if shader is None else (shader,)
     images = []
-    for name in (color, alpha):
+    for name in sockets:
         image = bpy.data.images.new(f"PS Test Bake {name}", size, size, alpha=True, float_buffer=True)
         image.colorspace_settings.name = 'Non-Color'
         images.append(image)
@@ -169,10 +172,13 @@ def bake_group(node_group, *, color="Color", alpha="Color Alpha", inputs=None, s
             o.select_set(o == obj)
         view_layer.objects.active = obj
         with bpy.context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
-            for socket, image in zip((color, alpha), images):
-                for link in list(emission.inputs['Color'].links):
-                    nt.links.remove(link)
-                nt.links.new(group.outputs[socket], emission.inputs['Color'])
+            for socket, image in zip(sockets, images):
+                if shader is None:
+                    for link in list(emission.inputs['Color'].links):
+                        nt.links.remove(link)
+                    nt.links.new(group.outputs[socket], emission.inputs['Color'])
+                else:
+                    nt.links.new(group.outputs[socket], output.inputs['Surface'])
                 target.image = image
                 bpy.ops.object.bake(type='EMIT')
         px = []
@@ -181,7 +187,7 @@ def bake_group(node_group, *, color="Color", alpha="Color Alpha", inputs=None, s
             image.pixels.foreach_get(buf)
             px.append(buf.reshape(size * size, 4))
         rgba = px[0].copy()
-        rgba[:, 3] = px[1][:, 0]
+        rgba[:, 3] = px[1][:, 0] if shader is None else 1.0
         return rgba
     finally:
         # Give the selection back so operators that act on the active

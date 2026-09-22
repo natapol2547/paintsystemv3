@@ -8,6 +8,7 @@ from bpy.utils import register_classes_factory
 
 from .gpu_passes.texel_map import resolve_uv_map
 from .nodetree.stack_ops import StackItem, tree_references
+from .props.preview import PaintSystemPreviewDisplay
 from .props.stencil import PaintSystemStencilMeshBackup
 
 
@@ -45,6 +46,9 @@ class PaintSystemSceneSettings(bpy.types.PropertyGroup):
     # The stencil UV maps that the selection replaced, so they can be put
     # back (`selection/stencil.py`).
     stencil_meshes: CollectionProperty(type=PaintSystemStencilMeshBackup)
+    # The display from before a channel preview, so it can be put back
+    # (`props/preview.py`).
+    preview_display: PointerProperty(type=PaintSystemPreviewDisplay)
 
 
 class PaintSystemMaterialSettings(bpy.types.PropertyGroup):

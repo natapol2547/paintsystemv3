@@ -1,6 +1,6 @@
 import bpy
 from bpy.types import NodeTree
-from bpy.props import CollectionProperty, IntProperty, PointerProperty, StringProperty
+from bpy.props import BoolProperty, CollectionProperty, IntProperty, PointerProperty, StringProperty
 from bpy.utils import register_classes_factory
 
 from bpy_extras.node_utils import connect_sockets
@@ -8,6 +8,7 @@ from bpy_extras.node_utils import connect_sockets
 from . import stack_ops
 from ..common import blender_icon
 from ..props.channel import PaintSystemChannel, channel_defaults, channel_socket_specs
+from ..props.preview import follow_preview_display
 from ..props.selection import PaintSystemSelection
 from ..compiler.core import ensure_tree_uuid, mark_dirty, ps_trees, suspend_compile, tree_updated
 
@@ -85,6 +86,17 @@ def _set_active_layer_index(tree, index: int) -> None:
     update_active_image(bpy.context)
 
 
+def _on_active_channel_changed(tree, context):
+    # A preview shows the active channel, so it moves to the new one.
+    if tree.preview_channel:
+        mark_dirty(tree)
+        follow_preview_display(tree.active_channel)
+
+
+def _on_preview_channel_changed(tree, context):
+    mark_dirty(tree)
+
+
 class PaintSystemNodeTree(NodeTree):
     bl_idname = 'PaintSystemNodeTree'
     bl_label = 'Paint System'
@@ -93,8 +105,16 @@ class PaintSystemNodeTree(NodeTree):
 
     version: IntProperty(name="Version", default=2)
     channels: CollectionProperty(type=PaintSystemChannel)
-    active_channel_index: IntProperty(name="Active Channel", default=0)
+    active_channel_index: IntProperty(name="Active Channel", default=0, update=_on_active_channel_changed)
     uuid: StringProperty(name="UUID")
+    # Materials link the Preview output only while
+    # ``paint_system.preview_channel`` shows it (PS-061).
+    preview_channel: BoolProperty(
+        name="Preview Channel",
+        description="Give the compiled shader a Preview output that shows the active channel's values",
+        default=False,
+        update=_on_preview_channel_changed,
+    )
 
     # The selection on the active layer image, stored as the operations
     # that built it (PS-091). It is document data, so Blender's undo covers

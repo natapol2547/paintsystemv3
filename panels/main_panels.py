@@ -91,12 +91,15 @@ def _draw_channels_section(layout, context, tree):
     _draw_channel_settings(body, context, tree)
 
 
-def _draw_paint_mode_row(layout, context):
+def _draw_paint_mode_row(layout, context, tree):
     row = layout.row(align=True)
     row.scale_x = 1.7
     row.scale_y = 1.7
     row.operator("paint_system.toggle_paint_mode", text="Toggle Paint Mode",
                  depress=context.mode == 'PAINT_TEXTURE', **icon_kwargs('paintbrush'))
+    channel = tree.active_channel
+    icon = SOCKET_ICONS.get(channel.type, 'HIDE_OFF') if channel is not None else 'HIDE_OFF'
+    row.operator("paint_system.preview_channel", text="", depress=tree.preview_channel, **icon_kwargs(icon))
     row.operator("wm.save_mainfile", text="", **icon_kwargs('save'))
 
 
@@ -183,7 +186,7 @@ class PAINTSYSTEM_PT_main_3dview(Panel):
             return
 
         if obj is not None:
-            _draw_paint_mode_row(layout, context)
+            _draw_paint_mode_row(layout, context, tree)
         layout.separator()
         _draw_channels_section(layout, context, tree)
         draw_paint_sections(layout, context)

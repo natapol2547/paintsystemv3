@@ -5,7 +5,7 @@ from bpy.utils import register_classes_factory
 from ..base_node import PaintSystemBaseNode
 from ...common import blender_icon, icon_kwargs
 from ...nodetree.stack_ops import channel_sockets
-from ...props.channel import interface_socket_specs
+from ...props.channel import PREVIEW_OUTPUT, interface_socket_specs
 
 
 class PaintSystemGroupNode(PaintSystemBaseNode):
@@ -54,18 +54,49 @@ class PaintSystemGroupOutputNode(PaintSystemGroupNode, Node):
             warning_box.label(text="Inactive Output", **icon_kwargs('ERROR'))
 
     def emit(self, ctx):
+        tree = self.id_data
         nid = ctx.emit_node(self, 'out', 'NodeGroupOutput')
+        previewed = tree.active_channel if tree.preview_channel else None
         base = None
-        for channel, sock in channel_sockets(self.inputs, self.id_data.channels):
+        for channel, sock in channel_sockets(self.inputs, tree.channels):
             if channel.use_alpha:
-                ctx.link_channel(sock, channel, nid)
-                continue
-            # The stack of a channel without alpha is flattened onto the
-            # channel's input. A Group Input of its own reads that input
-            # even when the tree has no Group Input node.
-            if base is None:
-                base = ctx.emit_node(self, 'base', 'NodeGroupInput')
-            ctx.link_flattened(sock, channel, nid, (base, channel.name))
+                # An unlinked channel is transparent, so it has no colour.
+                color, alpha = ctx.link_channel(sock, channel, nid) or (None, 0.0)
+            else:
+                # The stack of a channel without alpha is flattened onto the
+                # channel's input. A Group Input of its own reads that input
+                # even when the tree has no Group Input node.
+                if base is None:
+                    base = ctx.emit_node(self, 'base', 'NodeGroupInput')
+                color, alpha = ctx.link_flattened(sock, channel, nid, (base, channel.name)), None
+            if channel == previewed:
+                with ctx.ir.adding_preview():
+                    self._emit_preview(ctx, nid, channel, color, alpha)
+
+    def _emit_preview(self, ctx, nid, channel, color, alpha):
+        """Show *channel*'s *color* as light on the Preview output, so the scene's lights do not change it.
+
+        *color* is a ref, or None for a transparent channel. With an
+        *alpha*, a checker shows through where the colour is not opaque, as
+        an image editor shows transparency.
+        """
+        if color is not None and channel.type == 'FLOAT':
+            # A link into a float socket turns the colour into the value
+            # the material's float output gets, so the preview shows that.
+            value = ctx.emit_node(self, 'preview:value', 'ShaderNodeMath', properties={'operation': 'ADD'},
+                                  inputs={1: {'default_value': 0.0}})
+            ctx.link(color, value, 0)
+            color = (value, 0)
+        if alpha is not None:
+            checker = (ctx.emit_node(self, 'preview:checker', 'ShaderNodeTexChecker', inputs={
+                'Color1': {'default_value': (0.2, 0.2, 0.2, 1.0)},
+                'Color2': {'default_value': (0.4, 0.4, 0.4, 1.0)},
+            }), 'Color')
+            # A transparent channel has no colour, so only the checker shows.
+            color = checker if color is None else ctx.mix_colors(self, 'preview:over', alpha, checker, color)
+        emission = ctx.emit_node(self, 'preview', 'ShaderNodeEmission')
+        ctx.link(color, emission, 'Color')
+        ctx.link((emission, 0), nid, PREVIEW_OUTPUT)
 
 
 classes = (

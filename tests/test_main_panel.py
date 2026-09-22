@@ -18,6 +18,7 @@ from harness import check, finish, guarded, import_from, register_addon, section
 
 register_addon()
 main_panels = import_from("panels.main_panels")
+icon_kwargs = import_from("common").icon_kwargs
 find_material_group_node = import_from("context").find_material_group_node
 # The Brush and Color sections ask the active tool for the paint mode,
 # which needs a 3D view. They are not what this test looks at.
@@ -99,6 +100,31 @@ def test_the_panel_follows_the_mesh():
           f"and no Setup button for the empty (drew {operators(calls)})")
     check(material.name in labels(calls),
           f"but the cube's material and tree field (labels {labels(calls)})")
+
+
+def test_preview_button():
+    section("the paint row has a Preview Channel button")
+    tree = cube.active_material.paint_system.tree
+
+    def paint_row():
+        calls = []
+        main_panels._draw_paint_mode_row(RecordingLayout(calls), bpy.context, tree)
+        return calls
+
+    calls = paint_row()
+    check(operators(calls) == ["paint_system.toggle_paint_mode", "paint_system.preview_channel", "wm.save_mainfile"],
+          f"it sits between Toggle Paint Mode and Save ({operators(calls)})")
+    button = next(kwargs for name, args, kwargs in calls
+                  if name == "operator" and args[0] == "paint_system.preview_channel")
+    check(button.get("text") == "" and button.get("depress") is False, "icon only, and raised")
+    color_icon = icon_kwargs('color_socket')
+    check(all(button.get(key) == value for key, value in color_icon.items()),
+          f"with the active channel's socket icon ({button}, want {color_icon})")
+    tree.preview_channel = True
+    button = next(kwargs for name, args, kwargs in paint_row()
+                  if name == "operator" and args[0] == "paint_system.preview_channel")
+    check(button.get("depress") is True, "depressed while the tree previews")
+    tree.preview_channel = False
 
 
 def panels(calls):
@@ -203,6 +229,7 @@ def test_channel_settings():
 
 
 guarded(test_the_panel_follows_the_mesh)
+guarded(test_preview_button)
 guarded(test_sections_collapse)
 guarded(test_channel_settings)
 

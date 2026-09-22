@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +30,7 @@ class IRSocket:
     socket_type: str
     name: str
     properties: dict[str, Any] = field(default_factory=dict)
+    preview: bool = False
 
 
 @dataclass
@@ -54,13 +56,27 @@ class IR:
         self.nodes: dict[str, IRNode] = {}
         self.links: list[IRLink] = []
         self.meta: dict[str, Any] = {}
+        # The nodes of the channel preview (PS-061). Only the tree's own
+        # material reads them, so a parent tree's hash leaves them out.
+        self.preview_nodes: set[str] = set()
+        self._adding_preview = False
 
     # -- authoring ------------------------------------------------------
 
-    def add_socket(self, in_out: str, socket_type: str, name: str, **props: Any) -> IRSocket:
-        sock = IRSocket(in_out, socket_type, name, dict(props))
+    def add_socket(self, in_out: str, socket_type: str, name: str, *,
+                   preview: bool = False, **props: Any) -> IRSocket:
+        sock = IRSocket(in_out, socket_type, name, dict(props), preview)
         self.sockets.append(sock)
         return sock
+
+    @contextmanager
+    def adding_preview(self):
+        """Mark the nodes added inside this block as the channel preview's."""
+        self._adding_preview = True
+        try:
+            yield
+        finally:
+            self._adding_preview = False
 
     def add_node(
         self,
@@ -81,6 +97,8 @@ class IR:
             outputs={k: dict(v) for k, v in (outputs or {}).items()},
         )
         self.nodes[identifier] = node
+        if self._adding_preview:
+            self.preview_nodes.add(identifier)
         return node
 
     def set_input(self, identifier: str, socket: SocketId, **props: Any) -> None:
@@ -96,17 +114,20 @@ class IR:
 
     # -- hashing --------------------------------------------------------
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self, *, preview: bool = True) -> dict[str, Any]:
         """Return everything the fingerprint covers, as plain JSON data.
 
         Nodes and links are sorted. So two IRs that describe the same tree
-        give the same payload, whatever order they were emitted in.
+        give the same payload, whatever order they were emitted in. With
+        *preview* False, the channel preview's socket, nodes and links are
+        left out.
         """
+        skipped = set() if preview else self.preview_nodes
         return {
             "meta": dict(self.meta),
             "sockets": [
                 [s.in_out, s.socket_type, s.name, _serialize(s.properties)]
-                for s in self.sockets
+                for s in self.sockets if preview or not s.preview
             ],
             "nodes": {
                 nid: [
@@ -115,16 +136,16 @@ class IR:
                     _serialize(n.inputs),
                     _serialize(n.outputs),
                 ]
-                for nid, n in sorted(self.nodes.items())
+                for nid, n in sorted(self.nodes.items()) if nid not in skipped
             },
             "links": sorted(
                 [l.from_id, str(l.from_socket), l.to_id, str(l.to_socket)]
-                for l in self.links
+                for l in self.links if l.from_id not in skipped and l.to_id not in skipped
             ),
         }
 
-    def fingerprint(self) -> str:
-        return hash_payload(self.payload())
+    def fingerprint(self, *, preview: bool = True) -> str:
+        return hash_payload(self.payload(preview=preview))
 
     # -- applying -------------------------------------------------------
 

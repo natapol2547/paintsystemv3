@@ -2,6 +2,7 @@ from bpy.utils import register_submodule_factory
 
 submodules = (
     "channel",
+    "preview",
     "selection",
     "stencil",
 )

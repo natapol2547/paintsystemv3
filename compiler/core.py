@@ -26,7 +26,7 @@ from .ir import IR, Ref, SocketId, hash_payload, _serialize
 from .library import MIX_IN_A_COLOR, MIX_IN_B_COLOR, MIX_IN_FACTOR, MIX_OUT_COLOR
 from .profile import phase
 from ..nodetree.stack_ops import feeding_link, feeds_clip_run, link_index, producing_link, stack_output
-from ..props.channel import channel_alpha_name, interface_socket_specs
+from ..props.channel import PREVIEW_OUTPUT, channel_alpha_name, interface_socket_specs
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +103,9 @@ def normalize_all_trees() -> None:
         if tree.uuid in seen:
             tree.uuid = str(_uuid.uuid4())
             tree.compiled = None
+            # The preview outputs in the materials keep the old uuid, so
+            # the other tree keeps the preview and this copy has none.
+            tree.preview_channel = False
         seen.add(tree.uuid)
 
 
@@ -225,11 +228,12 @@ class CompileContext:
         self.link_or_set(pair[0] if pair is not None else _copy_value(socket.default_value),
                          to_id, to_socket)
 
-    def link_channel(self, socket, channel, to_id: str) -> None:
+    def link_channel(self, socket, channel, to_id: str) -> tuple[Ref, Ref] | None:
         """Link what feeds *socket* into *channel*'s two sockets on the IR node *to_id*.
 
-        An unlinked *socket* links nothing, so *to_id* keeps the defaults
-        of the compiled interface. Without ``use_alpha`` the channel has no
+        Returns the (colour, alpha) refs it linked. An unlinked *socket*
+        links nothing and returns None, so *to_id* keeps the defaults of
+        the compiled interface. Without ``use_alpha`` the channel has no
         alpha socket, and the alpha half is dropped.
         """
         pair = self._upstream(socket)
@@ -238,8 +242,9 @@ class CompileContext:
             self.link(color, to_id, channel.name)
             if channel.use_alpha:
                 self.link(alpha, to_id, channel_alpha_name(channel.name))
+        return pair
 
-    def link_flattened(self, socket, channel, to_id: str, base: Ref) -> None:
+    def link_flattened(self, socket, channel, to_id: str, base: Ref) -> Ref:
         """Link what feeds *socket* into *channel*'s socket on *to_id*, laid over *base*.
 
         For a channel without ``use_alpha`` at the Group Output, where the
@@ -250,20 +255,26 @@ class CompileContext:
         without the base, and its soft edges would otherwise show their
         colour at full strength. Over a black base this is the same as
         multiplying the colour by its alpha. An unlinked *socket* is an
-        empty stack, so only *base* shows.
+        empty stack, so only *base* shows. Returns the ref it linked.
         """
         pair = self._upstream(socket)
         if pair is None:
             self.link(base, to_id, channel.name)
-            return
+            return base
         color, alpha = pair
-        mix = self.emit_node(socket.node, f"flatten:{socket.identifier}", 'ShaderNodeMix', properties={
+        flat = self.mix_colors(socket.node, f"flatten:{socket.identifier}", alpha, base, color)
+        self.link(flat, to_id, channel.name)
+        return flat
+
+    def mix_colors(self, node, role: str, factor: Ref | Any, a: Ref, b: Ref) -> Ref:
+        """Emit a mix from colour *a* to colour *b* by *factor*, and return its result."""
+        mix = self.emit_node(node, role, 'ShaderNodeMix', properties={
             'data_type': 'RGBA', 'blend_type': 'MIX', 'clamp_factor': True, 'clamp_result': False,
         })
-        self.link(alpha, mix, MIX_IN_FACTOR)
-        self.link(base, mix, MIX_IN_A_COLOR)
-        self.link(color, mix, MIX_IN_B_COLOR)
-        self.link((mix, MIX_OUT_COLOR), to_id, channel.name)
+        self.link_or_set(factor, mix, MIX_IN_FACTOR)
+        self.link(a, mix, MIX_IN_A_COLOR)
+        self.link(b, mix, MIX_IN_B_COLOR)
+        return (mix, MIX_OUT_COLOR)
 
     # -- caching --------------------------------------------------------
 
@@ -368,9 +379,12 @@ def interface_inputs(ir: IR, channels) -> None:
         ir.add_socket('INPUT', socket_type, name, **props)
 
 
-def interface_outputs(ir: IR, channels) -> None:
-    for name, socket_type, _ in interface_socket_specs(channels):
+def interface_outputs(ir: IR, tree) -> None:
+    for name, socket_type, _ in interface_socket_specs(tree.channels):
         ir.add_socket('OUTPUT', socket_type, name)
+    # Last, so turning a preview on or off moves no other socket.
+    if tree.preview_channel:
+        ir.add_socket('OUTPUT', 'NodeSocketShader', PREVIEW_OUTPUT, preview=True)
 
 
 def topological_order(start, ctx: CompileContext) -> list:
@@ -415,7 +429,7 @@ def _build_ir(tree, *, bake_target=None) -> IR:
     # those inputs are unlinked, which reads as an empty stack.
     interface_inputs(ir, tree.channels)
     if bake_target is None:
-        interface_outputs(ir, tree.channels)
+        interface_outputs(ir, tree)
         start = tree.get_output_node()
     else:
         ir.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
@@ -482,6 +496,21 @@ def artifact_fingerprint(tree) -> str:
 
 def compile_tree(tree, *, force: bool = False) -> str:
     """Bring ``tree.compiled`` up to date. Returns the IR fingerprint."""
+    return _compile_tree(tree, force)[1]
+
+
+def compile_wrapped_tree(tree) -> str:
+    """Bring a tree that a group layer wraps up to date, and return what the layer hashes.
+
+    That is the IR fingerprint without the channel preview, which the
+    parent tree never reads. So previewing the wrapped tree leaves the
+    parent's caches and filter layers valid.
+    """
+    ir, fingerprint = _compile_tree(tree, False)
+    return ir.fingerprint(preview=False) if tree.preview_channel else fingerprint
+
+
+def _compile_tree(tree, force: bool) -> tuple[IR, str]:
     global last_build_stats
     with phase("normalize", tree):
         normalize_tree(tree)
@@ -497,7 +526,7 @@ def compile_tree(tree, *, force: bool = False) -> str:
         artifact[ARTIFACT_FINGERPRINT_KEY] = fingerprint
     else:
         last_build_stats = None
-    return fingerprint
+    return ir, fingerprint
 
 
 # ── Scheduling ───────────────────────────────────────────────────────

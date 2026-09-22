@@ -9,7 +9,7 @@ from ...common import blender_icon, icon_kwargs
 from ...props.channel import channel_socket_specs
 from ...nodetree.stack_ops import channel_sockets, tree_references
 from ...nodetree.tree import sync_sockets
-from ...compiler.core import compile_tree, mark_dirty
+from ...compiler.core import compile_tree, compile_wrapped_tree, mark_dirty
 
 
 def is_ps_node_tree_poll(self, node_tree: bpy.types.NodeTree):
@@ -76,7 +76,7 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
         """
         if not self.node_tree:
             return []
-        return [compile_tree(self.node_tree)]
+        return [compile_wrapped_tree(self.node_tree)]
 
     def emit(self, ctx):
         child = self.node_tree

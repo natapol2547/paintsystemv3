@@ -6,6 +6,7 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 from bpy.utils import register_classes_factory
 
 from ..common import is_newer_than
+from .preview import follow_preview_display
 
 
 CHANNEL_SOCKET_TYPES = [
@@ -47,6 +48,11 @@ def channel_socket_type(channel_type: str) -> str:
 
 def channel_alpha_name(channel_name: str) -> str:
     return f"{channel_name} Alpha"
+
+
+# The compiled output that shows the active channel while it is previewed
+# (PS-061). No channel can have this name.
+PREVIEW_OUTPUT = "Preview"
 
 
 # The range of a float interface socket that has no limits.
@@ -126,7 +132,8 @@ def get_next_unique_name(name: str, list_of_names: list[str]) -> str:
 
 
 def _other_channel_names(channel) -> list[str]:
-    return [item.name for item in channel.id_data.channels if item != channel]
+    """The names *channel* cannot take: the other channels', and the preview output's."""
+    return [item.name for item in channel.id_data.channels if item != channel] + [PREVIEW_OUTPUT]
 
 
 def _set_name_transform(self, new_value, curr_value, is_set):
@@ -156,6 +163,13 @@ def _on_channel_changed(self, context):
     tree.on_channels_changed()
 
 
+def _on_color_space_changed(self, context):
+    # The colour space picks the view transform of a preview.
+    tree = self.id_data
+    if tree.preview_channel and tree.active_channel == self:
+        follow_preview_display(self)
+
+
 class PaintSystemChannel(bpy.types.PropertyGroup):
     name: StringProperty(
         name="Name",
@@ -182,9 +196,10 @@ class PaintSystemChannel(bpy.types.PropertyGroup):
     )
     color_space: EnumProperty(
         name="Color Space",
-        description="How new images in this channel store their values",
+        description="How new images in this channel store their values, and how a preview shows them",
         items=CHANNEL_COLOR_SPACES,
         default='COLOR',
+        update=_on_color_space_changed,
     )
     use_range: BoolProperty(
         name="Limit Range",
