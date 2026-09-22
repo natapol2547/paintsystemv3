@@ -497,7 +497,15 @@ if available():
                                        f"{node.stale_reason!r}")
         check(pump() and stamp(node) == was, "and the job has nothing to build")
 
-        bpy.ops.ed.undo_push(message="reopened")
+        # A background session reopens with undo off until the first push.
+        # A windowed one reopens with no window in the script's context,
+        # and the push needs one to find the screen.
+        windows = bpy.context.window_manager.windows
+        if len(windows):
+            with bpy.context.temp_override(window=windows[0]):
+                bpy.ops.ed.undo_push(message="reopened")
+        else:
+            bpy.ops.ed.undo_push(message="reopened")
         undo_pixels.write_pixels(picture.image, [0.2, 0.7, 0.3, 1.0] * 64)
         core.flush_now()
         layer_job.cancel_all()
