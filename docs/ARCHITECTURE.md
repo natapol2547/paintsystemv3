@@ -42,10 +42,9 @@ PaintSystemNodeTree  --compile-->  IR  --NodeTreeBuilder-->  ShaderNodeTree (tre
    keeps the value of any input the IR does not set, so an emitter sets
    an input on every compile or never. `IR.meta` holds facts the artifact
    depends on that no node or link records; it is hashed with the rest
-   and never applied. A group layer stores its child's interface socket
-   types there, because a child channel that changes type gets a new
-   compiled socket, Blender drops the parent's links to the old one, and
-   nothing else in the parent's IR would change to rebuild them.
+   and never applied. The builder retypes an interface socket in place
+   when its type changes. It keeps its identifier, so the links to it in
+   materials and in parent trees survive.
 
 The builder writes a value only when RNA does not already hold it (floats
 compared as float32, datablocks by identity), because every write on the
@@ -128,7 +127,10 @@ alpha) pair of IR references, keyed by node uuid and socket identifier
 keeps `<channel>` and `<channel> Alpha` sockets, so materials still see
 the colour and alpha separately. Channel sockets in the Paint System tree
 are always `NodeSocketColor`; only the compiled interface follows the
-channel type.
+channel type. A channel with `use_alpha` off (PS-005) has no alpha socket
+on either side: the Group Input gives alpha 1, so its stack starts from an
+opaque base, and the Group Output lays the result over the channel's input
+by its alpha (`link_flattened`) instead of dropping the alpha.
 
 Moves are computed from the same walk. `movement_options(items, node,
 direction)` lists what up or down can mean next to folders (skip a

@@ -2,6 +2,12 @@
 
 Epic A. Size M. Milestone M2 (needed by templates in M1 for `use_alpha`).
 
+## Status
+
+Done: Use Alpha, Color Space, Limit Range, the base value in the channel
+list and the Channel Settings section. The v3 design below describes the
+code as it is. The vector options are PS-006.
+
 ## v2 behaviour
 
 `Channel` (`paintsystem/data.py:2300-2490`) has:
@@ -245,33 +251,118 @@ Behaviour the UI implies:
 
 ## v3 design
 
-- Add to `PaintSystemChannel`: `use_alpha` (default True for COLOR, False
-  otherwise), `color_space`, `use_max_min`, `factor_min`, `factor_max`,
-  `default_value` (FloatVector size 4, used as the interface input default).
+Properties of `PaintSystemChannel` (`props/channel.py`):
+
+- `use_alpha` "Use Alpha". Its RNA default is True, so channels saved
+  before the option existed keep their alpha sockets. `create_channel`
+  sets it from the type through `channel_defaults`: on for COLOR, off for
+  FLOAT and VECTOR. A later type change leaves it alone, because the user
+  may have set it.
+- `color_space` Color / Non-Color, set from the type the same way. An
+  image layer added to a Non-Color channel gets a Non-Color image
+  (`image_colorspace`). PS-061 should read it for the preview's view
+  transform, and PS-007 for bake images. Changing it leaves existing images
+  alone: giving painted bytes another colour space reinterprets them, it
+  does not convert them.
+- `use_range` "Limit Range", `range_min` "Min" and `range_max` "Max", for
+  FLOAT channels. They replace v2's `use_max_min`, `factor_min` and
+  `factor_max`, whose labels did not say what is limited. The interface
+  input gets subtype FACTOR and the range, so the material's input is a
+  slider; off, it is NONE without limits. Min and max are sorted, since
+  nothing stops a user from setting min above max. The range is a soft
+  limit: it bounds the slider's drag, while a typed, scripted or linked
+  value outside it is kept (checked in 4.2, 5.2 and 5.3). Blender clamps
+  no value when the range changes, and the shader never clamps. A
+  subtype change keeps the socket's identifier, value and links.
+- No `default_value`. The value a stack starts from is the material group
+  node's input, as in v2. A copy on the channel would drift from it, and
+  a tree shared by several materials can start from a different value in
+  each.
+
+Compiled interface:
+
 - The Paint System tree has one RGBA socket per channel (PS-098), so
-  `use_alpha` touches no socket there. It changes only the compiled
-  interface (`interface_socket_specs` in `props/channel.py`) and the two
-  places that cross it, `CompileContext.link_channel` and
-  `set_channel_output`. With it off, neither side of the compiled group
-  has a `<name> Alpha` socket, the Group Input feeds alpha 1 into the
-  bottom of the stack as in v2, and the Group Output drops the alpha
-  half of what reaches it.
-- `interface_inputs`/`interface_outputs` set subtype `FACTOR` and min/max
-  when `use_max_min`, and `NONE` otherwise. Colour channels with
-  `color_space == 'NONCOLOR'` are still `NodeSocketColor`; the value only
-  affects bake images and the isolate-channel view transform.
-- Alpha clamp: emit one `ShaderNodeClamp` on each channel's alpha before the
-  group output (role `"<channel uuid>:alpha_clamp"`).
-- The default value edited in the channel list is the material group
-  node's input socket, as in v2. `interface_inputs` writes
-  `default_value` from the channel so a freshly linked group starts with
-  it.
+  `use_alpha` touches no socket there. It changes the compiled interface
+  (`interface_socket_specs`) and the places that cross it:
+  `CompileContext.set_channel_output`, `link_channel` and
+  `link_flattened`. With it off, neither side of the compiled group has
+  a `<name> Alpha` socket and the Group Input gives alpha 1, so the stack
+  starts from an opaque base, as in v2. Blend modes such as Multiply then
+  act on the base. The Group Input's `hash_parts` holds each channel's
+  interface specs, keyed by socket identifier, so a layer cache above it
+  goes stale when these options change, but not on a rename or a move.
+- At the Group Output, a channel without alpha is flattened onto its
+  input: a Mix node lays the colour over the compiled group's own
+  `<name>` input, by the alpha (`link_flattened`). An unlinked channel is
+  an empty stack, so the input comes out as it is. v2 drops the alpha
+  instead. Normal layers keep an opaque base opaque, so the mix changes
+  nothing there. A filter layer does not keep it opaque: it replaces the
+  stack with pixels filtered without the base, so without the mix a
+  blurred stroke would show its colour at full strength out to the last
+  pixel of its soft edge. Multiplying by the alpha, which is what
+  converting straight colour to premultiplied would do, flattens onto
+  black instead, which is right only when the input is black.
+- A group layer follows its child's channels. A child channel without
+  alpha gives the parent alpha 1 (a constant emitted on the group layer
+  node), and no alpha is passed into it.
+- The `<name> Alpha` input is FACTOR 0-1 whenever it exists.
+- Toggling `use_alpha` removes or adds only the alpha sockets. The
+  material's other links survive; a link to a removed alpha socket is
+  lost, and turning the option back on makes new, unlinked sockets.
+- A type change retypes the compiled sockets in place
+  (`NodeTreeBuilder._sync_interface_sockets`), so they keep their
+  identifiers and the material's links, as in v2. Replacing them would
+  drop the links.
+- No alpha clamps. v2 clamps the alpha where it enters and leaves the
+  stack. Here the blend groups keep alpha in 0-1 when their inputs are,
+  and the material's alpha input is a 0-1 slider. The slider is a soft
+  limit, so a typed or linked value outside 0-1 is the user's choice.
+
+UI (`panels/main_panels.py`):
+
+- Each channel list row shows the channel's base value, the material
+  group node's unlinked input, found through `context.material_input`:
+  a swatch for COLOR, a number field for FLOAT, nothing for VECTOR, and
+  nothing when the input is linked or the tree is not the material's own
+  (a nested tree).
+- A "Channel Settings" section below the list, closed at first, shows
+  Type, Color Space, Use Alpha, "Base Alpha" (the material's unlinked
+  `<name> Alpha` input) and, for FLOAT, Limit Range with Min and Max.
+- The Add Channel dialog keeps Name and Type. The options come from the
+  type and are changed in Channel Settings.
+
+Known gaps:
+
+- A layer cache bakes the Group Input with the interface defaults, not the
+  material's input, and the cached layer then stands in for everything
+  below it. So a cache over a channel without alpha holds an opaque base
+  of the interface default: black, or for FLOAT 0 clamped into the Limit
+  Range. This predates PS-005; with alpha on, the cache holds a
+  transparent base instead, and the material's alpha input is lost below
+  it all the same.
+- A filter layer's GPU composite (`filters/composite.py`) starts from a
+  transparent backdrop, since it cannot know the material's input. In a
+  channel without alpha, the flatten lays the filtered result over the
+  input, which matches the shader for Mix layers. A layer with a blend
+  mode such as Multiply directly on the base acts on the input only in
+  the shader, so the filter sees a different picture. Filter layers only
+  run on COLOR channels, so this needs Use Alpha turned off by hand.
 
 ## Acceptance
 
-- Test: toggling `use_alpha` removes/adds the interface output and the
-  material link survives if the socket still exists.
-- Test: FLOAT channel with min/max yields a FACTOR interface socket with
-  the given range; switching it off restores a plain float without
-  identifier churn.
-- Channel UIList (PS-032) shows the default value widget.
+- `tests/test_channels.py`: new channels take their options from the
+  type; image layers get the channel's colour space; toggling `use_alpha`
+  removes and adds only the alpha sockets and keeps the material's other
+  links; a type change keeps the material's links; pixels show the opaque
+  base under a Multiply layer, the flattening, and an empty channel giving
+  its input; a layer cache goes stale when Use Alpha or the range
+  changes, and not on a rename; Limit Range gives a FACTOR socket with the
+  sorted range and back without identifier churn or a lost link.
+- `tests/test_compile.py`: a child channel without alpha gives the parent
+  a constant alpha, and a parent channel without alpha goes through the
+  flatten mix.
+- `tests/test_main_panel.py`: the list row and Channel Settings draw the
+  channel's options and the material's unlinked inputs; a VECTOR row and a
+  nested tree draw no value; Base Alpha stays hidden without alpha even
+  when another channel is called `<name> Alpha`; the open channels
+  section draws Channel Settings.

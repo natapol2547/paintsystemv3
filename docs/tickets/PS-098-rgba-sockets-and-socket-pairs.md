@@ -19,7 +19,7 @@ Made with the user on 2026-09-23.
   compositor. There are no Alpha sockets on layers, folders, group layers
   or the Group Input and Output. The compiled shader group still has
   `<channel>` and `<channel> Alpha` sockets, because materials need them
-  apart.
+  apart. PS-005 later made the alpha socket depend on `use_alpha`.
 - A Separate Color node splits an RGBA link into floats inside the tree.
 - Every layer type can have more than one input/output pair. Each row of a
   list in the node editor sidebar (like the channel list) is one pair.
@@ -52,7 +52,8 @@ Made with the user on 2026-09-23.
   (`channel_socket_specs`). A channel's type no longer changes any socket
   in the Paint System tree, so a type change keeps its links.
 - The compiled interface comes from `interface_socket_specs`: `<channel>`
-  typed by the channel, then `<channel> Alpha` as a float.
+  typed by the channel, then `<channel> Alpha` as a 0-1 factor when the
+  channel has `use_alpha` (PS-005).
 
 ### Compiler
 
@@ -63,14 +64,15 @@ Made with the user on 2026-09-23.
   unlinked default's fourth value is the alpha), `connect_input` (one
   value, used for `Mask`) and `link_channel` / `set_channel_output` (the
   only consumers that link by the `<channel> Alpha` name;
-  `interface_socket_specs` declares it).
+  `interface_socket_specs` declares it). At the Group Output, a channel
+  without alpha goes through `link_flattened` instead (PS-005).
 - A colour linked into `Mask` is converted by the shader's implicit
   conversion, which is luminance. PS-015 decides whether masks should
   read luminance, the red channel or alpha.
-- `IR.meta` holds the child interface of every group layer, so a child
-  channel that changes type rebuilds the parent. Without it Blender drops
-  the parent's link to the recreated socket and the fingerprint does not
-  notice (found by the design review, covered by `tests/test_compile.py`).
+- A child channel that changes type keeps the parent's links to it,
+  because the builder retypes the compiled socket in place (PS-005, covered
+  by `tests/test_compile.py`). Slice 1 first put the child interface in
+  `IR.meta` to rebuild the parent instead.
 
 ### Stack model
 
@@ -140,9 +142,9 @@ Made with the user on 2026-09-23.
     in (`tests/test_stack.py`).
   - A channel type change keeps its links, and the compiled interface
     follows the type with the alpha beside it (`tests/test_channels.py`).
-  - A float child channel feeds the parent's channel and its alpha, and
-    retyping the child keeps the parent's compiled links
-    (`tests/test_compile.py`).
+  - A float child channel, which has no alpha since PS-005, feeds the
+    parent's channel, and a constant feeds the parent's alpha. Retyping
+    the child keeps the parent's compiled links (`tests/test_compile.py`).
 - Slice 2:
   - Linking into the virtual input adds a pair above it; the link lands
     on the new pair and `Mask` stays last.
