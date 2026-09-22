@@ -23,6 +23,7 @@ import bpy
 
 from .builder import BuildStats
 from .ir import IR, Ref, SocketId, hash_payload, _serialize
+from .library import MIX_IN_A_COLOR, MIX_IN_B_COLOR, MIX_IN_FACTOR, MIX_OUT_COLOR
 from .profile import phase
 from ..nodetree.stack_ops import feeding_link, feeds_clip_run, link_index, producing_link, stack_output
 from ..props.channel import channel_alpha_name, interface_socket_specs
@@ -173,8 +174,14 @@ class CompileContext:
         return nid, 0
 
     def set_channel_output(self, socket, channel, ir_id: str) -> None:
-        """Record *channel*'s two sockets on the IR node *ir_id* as the value of *socket*."""
-        self.set_output(socket, (ir_id, channel.name), (ir_id, channel_alpha_name(channel.name)))
+        """Record *channel*'s two sockets on the IR node *ir_id* as the value of *socket*.
+
+        A channel without ``use_alpha`` has no alpha socket, so its alpha
+        is 1. At the Group Input, that makes the stack start from an
+        opaque base.
+        """
+        alpha = (ir_id, channel_alpha_name(channel.name)) if channel.use_alpha else 1.0
+        self.set_output(socket, (ir_id, channel.name), alpha)
 
     def output(self, socket) -> tuple[Ref, Ref] | None:
         """The (colour, alpha) refs recorded for the output *socket*, or None."""
@@ -222,13 +229,41 @@ class CompileContext:
         """Link what feeds *socket* into *channel*'s two sockets on the IR node *to_id*.
 
         An unlinked *socket* links nothing, so *to_id* keeps the defaults
-        of the compiled interface.
+        of the compiled interface. Without ``use_alpha`` the channel has no
+        alpha socket, and the alpha half is dropped.
         """
         pair = self._upstream(socket)
         if pair is not None:
             color, alpha = pair
             self.link(color, to_id, channel.name)
-            self.link(alpha, to_id, channel_alpha_name(channel.name))
+            if channel.use_alpha:
+                self.link(alpha, to_id, channel_alpha_name(channel.name))
+
+    def link_flattened(self, socket, channel, to_id: str, base: Ref) -> None:
+        """Link what feeds *socket* into *channel*'s socket on *to_id*, laid over *base*.
+
+        For a channel without ``use_alpha`` at the Group Output, where the
+        alpha has no socket to go to. It weights the colour over *base*,
+        the value the stack started from, instead of being dropped. Layers
+        keep an opaque base opaque, so the mix usually changes nothing. A
+        filter layer does not: it replaces the stack with pixels filtered
+        without the base, and its soft edges would otherwise show their
+        colour at full strength. Over a black base this is the same as
+        multiplying the colour by its alpha. An unlinked *socket* is an
+        empty stack, so only *base* shows.
+        """
+        pair = self._upstream(socket)
+        if pair is None:
+            self.link(base, to_id, channel.name)
+            return
+        color, alpha = pair
+        mix = self.emit_node(socket.node, f"flatten:{socket.identifier}", 'ShaderNodeMix', properties={
+            'data_type': 'RGBA', 'blend_type': 'MIX', 'clamp_factor': True, 'clamp_result': False,
+        })
+        self.link(alpha, mix, MIX_IN_FACTOR)
+        self.link(base, mix, MIX_IN_A_COLOR)
+        self.link(color, mix, MIX_IN_B_COLOR)
+        self.link((mix, MIX_OUT_COLOR), to_id, channel.name)
 
     # -- caching --------------------------------------------------------
 

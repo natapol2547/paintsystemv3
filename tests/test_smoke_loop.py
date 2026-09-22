@@ -23,7 +23,7 @@ from harness import (bake_group, check, close, finish, fmt, import_from, pixel_a
 
 register_addon()
 core = import_from("compiler.core")
-MATERIAL_GROUP_KEY = import_from("ops.node_tree_ops").MATERIAL_GROUP_KEY
+material_group = import_from("context").find_material_group_node
 
 RED = (1.0, 0.0, 0.0, 1.0)
 BLUE = (0.0, 0.0, 1.0, 1.0)
@@ -36,11 +36,6 @@ def cube():
 def active_tree():
     mat = cube().active_material
     return mat.paint_system.tree if mat else None
-
-
-def material_group(mat, tree):
-    return next((n for n in mat.node_tree.nodes
-                 if n.bl_idname == 'ShaderNodeGroup' and n.get(MATERIAL_GROUP_KEY) == tree.uuid), None)
 
 
 def layer_names():

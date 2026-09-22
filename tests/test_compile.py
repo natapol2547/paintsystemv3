@@ -170,16 +170,31 @@ try:
     check('Mask' in [s.name for s in group.outputs], "child channel change propagates to parent group node sockets")
     group_id = f"{group.uuid}:group"
     tree.links.new(group.outputs['Mask'], gout.inputs['Roughness'])
+    tree.channels['Roughness'].use_alpha = True
     compile_tree(tree)
-    mask_feeds = [('Roughness', group_id, 'Mask'), ('Roughness Alpha', group_id, 'Mask Alpha')]
+    opaque = f"{group.uuid}:const:{group.outputs['Mask'].identifier}:alpha"
+    mask_feeds = [('Roughness', group_id, 'Mask'), ('Roughness Alpha', opaque, 'Value')]
     feeds = [feed for feed in output_feeds(tree) if feed[0].startswith('Roughness')]
-    check(feeds == mask_feeds, f"a float child channel feeds the parent's channel and its alpha ({feeds})")
-    # The child's artifact recreates a socket whose type changed, which
-    # drops the parent's links to it; the parent has to notice and relink.
+    check(feeds == mask_feeds, f"a float child channel, which has no alpha, feeds the parent's channel, "
+                               f"and a constant its alpha ({feeds})")
+    # The child's artifact retypes the socket in place, so the parent's
+    # links to it survive.
     child.channels['Mask'].type = 'COLOR'
     compile_tree(tree)
     feeds = [feed for feed in output_feeds(tree) if feed[0].startswith('Roughness')]
     check(feeds == mask_feeds, f"retyping a child channel keeps the parent's links to it ({feeds})")
+    tree.channels['Roughness'].use_alpha = False
+    compile_tree(tree)
+    roughness = next(s for s in gout.inputs if s.name == 'Roughness')
+    flatten = f"{gout.uuid}:flatten:{roughness.identifier}"
+    feeds = [feed for feed in output_feeds(tree) if feed[0].startswith('Roughness')]
+    check(feeds == [('Roughness', flatten, 'Result')],
+          f"without alpha the parent's channel goes through a mix ({feeds})")
+    mix = next(n for n in art.nodes if n.get("ps_identifier") == flatten)
+    mix_feeds = [(index, link.from_node.get("ps_identifier"), link.from_socket.name)
+                 for index, sock in enumerate(mix.inputs) for link in sock.links]
+    check(mix_feeds == [(0, opaque, 'Value'), (6, f"{gout.uuid}:base", 'Roughness'), (7, group_id, 'Mask')],
+          f"that lays the colour over the channel's input by its alpha ({mix_feeds})")
     tree.links.new(gin.outputs['Roughness'], gout.inputs['Roughness'])
 
     section("normalize")

@@ -18,6 +18,7 @@ from harness import check, finish, guarded, import_from, register_addon, section
 
 register_addon()
 main_panels = import_from("panels.main_panels")
+find_material_group_node = import_from("context").find_material_group_node
 # The Brush and Color sections ask the active tool for the paint mode,
 # which needs a 3D view. They are not what this test looks at.
 main_panels.draw_paint_sections = lambda layout, context: None
@@ -26,19 +27,22 @@ main_panels.draw_paint_sections = lambda layout, context: None
 class RecordingLayout:
     """Stands in for a UILayout: records each call and returns another recorder.
 
-    Collapsible sub-panels come back closed, so their bodies are skipped.
-    Attribute writes such as `row.scale_x` or an operator property are
-    accepted and ignored.
+    Collapsible sub-panels come back closed, so their bodies are skipped,
+    unless *open_panels* is set. Attribute writes such as `row.scale_x`
+    or an operator property are accepted and ignored.
     """
 
-    def __init__(self, calls):
+    def __init__(self, calls, open_panels=False):
         object.__setattr__(self, "calls", calls)
+        object.__setattr__(self, "open_panels", open_panels)
 
     def __getattr__(self, name):
         def call(*args, **kwargs):
             self.calls.append((name, args, kwargs))
-            child = RecordingLayout(self.calls)
-            return (child, None) if name == "panel" else child
+            child = RecordingLayout(self.calls, self.open_panels)
+            if name != "panel":
+                return child
+            return child, (RecordingLayout(self.calls, True) if self.open_panels else None)
         return call
 
     def __setattr__(self, name, value):
@@ -120,7 +124,86 @@ def test_sections_collapse():
           f"the Selection section starts closed (panels {panels(calls)})")
 
 
+def drawn_props(calls):
+    """(owner, property name, text) of each property drawn."""
+    return [(args[0], args[1], kwargs.get("text")) for name, args, kwargs in calls if name == "prop"]
+
+
+def test_channel_settings():
+    section("the channel list and Channel Settings edit the channel and its material input")
+    bpy.context.view_layer.objects.active = cube
+    material = cube.active_material
+    tree = material.paint_system.tree
+    group = find_material_group_node(material, tree)
+    color = tree.channels["Color"]
+    tree.active_channel_index = 0
+
+    def row(channel):
+        calls = []
+        main_panels.PAINTSYSTEM_UL_channels.draw_item(
+            None, bpy.context, RecordingLayout(calls), tree, channel, 0, None, "", 0)
+        return drawn_props(calls)
+
+    def settings():
+        calls = []
+        main_panels._draw_channel_settings(RecordingLayout(calls, open_panels=True), bpy.context, tree)
+        return drawn_props(calls), panels(calls)
+
+    check((group.inputs["Color"], "default_value", "") in row(color),
+          "a channel's row edits the material's unlinked input, the value its stack starts from")
+    props, sections = settings()
+    check(sections.get("paint_system_channel_settings") == {"default_closed": True},
+          f"Channel Settings is a section that starts closed ({sections})")
+    check([(owner, prop) for owner, prop, _text in props][:3]
+          == [(color, "type"), (color, "color_space"), (color, "use_alpha")],
+          f"it shows the type, colour space and Use Alpha first ({props})")
+    check((group.inputs["Color Alpha"], "default_value", "Base Alpha") in props,
+          "and the material's alpha input as Base Alpha")
+    check(not any(prop == "use_range" for _owner, prop, _text in props), "no range for a colour channel")
+
+    rgb = material.node_tree.nodes.new('ShaderNodeRGB')
+    material.node_tree.links.new(rgb.outputs[0], group.inputs["Color"])
+    material.node_tree.links.new(rgb.outputs[0], group.inputs["Color Alpha"])
+    check(not any(prop == "default_value" for _owner, prop, _text in row(color)),
+          "a linked input shows no value in the row")
+    check(not any(prop == "default_value" for _owner, prop, _text in settings()[0]),
+          "nor as Base Alpha")
+    material.node_tree.nodes.remove(rgb)
+
+    rough = tree.create_channel("Rough", 'FLOAT')
+    props = settings()[0]
+    check([prop for owner, prop, _text in props if owner == rough][-3:] == ["use_range", "range_min", "range_max"],
+          f"a float channel adds Limit Range, Min and Max ({props})")
+    check(not any(text == "Base Alpha" for _owner, _prop, text in props), "and no Base Alpha without alpha")
+    check((group.inputs["Rough"], "default_value", "") in row(rough), "its row edits its material input too")
+    # This channel's input has the name Rough's alpha input would have.
+    decoy = tree.create_channel("Rough Alpha", 'FLOAT')
+    tree.active_channel_index = list(tree.channels).index(rough)
+    check("Rough Alpha" in group.inputs and not any(text == "Base Alpha" for _owner, _prop, text in settings()[0]),
+          "not even when another channel's input has the alpha's name")
+    tree.delete_channel(list(tree.channels).index(decoy))
+    tree.delete_active_channel()
+
+    normal = tree.create_channel("Normal", 'VECTOR')
+    check(not any(prop == "default_value" for _owner, prop, _text in row(normal)),
+          "a vector channel's row shows no value, since three fields do not fit")
+    tree.delete_active_channel()
+
+    nested = bpy.data.node_groups.new("Nested Only", 'PaintSystemNodeTree')
+    nested.initialize()
+    calls = []
+    main_panels.PAINTSYSTEM_UL_channels.draw_item(
+        None, bpy.context, RecordingLayout(calls), nested, nested.channels[0], 0, None, "", 0)
+    check(not any(prop == "default_value" for _owner, prop, _text in drawn_props(calls)),
+          "a tree that is not the material's own has no input to show")
+
+    calls = []
+    main_panels._draw_channels_section(RecordingLayout(calls, open_panels=True), bpy.context, tree)
+    check("paint_system_channel_settings" in panels(calls), "the open channel list draws Channel Settings below it")
+
+
 guarded(test_the_panel_follows_the_mesh)
 guarded(test_sections_collapse)
+guarded(test_channel_settings)
 
 finish("MAIN PANEL TEST")

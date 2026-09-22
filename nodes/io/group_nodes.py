@@ -5,6 +5,7 @@ from bpy.utils import register_classes_factory
 from ..base_node import PaintSystemBaseNode
 from ...common import blender_icon, icon_kwargs
 from ...nodetree.stack_ops import channel_sockets
+from ...props.channel import interface_socket_specs
 
 
 class PaintSystemGroupNode(PaintSystemBaseNode):
@@ -19,6 +20,16 @@ class PaintSystemGroupInputNode(PaintSystemGroupNode, Node):
     bl_idname = 'PaintSystemGroupInputNode'
     bl_label = 'Group Input'
     bl_icon = blender_icon('GROUP_UVS')
+
+    def hash_parts(self, ctx):
+        # What this node gives depends on the channel options: Use Alpha
+        # decides between the alpha input and an opaque 1, and a cache
+        # bakes the inputs at their defaults, which Limit Range sets. So a
+        # cache above this node is stale when they change. Keyed by socket
+        # and without the names, so renaming or moving a channel, which
+        # changes no pixels, keeps the caches.
+        return {sock.identifier: [spec[1:] for spec in interface_socket_specs([channel])]
+                for channel, sock in channel_sockets(self.outputs, self.id_data.channels)}
 
     def emit(self, ctx):
         nid = ctx.emit_node(self, 'in', 'NodeGroupInput')
@@ -44,8 +55,17 @@ class PaintSystemGroupOutputNode(PaintSystemGroupNode, Node):
 
     def emit(self, ctx):
         nid = ctx.emit_node(self, 'out', 'NodeGroupOutput')
+        base = None
         for channel, sock in channel_sockets(self.inputs, self.id_data.channels):
-            ctx.link_channel(sock, channel, nid)
+            if channel.use_alpha:
+                ctx.link_channel(sock, channel, nid)
+                continue
+            # The stack of a channel without alpha is flattened onto the
+            # channel's input. A Group Input of its own reads that input
+            # even when the tree has no Group Input node.
+            if base is None:
+                base = ctx.emit_node(self, 'base', 'NodeGroupInput')
+            ctx.link_flattened(sock, channel, nid, (base, channel.name))
 
 
 classes = (

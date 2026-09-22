@@ -29,7 +29,7 @@ from harness import (bake_group, check, close, finish, fmt, guarded, import_from
 
 register_addon()
 core = import_from("compiler.core")
-MATERIAL_GROUP_KEY = import_from("ops.node_tree_ops").MATERIAL_GROUP_KEY
+find_material_group_node = import_from("context").find_material_group_node
 
 TRANSPARENT = (0.0, 0.0, 0.0, 0.0)
 PAPER = (1.0, 0.8, 0.6, 1.0)
@@ -124,8 +124,7 @@ def check_composite(label, want):
     tree = active_tree()
     check(core.artifact_fingerprint(tree) == core.build_ir(tree).fingerprint(),
           f"{label}: the compiled group matches the tree")
-    group = next((n for n in cube().active_material.node_tree.nodes
-                  if n.bl_idname == 'ShaderNodeGroup' and n.get(MATERIAL_GROUP_KEY) == tree.uuid), None)
+    group = find_material_group_node(cube().active_material, tree)
     check(group is not None and group.node_tree == tree.compiled, f"{label}: the material uses the compiled group")
     rgba = bake_group(tree.compiled)
     for u, side, texel in ((LEFT, "left", want[0]), (RIGHT, "right", want[1])):

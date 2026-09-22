@@ -85,6 +85,33 @@ def get_ps_object(obj) -> bpy.types.Object | None:
     return obj if obj.type == 'MESH' else None
 
 
+# A material's group node stores the uuid of the tree it runs under this key.
+MATERIAL_GROUP_KEY = "ps_tree_uuid"
+
+
+def find_material_group_node(material, tree) -> bpy.types.ShaderNodeGroup | None:
+    """The group node that runs *tree*'s compiled shader in *material*, or None."""
+    if material is None or material.node_tree is None:
+        return None
+    for node in material.node_tree.nodes:
+        if node.bl_idname == 'ShaderNodeGroup' and node.get(MATERIAL_GROUP_KEY) == tree.uuid:
+            return node
+    return None
+
+
+def material_input(context, tree, name: str) -> bpy.types.NodeSocket | None:
+    """The unlinked input *name* of *tree*'s group node, or None.
+
+    The group node is looked for in the active material of the object
+    being painted. Such an input's value is what a channel's stack starts
+    from. A nested tree has no group node there, so it gets None.
+    """
+    obj = get_ps_object(getattr(context, 'object', None))
+    group = find_material_group_node(obj.active_material if obj is not None else None, tree)
+    socket = group.inputs.get(name) if group is not None else None
+    return socket if socket is not None and not socket.is_linked else None
+
+
 def uses_tree(obj, tree) -> bool:
     """True when one of *obj*'s materials shows *tree*.
 

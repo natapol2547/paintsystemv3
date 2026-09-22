@@ -2,18 +2,8 @@ import bpy
 from bpy.types import Operator
 from bpy.utils import register_classes_factory
 
-from ..context import get_active_tree
+from ..context import MATERIAL_GROUP_KEY, find_material_group_node, get_active_tree
 from ..compiler.core import compile_tree, flush_now, ensure_artifact
-
-
-MATERIAL_GROUP_KEY = "ps_tree_uuid"
-
-
-def _find_material_group_node(material, tree):
-    for node in material.node_tree.nodes:
-        if node.bl_idname == 'ShaderNodeGroup' and node.get(MATERIAL_GROUP_KEY) == tree.uuid:
-            return node
-    return None
 
 
 def link_tree_to_material(material, tree):
@@ -27,7 +17,7 @@ def link_tree_to_material(material, tree):
     compile_tree(tree)
     nt = material.node_tree
     bsdf = next((n for n in nt.nodes if n.bl_idname == 'ShaderNodeBsdfPrincipled'), None)
-    group = _find_material_group_node(material, tree)
+    group = find_material_group_node(material, tree)
     if group is None:
         group = nt.nodes.new('ShaderNodeGroup')
         group[MATERIAL_GROUP_KEY] = tree.uuid

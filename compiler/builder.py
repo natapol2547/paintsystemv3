@@ -283,18 +283,26 @@ class NodeTreeBuilder:
             for instr in self._socket_instructions
         }
 
-        # Remove sockets that are no longer desired or have a changed type
+        # Remove sockets that are no longer desired, and retype the rest
         for sock in _flat_sockets():
             key: SocketKey = (sock.name, sock.in_out)
             instr = desired_keys.get(key)
+            if instr is None:
+                interface.remove(sock)
+                continue
             # Compare ``socket_type``, the base type. ``bl_socket_idname``
             # includes the subtype, such as NodeSocketFloatFactor, so it
-            # would remove and re-create sockets on every build.
-            existing_type = getattr(sock, 'socket_type', sock.bl_socket_idname)
-            if instr is None or existing_type != instr.socket_type:
-                interface.remove(sock)
+            # would differ on every build.
+            if sock.socket_type != instr.socket_type:
+                # Retyped in place, the socket keeps its identifier, so
+                # group nodes keep their links. A new socket would drop
+                # them. The subtype and range reset, and the declared
+                # properties are written again below. The Python object
+                # still has the old type afterwards, so the lookup below
+                # reads the sockets again.
+                sock.socket_type = instr.socket_type
 
-        # Rebuild lookup after removals
+        # Rebuild lookup after removals and retypes
         existing: dict[SocketKey, bpy.types.NodeTreeInterfaceSocket] = {
             (s.name, s.in_out): s for s in _flat_sockets()
         }

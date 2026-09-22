@@ -4,7 +4,8 @@ from bpy.utils import register_classes_factory
 from .brush_panels import draw_paint_sections
 from ..common import icon_kwargs
 from ..compiler.core import artifact_fingerprint
-from ..context import get_active_tree, get_ps_object, node_editor_tree
+from ..context import get_active_tree, get_ps_object, material_input, node_editor_tree
+from ..props.channel import channel_alpha_name
 from ..selection import session as selection_session
 
 
@@ -17,15 +18,51 @@ SOCKET_ICONS = {
 
 
 class PAINTSYSTEM_UL_channels(UIList):
+    """The channels of a tree, each with the value its stack starts from."""
     bl_idname = "PAINTSYSTEM_UL_channels"
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         row = layout.row(align=True)
+        # The base value is the material's input, so a shared tree can
+        # start from a different value in each material. A vector does not
+        # fit in the row (PS-006).
+        base = material_input(context, data, item.name) if item.type != 'VECTOR' else None
+        if base is not None:
+            row = row.split(factor=0.7, align=True)
         row.prop(item, "name", text="", emboss=False, **icon_kwargs(SOCKET_ICONS.get(item.type, 'NONE')))
+        if base is not None:
+            row.prop(base, "default_value", text="")
 
 
-def _draw_channels_section(layout, tree):
-    """Draw the channel list in a section that can be collapsed.
+def _draw_channel_settings(layout, context, tree):
+    """Draw the active channel's options in a section that starts closed."""
+    channel = tree.active_channel
+    if channel is None:
+        return
+    header, body = layout.panel("paint_system_channel_settings", default_closed=True)
+    header.label(text="Channel Settings")
+    if body is None:
+        return
+    col = body.column()
+    col.use_property_split = True
+    col.use_property_decorate = False
+    col.prop(channel, "type")
+    col.prop(channel, "color_space")
+    col.prop(channel, "use_alpha")
+    if channel.use_alpha:
+        alpha = material_input(context, tree, channel_alpha_name(channel.name))
+        if alpha is not None:
+            col.prop(alpha, "default_value", text="Base Alpha")
+    if channel.type == 'FLOAT':
+        col.prop(channel, "use_range")
+        sub = col.column(align=True)
+        sub.active = channel.use_range
+        sub.prop(channel, "range_min")
+        sub.prop(channel, "range_max")
+
+
+def _draw_channels_section(layout, context, tree):
+    """Draw the channel list and the channel settings in a section that can be collapsed.
 
     While the section is closed, its header names the active channel, so
     the channel being painted stays in view.
@@ -51,6 +88,7 @@ def _draw_channels_section(layout, tree):
     col.separator()
     col.operator("paint_system.move_channel_up", text="", **icon_kwargs('TRIA_UP'))
     col.operator("paint_system.move_channel_down", text="", **icon_kwargs('TRIA_DOWN'))
+    _draw_channel_settings(body, context, tree)
 
 
 def _draw_paint_mode_row(layout, context):
@@ -147,7 +185,7 @@ class PAINTSYSTEM_PT_main_3dview(Panel):
         if obj is not None:
             _draw_paint_mode_row(layout, context)
         layout.separator()
-        _draw_channels_section(layout, tree)
+        _draw_channels_section(layout, context, tree)
         draw_paint_sections(layout, context)
         if context.mode == 'PAINT_TEXTURE':
             _draw_selection_section(layout, context, tree)
@@ -169,7 +207,7 @@ class PAINTSYSTEM_PT_main_node_editor(Panel):
         layout = self.layout
         tree = context.space_data.edit_tree
 
-        _draw_channels_section(layout, tree)
+        _draw_channels_section(layout, context, tree)
         _draw_compiled_info(layout, tree)
 
 

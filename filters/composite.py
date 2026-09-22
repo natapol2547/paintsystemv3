@@ -133,7 +133,12 @@ def _plan_chain(socket, visited: set[str], group_input) -> ChainPlan:
     # layer, a hand-made link or a cycle. The compiler still composites
     # it, so without this check the plan would silently miss a layer.
     # The Group Input is the only node allowed under a channel. It is
-    # the transparent backdrop the walk starts from anyway.
+    # the transparent backdrop the walk starts from anyway. In a channel
+    # without alpha, the shader starts from an opaque base instead, the
+    # material's input, which this path cannot know. The Group Output
+    # lays the filtered result over that base, which matches the shader
+    # for Mix layers. A blend mode such as Multiply directly on the base
+    # acts on it only in the shader (PS-005, known gaps).
     bottom = feeding_link(below_input(nodes[-1]) if nodes else socket)
     if bottom is not None and bottom.from_node != group_input:
         below = bottom.from_node

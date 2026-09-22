@@ -8,6 +8,7 @@ from .base_layer_node import (EMPTY_SOURCE, PaintSystemLayerNode, draw_uv_map, e
                               update_tree_and_painting)
 from ...common import blender_icon
 from ...compiler.bake import create_managed_image
+from ...props.channel import image_colorspace
 
 
 class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
@@ -44,7 +45,9 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
         # *resolution* is the identifier of the operator's resolution enum.
         size = int(resolution)
         node = super().create(tree, target=target)
-        node.image = create_managed_image(f"{tree.name} {node.name}", size, size)
+        # The layer goes into the active channel's stack.
+        node.image = create_managed_image(f"{tree.name} {node.name}", size, size,
+                                          colorspace=image_colorspace(tree.active_channel))
         return node
 
     def draw_source_settings(self, context, layout):

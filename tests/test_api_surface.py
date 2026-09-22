@@ -188,6 +188,10 @@ SURFACE = [
     rna_func("NodeTreeInterface", "new_socket"),
     rna_prop("NodeTreeInterfaceSocket", "identifier"),
     rna_prop("NodeTreeInterfaceSocket", "in_out"),
+    # Channel options set the range and slider look of a float socket.
+    rna_prop("NodeTreeInterfaceSocketFloat", "subtype"),
+    rna_prop("NodeTreeInterfaceSocketFloat", "min_value"),
+    rna_prop("NodeTreeInterfaceSocketFloat", "max_value"),
     rna_prop("ShaderNodeTexImage", "image"),
     rna_prop("Material", "node_tree"),
     op("object.bake"),

@@ -7,7 +7,7 @@ from bpy_extras.node_utils import connect_sockets
 
 from . import stack_ops
 from ..common import blender_icon
-from ..props.channel import PaintSystemChannel, channel_socket_specs
+from ..props.channel import PaintSystemChannel, channel_defaults, channel_socket_specs
 from ..props.selection import PaintSystemSelection
 from ..compiler.core import ensure_tree_uuid, mark_dirty, ps_trees, suspend_compile, tree_updated
 
@@ -187,6 +187,7 @@ class PaintSystemNodeTree(NodeTree):
         """Add a channel below the active one and make it active.
 
         The new channel's input is linked straight through to the output.
+        Its options start from ``channel_defaults`` for its type.
         """
         with suspend_compile(self):
             self.channels.add()
@@ -204,6 +205,8 @@ class PaintSystemNodeTree(NodeTree):
             # sockets in its row and keeps the other channels' links.
             channel.name = name
             channel.type = type
+            for key, value in channel_defaults(type).items():
+                setattr(channel, key, value)
             channel.ensure_uuid()
             input_node = self.get_input_node()
             output_node = self.get_output_node()
