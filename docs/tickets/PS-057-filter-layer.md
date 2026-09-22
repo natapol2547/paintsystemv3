@@ -178,7 +178,28 @@ Authored:
   not its contents — a parameter group would be invisible to every hash
   in the addon and would additionally churn `node_state` on a rename.
 - `resolution` (`RESOLUTION_ITEMS`), `uv_map`,
-  `auto_refresh: BoolProperty(default=True)`.
+  `auto_refresh: BoolProperty(default=True)`. An empty `uv_map` follows
+  the layers below: the one map they name, else the active render map.
+- `surface_name: StringProperty`, shown as "Object", with a search over
+  the meshes the build accepts: the name of the mesh the layer resolves
+  against when it needs one (UV maps, below). The node's
+  `surface_object` looks it up. Add Layer fills it from the active mesh
+  when that mesh shows the tree, and so does the first build that needs
+  a mesh. After that the layer resolves the same way whatever is
+  selected, so Auto Refresh keeps working while the user works on
+  another object. The UV Map field searches this mesh's maps. Unhashed:
+  which mesh answers changes no compiled node, and when the mesh matters
+  the freshness stamp records what matters about it. PS-053's seams
+  read the same object.
+
+  A name rather than an Object pointer, decided with the user on
+  2026-09-23 after review. A pointer is a real user of the mesh, so the
+  mesh becomes part of the tree: appending a Paint System material from
+  another file brought that file's mesh into the scene, and deleting the
+  mesh in the viewport kept it in the file for good. The cost of a name
+  is that renaming the mesh loses it. The layer then shows "the object
+  or its render UV map changed" and resolves against the active mesh,
+  and the next build that goes ahead stores the new name.
 - `enabled` and `lock_layer` are redeclared for their update callbacks
   only, because either can hold a refresh back (Rebuild, below).
 
@@ -253,8 +274,11 @@ Four ID properties, written together at commit, constants in
   fingerprint_parts`): `version` (`FILTER_VERSION`), `filter`, `params`
   (the kind's own fingerprint of its settings), `size`, `uv_map` as
   authored, `below` (`ctx.subtree_hash` of the node feeding the Color
-  input, or `"empty"`), and `clip`, present only when the layer is
-  clipped. Stored as parts rather than one hash so that a mismatch can
+  input, or `"empty"`), `clip`, present only when the layer is
+  clipped, and `surface`, present only when the build needed a mesh: the
+  mesh's active render UV map, which no hash of the tree covers. A
+  compile has no plan, so it hashes `surface` only when the stamp has
+  it. Stored as parts rather than one hash so that a mismatch can
   name the part that moved. Cheap to recompute inside a compile, where
   the subtree hashes are already warm.
 - `ps_filter_uv_map` — the UV map the pixels were laid out in, resolved.
@@ -356,12 +380,33 @@ Folder or a valid filter layer; the blend mode is in
 `ALLOWED_BLEND_MODES`; no linked Mask input (PS-015); no clip reaching
 outside its own stack. A layer that fails one of these gets a plan on
 the bake path, with the reason. Every `uv_map` must also resolve to the
-same UV layer through `gpu_passes/texel_map.py::resolve_uv_map`, which
-maps `""` to the active render UV map, and no source may be UDIM; those
-two are refused outright. An object is needed only when at least one
-layer below sets an explicit `uv_map`: when they all leave it empty they
-resolve to the same map whatever it is, and the composite is
-object-independent.
+same UV layer, and no source may be UDIM; those two are refused
+outright. The names decide first, because they need no mesh:
+
+- nothing names a map: every layer uses the active render map, whatever
+  it is, and the result does too;
+- every layer below names the same map: the result is laid out in it,
+  and a filter layer with its own UV Map left empty follows them;
+- two different names: refused, whatever the mesh.
+
+A mesh is needed only when one map is named and some layers below leave
+theirs empty, because those use the mesh's active render map
+(`gpu_passes/texel_map.py::resolve_uv_map`). The mesh is the layer's
+Object, else the active object through `context.get_ps_object`, so an
+empty parented to the mesh counts. Either one must be a mesh whose
+materials show the tree, directly or nested through group layers
+(`context.uses_tree`); another mesh would answer for UV maps the
+material never sees. A stored name that finds no object, or finds one
+deleted in the viewport but kept in the file by another user (in no
+collection), does not count. Nothing searches the file for a suitable mesh: it would scan every
+object on every resolve and would have to guess when several meshes
+show the tree. `resolve_input` only reads; the build stores the mesh it
+used as the Object once it goes ahead (`layer_plan.keep_surface`), in
+its first unit. That is the one write before the commit, so a cancelled
+Update keeps it, outside any undo step; it names the mesh the next build
+would store anyway. On a linked tree the name lasts for the session,
+like the result the Update button builds beside it. The Cycles bake
+always needs a mesh, from the same place.
 
 `ALLOWED_BLEND_MODES` is an allow-list a mode joins only once its
 per-texel parity test against a real Cycles bake of the library group
@@ -477,8 +522,9 @@ above.
 
 The panel names the reason: the structural part that moved, checked in
 the order of `freshness.REASONS` — the layers below, clipping, the
-filter, the resolution, the filter settings, the UV map, a Paint System
-update — or "the pixels below changed". The filter and the resolution
+filter, the resolution, the filter settings, the UV map, the object or
+its render UV map, a Paint System update — or "the pixels below
+changed". The filter and the resolution
 come before the settings because each changes the settings as well. The
 layer row shows an `ERROR` badge while out of date and a refresh icon
 while the auto job builds it (`draw_row_state`).
@@ -570,12 +616,16 @@ filter layer is enough to get its pixels. Three hard rules:
   allows it. A refusal is about something that changes; switching Auto
   Refresh off would leave a layer added to an empty folder waiting for
   an Update nobody knows to press. A refusal about the stack is asked
-  again by the next compile. One about the scene (no active mesh, or a
-  mesh without the UV map a layer names) compiles no tree when it is
-  fixed, so `on_depsgraph_update_post` calls `layer_job.scene_changed()`,
-  which asks again while any layer is waiting. `resolve_input` falls
-  back to the view layer's active object, because a timer's context may
-  have no screen and so no `context.object`. A build that has started
+  again by the next compile. One about the scene (no mesh that shows the
+  tree, or a mesh without the UV map a layer names) compiles no tree
+  when it is fixed, so `on_depsgraph_update_post` calls
+  `layer_job.scene_changed()`, which asks again while any layer is
+  waiting. Once a build has stored the layer's Object, the selection no
+  longer matters. Without one, `resolve_input` falls back to the view
+  layer's active object, because a timer's context may have no screen
+  and so no `context.object`. A linked tree is skipped: it is read from
+  its library again whenever the file opens, so a result built into it
+  would be thrown away. A build that has started
   and then fails or is refused still switches Auto Refresh off, because
   trying again would repeat the same failure.
 - The viewport keeps showing the previous pixels for the whole job, and
@@ -642,11 +692,22 @@ job would interrupt whatever the user was doing.
   fallback could not help either; `bake_node_cache` does not do UDIM
   (PS-009)
 - "Image 'Y' below has no pixels; is its file missing?"
-- "The layers below 'X' name a UV map, so filtering them needs an active
-  mesh object to resolve it against"
+- "'X' needs a mesh to tell which UV map the layers below use, but …
+  Select a mesh that uses this Paint System tree, or set the layer's
+  Object", where "…" is "nothing is selected", "'Camera' is not a mesh
+  that uses this Paint System tree", or what is wrong with the stored
+  Object ("its Object 'Obj' was deleted or renamed", "… was deleted",
+  "… is not a mesh", "… does not use this Paint System tree")
 - "'Obj' has no UV map named 'UVMap.001'"
-- "Layers below use different UV maps ('UVMap' and 'UVMap.001'), so
-  filtering them needs a Cycles bake"
+- "Layers below 'X' use different UV maps ('UVMap' and 'UVMap.001'), so
+  filtering them needs a Cycles bake", or "… on 'Obj' ('UVMap' and the
+  render map 'UVMap.001') …" when the mesh decided it
+- "'X' is set to UV map 'UVMap.001', but the layers below use 'UVMap'.
+  Clear its UV Map to follow them", or "… use the render map 'UVMap' on
+  'Obj'. …" — the layers below agree, and only the filter layer's own UV
+  Map differs
+- "Filtering the layers below 'X' needs a mesh to bake on, because …,
+  but …" — a bake plan with no mesh, with the same endings as above
 - "Filtering the layers below 'X' needs a Cycles bake, because …" — any
   plan on the bake path, until Path B is built
 - "The GPU does not have enough memory for an image this size"

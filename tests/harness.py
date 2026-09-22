@@ -88,6 +88,18 @@ def guarded(fn):
         _failures.append(f"exception in {getattr(fn, '__name__', fn)}")
 
 
+def use_tree(obj, tree):
+    """Give *obj* a material driven by *tree*, and return the material.
+
+    A filter layer resolves only against a mesh that uses its tree, so a
+    test that relies on the mesh has to link the two first.
+    """
+    mat = bpy.data.materials.new(f"{tree.name} Material")
+    mat.paint_system.tree = tree
+    obj.data.materials.append(mat)
+    return mat
+
+
 # ── Pixel sampling ───────────────────────────────────────────────────
 
 BAKE_PLANE_NAME = "PS Test Bake Plane"

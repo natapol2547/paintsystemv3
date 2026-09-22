@@ -7,8 +7,9 @@ Design: docs/tickets/PS-057-filter-layer.md.
   runs it in a modal operator that does a slice of the work on each
   timer event. So a 4K build shows progress and can be cancelled with
   Escape, instead of freezing the window. The generator writes nothing
-  before its last step, so cancelling leaves the previous result exactly
-  as it was, and frees the GPU textures on the way out.
+  but the layer's Object before its last step, so cancelling leaves the
+  previous result exactly as it was, and frees the GPU textures on the
+  way out.
 - Update and Clear Result have the `UNDO` option. The no-`UNDO` rule in
   `undo.pixels` does not apply here. That rule exists because a memfile
   step on top of an image undo step costs two Ctrl+Z. A filter build

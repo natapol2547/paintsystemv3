@@ -20,6 +20,8 @@ datablock swapped or renamed.
   toggling Clip changes what the layer filters, but the node feeding the
   socket stays the same, and `subtree_hash` cannot see it. Clip gets its
   own part.
+- The mesh's active render UV map is outside the tree too. It gets a
+  part when the build needed a mesh (see `fingerprint_parts`).
 - The parts are stamped separately, not as one hash, so a mismatch can
   say which part changed. "Out of date" with no reason is a button the
   user has to press on faith.
@@ -53,6 +55,7 @@ import json
 import logging
 
 from ..compiler.core import ps_trees
+from ..gpu_passes.texel_map import resolve_uv_map
 from ..nodetree.stack_ops import clip_base
 from . import composite, derived
 from .core import Refused
@@ -74,11 +77,12 @@ REASONS = (
     ("size", "the resolution changed"),
     ("params", "the filter settings changed"),
     ("uv_map", "the UV map changed"),
+    ("surface", "the object or its render UV map changed"),
     ("version", "Paint System was updated"),
 )
 
 
-def fingerprint_parts(ctx, node, below) -> dict:
+def fingerprint_parts(ctx, node, below, surface=None) -> dict:
     """What a build of *node* would be asked for, as a dict of named parts.
 
     *below* is the node feeding the filter's ``Color`` input, which is
@@ -86,6 +90,9 @@ def fingerprint_parts(ctx, node, below) -> dict:
     `compiler.core.CompileContext`. The hash depends only on the tree,
     not on the context that walked it, so a build's context and a
     compile's context give the same result.
+
+    *surface* is the mesh the build resolved its UV map against, or None
+    when it needed none (`filters.layer_plan.InputPlan.surface`).
     """
     kind = LAYER_FILTERS.get(node.filter_type)
     size = int(node.resolution)
@@ -115,12 +122,35 @@ def fingerprint_parts(ctx, node, below) -> dict:
     # exists to catch. One rebuild is the price.
     if clip_base(node) is not None:
         parts["clip"] = True
+    # A build needs a mesh when some layers below leave their UV map empty
+    # and one map is named. Those layers use the mesh's active render
+    # map, and the build checked that it is the named one. No hash of the
+    # tree covers that map, so it gets its own part. Like "clip", the
+    # part is only present when a mesh was needed, so switching the
+    # render map does not affect a build that did not depend on it, and
+    # older stamps still match.
+    if surface is not None:
+        parts["surface"] = resolve_uv_map(surface, "") or ""
     return parts
 
 
 def stamp(parts: dict) -> str:
     """*parts* as the string stored in `derived.FINGERPRINT_KEY`."""
     return json.dumps(parts, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def built_on_surface(stored: str) -> bool:
+    """Whether the stamp *stored* comes from a build that needed a mesh.
+
+    A compile has no plan, so it cannot tell whether the layer needs a
+    mesh without resolving one against the selection. It asks the stamp
+    instead, and hashes the "surface" part only when the build did.
+    """
+    try:
+        was = json.loads(stored) if stored else {}
+    except ValueError:
+        return False
+    return isinstance(was, dict) and "surface" in was
 
 
 def structure_reason(stored: str, parts: dict) -> str:

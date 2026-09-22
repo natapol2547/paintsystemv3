@@ -7,7 +7,7 @@ from bpy.props import CollectionProperty, PointerProperty
 from bpy.utils import register_classes_factory
 
 from .gpu_passes.texel_map import resolve_uv_map
-from .nodetree.stack_ops import StackItem
+from .nodetree.stack_ops import StackItem, tree_references
 from .props.stencil import PaintSystemStencilMeshBackup
 
 
@@ -83,6 +83,22 @@ def get_ps_object(obj) -> bpy.types.Object | None:
     if obj.type == 'EMPTY' and obj.parent is not None:
         obj = obj.parent
     return obj if obj.type == 'MESH' else None
+
+
+def uses_tree(obj, tree) -> bool:
+    """True when one of *obj*'s materials shows *tree*.
+
+    A material shows the tree its ``paint_system.tree`` points at, and
+    every tree nested in that one through group layers, because each
+    nested tree compiles into the outer tree's group.
+    """
+    if obj is None or tree is None:
+        return False
+    for slot in obj.material_slots:
+        material = slot.material
+        if material is not None and tree_references(material.paint_system.tree, tree):
+            return True
+    return False
 
 
 def node_editor_tree(context) -> bpy.types.NodeTree | None:

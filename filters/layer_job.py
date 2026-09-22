@@ -11,10 +11,12 @@ result. It must never make Blender feel broken, so it has these limits.
   the window for seconds with no way to cancel it. This is decided
   before anything is allocated.
 - **Refusals wait.** A layer that cannot be built right now, such as one
-  with nothing below it or with no active mesh to resolve its UV map
-  on, shows the reason and keeps Auto Refresh on. The next change to the
-  tree or the scene asks again, so adding a layer below it, or selecting
-  the mesh, is enough. A build that has started and then fails, is
+  with nothing below it or with no mesh to resolve its UV map on, shows
+  the reason and keeps Auto Refresh on. The next change to the tree or
+  the scene asks again, so adding a layer below it, or selecting the
+  mesh, is enough. Once a build has needed a mesh, the layer stores it
+  (`filters.layer_plan.keep_surface`), so later refreshes run whatever is
+  selected. A build that has started and then fails, is
   refused, or does not settle switches Auto Refresh off instead. Trying
   it again would repeat the same failure, often after allocating GPU
   memory.
@@ -177,8 +179,8 @@ def settled(node) -> None:
 def scene_changed() -> None:
     """Ask again for any layer that is waiting. Called on every depsgraph update.
 
-    Some refusals are about the scene rather than the tree: no active
-    mesh, or a mesh without the UV map a layer names. Selecting the mesh
+    Some refusals are about the scene rather than the tree: no mesh that
+    uses the tree is selected, or the mesh lacks the UV map a layer names. Selecting the mesh
     or adding the UV map compiles no tree, so no `notify` call would
     come. This costs nothing while no layer waits. While a job runs it
     does nothing, because the pass after the job looks at every layer.
@@ -381,6 +383,11 @@ def _candidates():
     compiles again, and that asks for a refresh if one is still needed.
     """
     for tree in ps_trees():
+        # A linked tree is read again from its library whenever the file
+        # opens, so a result built into it here would be thrown away, and
+        # built again on every open.
+        if not tree.is_editable:
+            continue
         # The stack walks below are the expensive part, and most trees
         # hold no filter layer at all.
         if not any(getattr(node, 'ps_type', "") == 'FILTER' for node in tree.nodes):

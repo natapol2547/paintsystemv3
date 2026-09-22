@@ -154,11 +154,25 @@ surface content key `gpu_passes/surface.py` already computes, which is
 also what lets a UV edit mark the layer out of date. Decided with the
 user on 2026-09-21; see the next section for why this is load-bearing.
 
+The stored object now exists on every filter layer (PS-057,
+`surface_name`, shown as "Object", 2026-09-23). It is stored by name,
+so a tree does not carry the mesh along when its material is appended
+elsewhere, and the seam index should key on the resolved object rather
+than on the name, which a rename changes. Add Layer and the
+first build that needs a mesh fill it, and `filters.layer_plan.
+surface_of` picks the mesh by the same rules the painter will need
+(the stored Object if it is a mesh showing the tree, else the active
+one, never a search of the file). The seams slice reuses it: a
+Painterly layer always needs a mesh, so it resolves through
+`surface_of` even when the UV names alone would not ask for one, and
+refuses by name without one. Whether several meshes sharing one
+material need their seams merged is left for that slice.
+
 ### Slices
 
 1. Painterly as a filter layer kind, without seams: the hook, the
    passes, the planning, the presets.
-2. Seams: the stored object, the seam index from the surface arrays,
+2. Seams: the seam index from the surface arrays of the stored object,
    the duplicates, a refusal by name when the layer has no mesh to read.
 3. Custom brushes as Blender images.
 4. A UV or mesh edit on the seam object marks the layer out of date.

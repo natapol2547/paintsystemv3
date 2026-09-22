@@ -12,8 +12,9 @@
    band goes straight into a PNG (`filters.png`).
 5. `commit` packs that PNG into the layer's image and stamps it.
 
-The build is a generator because only the last unit writes anything. So
-a build can be cancelled without anything changing on screen. The
+The build is a generator because only the last unit writes anything,
+apart from the layer's Object, which the first unit fills in. So a build
+can be cancelled without anything changing on screen. The
 viewport keeps showing the previous result until the commit, and the
 commit is one `pack` of an already encoded file plus four ID properties.
 The textures live in the generator's frame, so abandoning the generator
@@ -101,6 +102,14 @@ def steps(context, tree, node, *, plan=None):
         raise Refused(f"Filtering the layers below '{node.name}' needs a Cycles bake, "
                       f"because {plan.reason}")
     kind = layer_filter_kind(node)
+    # The build goes ahead, so the layer remembers the mesh it needed.
+    # This is the one write before the commit. It is made here, not in
+    # `commit`, so the refresh job's checks while the build runs
+    # (`_Job.moved`) resolve against the same mesh whatever is selected
+    # meanwhile. A cancelled Update keeps it outside any undo step, which
+    # is harmless: it names the mesh the plan resolved to, which the next
+    # build would store anyway.
+    layer_plan.keep_surface(node, plan)
     width, height = size = (int(node.resolution), int(node.resolution))
     # Recorded before anything is read, and this is what the commit
     # stamps. If a setting changes or a stroke lands during the build,
@@ -331,4 +340,4 @@ def _fingerprint(tree, node, plan) -> str:
     `commit` asks for afterwards makes the same context and compares.
     """
     ctx = build_ir(tree).ctx
-    return freshness.stamp(freshness.fingerprint_parts(ctx, node, plan.source))
+    return freshness.stamp(freshness.fingerprint_parts(ctx, node, plan.source, plan.surface))

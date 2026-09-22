@@ -139,6 +139,25 @@ def is_folder(node) -> bool:
     return getattr(node, 'is_folder', False)
 
 
+def tree_references(tree, target, _visited=None) -> bool:
+    """True if *target* is *tree* or is nested anywhere inside it through group layers."""
+    if tree is None:
+        return False
+    if tree == target:
+        return True
+    if _visited is None:
+        _visited = set()
+    key = tree.as_pointer()
+    if key in _visited:
+        return False
+    _visited.add(key)
+    for node in tree.nodes:
+        if node.bl_idname == 'PaintSystemGroupLayerNode':
+            if tree_references(node.node_tree, target, _visited):
+                return True
+    return False
+
+
 def alpha_partner(node, color_name: str) -> str | None:
     """Name of the socket that carries the alpha of *node*'s socket *color_name*."""
     if is_layer(node):

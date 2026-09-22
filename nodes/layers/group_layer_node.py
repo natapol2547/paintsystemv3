@@ -7,31 +7,13 @@ from bpy.utils import register_classes_factory
 from ..base_node import PaintSystemBaseNode
 from ...common import blender_icon, icon_kwargs
 from ...props.channel import channel_socket_specs
+from ...nodetree.stack_ops import tree_references
 from ...nodetree.tree import sync_sockets
 from ...compiler.core import compile_tree, mark_dirty
 
 
-def _tree_references(tree, target, _visited=None):
-    """True if *target* is *tree* or is nested anywhere inside it."""
-    if tree is None:
-        return False
-    if tree == target:
-        return True
-    if _visited is None:
-        _visited = set()
-    key = tree.as_pointer()
-    if key in _visited:
-        return False
-    _visited.add(key)
-    for node in tree.nodes:
-        if node.bl_idname == 'PaintSystemGroupLayerNode':
-            if _tree_references(node.node_tree, target, _visited):
-                return True
-    return False
-
-
 def is_ps_node_tree_poll(self, node_tree: bpy.types.NodeTree):
-    return node_tree.bl_idname == 'PaintSystemNodeTree' and not _tree_references(node_tree, self.id_data)
+    return node_tree.bl_idname == 'PaintSystemNodeTree' and not tree_references(node_tree, self.id_data)
 
 
 def _on_tree_changed(self, context):
@@ -60,7 +42,7 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
     )
 
     def poll_instance(self, node_tree):
-        return not _tree_references(self.node_tree, node_tree)
+        return not tree_references(self.node_tree, node_tree)
 
     def init(self, context):
         super().init(context)

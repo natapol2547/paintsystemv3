@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import check, finish, import_from, register_addon, section  # noqa: E402
+from harness import check, finish, import_from, register_addon, section, use_tree  # noqa: E402
 
 register_addon()
 core = import_from("compiler.core")
@@ -273,6 +273,17 @@ try:
           == [("Folder", 0), ("Filter", 1), ("Image", 1), ("Solid", 1)],
           f"into the active folder, then above the active layer {layout(tree)}")
     check_current(tree, "after adding every type")
+
+    # A filter layer remembers the mesh it was added on, so it can
+    # refresh later whatever is selected. Only a mesh that shows the tree
+    # counts.
+    check(added['FILTER'].surface_name == "",
+          "a filter layer added on a mesh that does not show the tree has no Object")
+    cube = bpy.context.view_layer.objects.active
+    use_tree(cube, tree)
+    check(bpy.ops.paint_system.add_layer(layer_type='FILTER') == {'FINISHED'}
+          and tree.nodes.active.surface_name == cube.name,
+          "one added on a mesh that shows the tree remembers that mesh")
 except Exception:
     traceback.print_exc()
     check(False, "unexpected exception")

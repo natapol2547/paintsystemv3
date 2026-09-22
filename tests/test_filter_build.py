@@ -28,7 +28,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (bake_group, check, finish, fmt, import_from,  # noqa: E402
-                     register_addon, section, skip)
+                     register_addon, section, skip, use_tree)
 
 register_addon()
 gpu_core = import_from("gpu_passes.core")
@@ -306,6 +306,27 @@ if available():
         check(bpy.ops.paint_system.clear_filter_result('EXEC_DEFAULT') == {'CANCELLED'},
               "a second Clear has nothing to do")
 
+        # The image layer below leaves its UV map empty, so a filter that
+        # names one needs a mesh to check the render map. With the cube
+        # stored as the layer's Object, Update works with the camera
+        # active.
+        view_layer = bpy.context.view_layer
+        cube = view_layer.objects.active
+        use_tree(cube, tree)
+        node.uv_map = "UVMap"
+        node.surface_name = cube.name
+        core.flush_now()
+        view_layer.objects.active = bpy.data.objects["Camera"]
+        try:
+            check(bpy.ops.paint_system.rebuild_filter_layer('EXEC_DEFAULT') == {'FINISHED'}
+                  and derived.stamped_uv_map(node.derived_image) == "UVMap",
+                  "Update builds against the layer's Object while the camera is active")
+        finally:
+            view_layer.objects.active = cube
+        node.uv_map = ""
+        node.surface_name = ""
+        core.flush_now()
+
         section("what it refuses")
         alone = bpy.data.node_groups.new("Build Empty", 'PaintSystemNodeTree')
         alone.initialize()
@@ -315,6 +336,8 @@ if available():
             lambda: layer_build.build_layer(bpy.context, alone, lonely)),
             "a filter layer with nothing under it")
 
+        # A bake renders a mesh. The cube shows the tree since the buttons
+        # above, so the plan gets as far as naming the bake.
         inner = bpy.data.node_groups.new("Build Inner", 'PaintSystemNodeTree')
         inner.initialize()
         group = tree.nodes.new('PaintSystemGroupLayerNode')

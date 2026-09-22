@@ -48,12 +48,14 @@ def new_hidden_input(node, socket_type: str, name: str, default):
     return socket
 
 
-def draw_uv_map(context, layout, node):
+def draw_uv_map(context, layout, node, obj=None):
     """Draw *node*'s ``uv_map`` field.
 
-    With an active mesh, the field searches that mesh's UV maps.
+    The field searches the UV maps of the mesh *obj*, else of the active
+    mesh. With neither, it is a plain text field.
     """
-    obj = getattr(context, 'object', None)
+    if obj is None or obj.type != 'MESH':
+        obj = getattr(context, 'object', None)
     if obj is not None and obj.type == 'MESH':
         layout.prop_search(node, "uv_map", obj.data, "uv_layers", text="UV")
     else:
@@ -191,10 +193,12 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         self.outputs.new('NodeSocketFloat', "Alpha")
 
     @classmethod
-    def create(cls, tree, target=None, **options):
+    def create(cls, tree, target=None, ps_object=None, **options):
         """Add a layer of this type to *tree*'s active channel and return it.
 
         *target* places it as in ``PaintSystemNodeTree.insert_layer_node``.
+        *ps_object* is the mesh the user is working on, from
+        ``context.get_ps_object``, or None. Most layers ignore it.
         *options* holds the ``ps_add_options`` values by name.
         """
         return tree.insert_layer_node(cls.bl_idname, target=target)

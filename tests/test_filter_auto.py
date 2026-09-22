@@ -21,7 +21,7 @@ import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (check, finish, import_from, register_addon,  # noqa: E402
-                     section, skip)
+                     section, skip, use_tree)
 
 register_addon()
 gpu_core = import_from("gpu_passes.core")
@@ -82,6 +82,10 @@ if available():
         section("a new layer")
         tree = bpy.data.node_groups.new("Auto", 'PaintSystemNodeTree')
         tree.initialize()
+        # The default cube shows the tree, so it is the mesh the layer
+        # resolves against when the stack needs one.
+        cube = bpy.context.view_layer.objects.active
+        use_tree(cube, tree)
         quiet()
         with core.suspend_compile(tree):
             picture = tree.insert_layer_node(IMAGE)
@@ -140,23 +144,23 @@ if available():
         was = stamp(node)
         node.enabled = False
         core.flush_now()
-        # The timer has to be taken down by hand before either half of
-        # this can mean anything. `pump` calls `_tick` as a plain
-        # function, so Blender never sees the None return that would
-        # unregister it, and a registration left over from the section
-        # above would make "nothing asked" and "something asked" read
-        # the same.
-        quiet()
+        # The stroke still reaches the job. The cube's material shows the
+        # tree, so the depsgraph reports the painted image, and the
+        # handler pushes the refresh deadline back on every stroke. What
+        # matters is that the pass this causes builds nothing.
         undo_pixels.write_pixels(picture.image, [0.5, 0.1, 0.6, 1.0] * 64)
         core.flush_now()
-        check(not bpy.app.timers.is_registered(layer_job._tick),
-              "a stroke below it asks for nothing while it is switched off")
         pump()
-        check(stamp(node) == was, "and it is not rebuilt while nothing can show it")
+        check(stamp(node) == was, "a stroke below it is not built while nothing can show it")
         check(node.stale_reason == "the pixels below changed",
               f"but it still knows it is out of date: {node.stale_reason!r}")
         check(node.auto_refresh, "and did not have to give up Auto Refresh to stay put")
 
+        # The timer has to be taken down by hand before this can mean
+        # anything. `pump` calls `_tick` as a plain function, so Blender
+        # never sees the None return that would unregister it, and a
+        # registration left over from above would make "nothing asked"
+        # and "something asked" read the same.
         quiet()
         node.enabled = True
         core.flush_now()
@@ -441,12 +445,92 @@ if available():
             core.flush_now()
             check(not node.needs_build and node.derived_error == "",
                   f"and the layer is built: {node.stale_reason!r}, {node.derived_error!r}")
+            check(node.surface_name == cube.name, "and the build stored the mesh it needed")
         finally:
             uv_maps["Auto Map"].name = "UVMap"
         node.uv_map = ""
         core.flush_now()
         check(pump(), "going back to the render UV map rebuilds it")
         core.flush_now()
+
+        section("whatever is selected")
+        # Once the layer holds its mesh, the refresh keeps running while
+        # another object is active. A timer only has the view layer's
+        # active object to go on, and here that is the camera.
+        view_layer = bpy.context.view_layer
+        view_layer.objects.active = bpy.data.objects["Camera"]
+        try:
+            node.uv_map = "UVMap"
+            core.flush_now()
+            check(pump(), "the refresh runs with the camera active")
+            core.flush_now()
+            check(not node.needs_build and node.derived_error == "",
+                  f"and builds against the layer's Object: {node.derived_error!r}")
+
+            node.surface_name = ""
+            core.flush_now()
+            check(node.stale_reason == "the object or its render UV map changed",
+                  f"clearing the Object puts a build that needed it out of date: "
+                  f"{node.stale_reason!r}")
+            check(pump() and node.auto_refresh and "'Camera' is not a mesh" in node.derived_error,
+                  f"and with only the camera to go on, the layer waits: {node.derived_error!r}")
+
+            # Filling the Object in is a write during the build. Its
+            # compile pokes the job, which must find that nothing the
+            # build read has moved.
+            view_layer.objects.active = cube
+            restarts = []
+            restart = layer_job._restart
+            layer_job._restart = lambda job: restarts.append(job.node_name) or restart(job)
+            budget, layer_job.BUDGET = layer_job.BUDGET, 0.0
+            try:
+                layer_job._deadline = 0.0
+                layer_job._tick()
+                check(node.surface_name == cube.name, "selecting the cube fills the Object in")
+                core.flush_now()
+                check(pump(), "the refresh runs to the end")
+            finally:
+                layer_job._restart = restart
+                layer_job.BUDGET = budget
+            core.flush_now()
+            check(not restarts and not node.needs_build,
+                  f"without restarting itself: {restarts}, {node.stale_reason!r}")
+        finally:
+            view_layer.objects.active = cube
+        node.uv_map = ""
+        core.flush_now()
+        pump()
+        core.flush_now()
+
+        section("a linked tree")
+        # A linked tree is read from its library again whenever the file
+        # opens, so the job leaves it alone instead of building a result
+        # that would be thrown away.
+        library_path = os.path.join(tempfile.gettempdir(), "ps_auto_library.blend")
+        shared = bpy.data.node_groups.new("Auto Shared", 'PaintSystemNodeTree')
+        shared.initialize()
+        with core.suspend_compile(shared):
+            shared.insert_layer_node(SOLID)
+            shared.insert_layer_node(FILTER).resolution = SIZE
+        core.flush_now()
+        bpy.data.libraries.write(library_path, {shared}, fake_user=True)
+        bpy.data.node_groups.remove(shared)
+        with bpy.data.libraries.load(library_path, link=True) as (_, linked):
+            linked.node_groups = ["Auto Shared"]
+        shared = linked.node_groups[0]
+        library = shared.library
+        try:
+            shared_filter = next(item.node for item in shared.stack(shared.channels[0].name)
+                                 if item.node.bl_idname == FILTER)
+            check(not shared.is_editable and shared_filter.needs_build,
+                  "a linked filter layer that was never built")
+            core.mark_dirty(shared)
+            core.flush_now()
+            check(pump() and not derived.is_built(shared_filter.derived_image),
+                  "is not built by the job")
+        finally:
+            bpy.data.libraries.remove(library)
+            os.remove(library_path)
 
         section("a layer with nothing below")
         # A refusal is about the stack, and the stack can change. The layer

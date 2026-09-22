@@ -39,7 +39,7 @@ class PAINTSYSTEM_OT_add_layer(Operator):
         options = {name: getattr(self, name) for name in node_class.ps_add_options}
         target = ps.layer if ps.stack_item is not None else None
         with suspend_compile(ps.tree):
-            node_class.create(ps.tree, target=target, **options)
+            node_class.create(ps.tree, target=target, ps_object=ps.ps_object, **options)
         update_active_image(context)
         return {'FINISHED'}
 

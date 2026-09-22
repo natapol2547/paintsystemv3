@@ -49,15 +49,18 @@ def below_of(node):
     return link.from_node if link is not None else None
 
 
-def current_stamp(tree, node):
-    """What a build of *node* right now would stamp its image with."""
+def current_stamp(tree, node, surface=None):
+    """What a build of *node* right now would stamp its image with.
+
+    *surface* is the mesh the build needed, as in `InputPlan.surface`.
+    """
     ctx = core.build_ir(tree).ctx
-    return freshness.stamp(freshness.fingerprint_parts(ctx, node, below_of(node)))
+    return freshness.stamp(freshness.fingerprint_parts(ctx, node, below_of(node), surface))
 
 
-def restamp(tree, node):
+def restamp(tree, node, surface=None):
     """Pretend the layer was just rebuilt, without running a build."""
-    node.derived_image[derived.FINGERPRINT_KEY] = current_stamp(tree, node)
+    node.derived_image[derived.FINGERPRINT_KEY] = current_stamp(tree, node, surface)
     reason(tree, node)
 
 
@@ -181,6 +184,42 @@ try:
     # already right about, and only a clipped one asks to be rebuilt.
     parts = freshness.fingerprint_parts(core.build_ir(tree).ctx, node, below_of(node))
     check("clip" not in parts, "an unclipped layer stamps what it always did")
+
+    section("the mesh a build needed")
+    # A build needs a mesh when one map is named and some layers below
+    # leave theirs empty. It then depends on the mesh's render UV map,
+    # which no hash of the tree covers. A build that needed none does not.
+    mesh = bpy.data.meshes.new("Fresh Mesh")
+    mesh.uv_layers.new(name="UVMap")
+    mesh.uv_layers.new(name="Other")
+    plane = bpy.data.objects.new("Fresh Plane", mesh)
+    node.surface_name = plane.name
+    restamp(tree, node, plane)
+    check(reason(tree, node) == "", "a build that needed the mesh is up to date")
+    mesh.uv_layers["Other"].active_render = True
+    check(reason(tree, node) == "the object or its render UV map changed",
+          f"until its render UV map is switched: {reason(tree, node)!r}")
+    mesh.uv_layers["UVMap"].active_render = True
+    check(reason(tree, node) == "", "and switching it back puts that right")
+    # The Object is stored by name, so a rename loses it until a build
+    # stores the new name.
+    plane.name = "Fresh Plane Renamed"
+    check(reason(tree, node) == "the object or its render UV map changed",
+          f"renaming the mesh leaves nothing to check the map on: {reason(tree, node)!r}")
+    node.surface_name = plane.name
+    check(reason(tree, node) == "", "and storing the new name puts that right")
+    node.surface_name = ""
+    check(reason(tree, node) == "the object or its render UV map changed",
+          f"so does clearing the Object: {reason(tree, node)!r}")
+
+    node.surface_name = plane.name
+    restamp(tree, node)
+    mesh.uv_layers["Other"].active_render = True
+    check(reason(tree, node) == "",
+          f"a build that needed no mesh ignores the render map: {reason(tree, node)!r}")
+    mesh.uv_layers["UVMap"].active_render = True
+    node.surface_name = ""
+    bpy.data.objects.remove(plane)
 
     section("what does not")
     # These are outside the hash by construction: they change how the

@@ -12,11 +12,11 @@ from ..base_node import mark_tree_dirty
 from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
 from ...filters.derived import FINGERPRINT_KEY, build_stamp, is_built, stamped_uv_map
-from ...filters.freshness import PIXEL_REASON, fingerprint_parts, structure_reason
+from ...filters.freshness import PIXEL_REASON, built_on_surface, fingerprint_parts, structure_reason
 from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items, layer_filter_params
 from ...filters.painter.brushes import brush_items
 from ...filters.registry import BLUR_MAX_EFFECTIVE_SIGMA
-from ...filters import layer_job
+from ...filters import layer_job, layer_plan
 from ...nodetree.stack_ops import feeding_link
 
 
@@ -61,6 +61,12 @@ def _lock_changed(self, context):
     update_painting(self, context)
     if not self.lock_layer and self.enabled and self.auto_refresh and self.needs_build:
         layer_job.notify()
+
+
+def _surface_search(self, context, edit_text):
+    """List the meshes the build accepts as this layer's Object."""
+    tree = self.id_data
+    return [obj.name for obj in bpy.data.objects if not layer_plan.unusable(obj, tree)]
 
 
 def _stale_pixels_changed(self, context):
@@ -118,6 +124,11 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         'painter_seed',
         'resolution', 'uv_map', 'auto_refresh',
         'derived_image', 'derived_stale_reason', 'derived_stale_pixels', 'derived_error',
+        # Which mesh answers changes no compiled node, and hashing its
+        # name would invalidate every cache above the layer on a rename.
+        # When the mesh matters, `filters.freshness` records what matters
+        # about it.
+        'surface_name',
     )
 
     filter_type: EnumProperty(
@@ -223,7 +234,20 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         update=mark_tree_dirty, description="Size of the image this filter builds")
     uv_map: StringProperty(
         name="UV Map", update=mark_tree_dirty,
-        description="UV map the filter is built in (empty: active render UV map)")
+        description="UV map the filter is built in. Empty uses the map the layers below "
+                    "name, or the active render UV map when they name none")
+    # The name of the mesh the layer resolves against when it needs one.
+    # Stored, so the layer keeps refreshing whatever is selected. Add
+    # Layer and the first build that needs a mesh fill it from the active
+    # object. See `filters.layer_plan.surface_of`, which checks it on
+    # every build, since the search only filters what is offered.
+    # A name, not an Object pointer. A pointer makes the mesh part of the
+    # tree: appending the material from another file would bring the mesh
+    # into the scene, and deleting the mesh would keep it in the file.
+    surface_name: StringProperty(
+        name="Object", search=_surface_search, update=mark_tree_dirty,
+        description="The mesh this layer reads UV maps from when it needs one. Filled in "
+                    "from the active mesh, then used whatever is selected")
     auto_refresh: BoolProperty(
         name="Auto Refresh", default=True, update=_auto_refresh_changed,
         description="Rebuild this layer shortly after the layers below it change")
@@ -268,13 +292,24 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         # the copy has the pixels and renders straight away.
         if self.derived_image is not None:
             self.derived_image = self.derived_image.copy()
+        # The copy shares the Object on purpose. A copy in the same tree
+        # is shown on the same meshes. A copy pasted into another tree is
+        # checked like any Object, and passed over if it does not fit.
 
     @classmethod
-    def create(cls, tree, target=None, filter_type='INVERT', resolution='2048', **options):
+    def create(cls, tree, target=None, ps_object=None, filter_type='INVERT', resolution='2048',
+               **options):
         node = super().create(tree, target=target)
         node.filter_type = filter_type
         node.resolution = resolution
+        if ps_object is not None and not layer_plan.unusable(ps_object, tree):
+            node.surface_name = ps_object.name
         return node
+
+    @property
+    def surface_object(self):
+        """The object ``surface_name`` names, or None."""
+        return bpy.data.objects.get(self.surface_name) if self.surface_name else None
 
     @property
     def stale_reason(self) -> str:
@@ -332,7 +367,8 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             for name in names:
                 column.prop(self, name)
         layout.prop(self, "resolution")
-        draw_uv_map(context, layout, self)
+        layout.prop(self, "surface_name", **icon_kwargs('OBJECT_DATA'))
+        draw_uv_map(context, layout, self, self.surface_object)
         self.draw_result_settings(context, layout)
 
     def draw_result_settings(self, context, layout):
@@ -422,8 +458,12 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             reason = ""
         else:
             link = feeding_link(self.inputs['Color'])
-            parts = fingerprint_parts(ctx, self, link.from_node if link else None)
-            reason = structure_reason(str(image.get(FINGERPRINT_KEY, "")), parts)
+            stored = str(image.get(FINGERPRINT_KEY, ""))
+            # A build that needed a mesh took it from the Object, which it
+            # filled in. A build that did not is compared without one.
+            surface = self.surface_object if built_on_surface(stored) else None
+            parts = fingerprint_parts(ctx, self, link.from_node if link else None, surface)
+            reason = structure_reason(stored, parts)
         # Writing an RNA property tags the tree and the materials that
         # use it for an update, so only write when the value changes.
         if self.derived_stale_reason != reason:

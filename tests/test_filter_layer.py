@@ -111,6 +111,7 @@ try:
     node.invert_alpha = True
     node.resolution = '4096'
     node.uv_map = "SomeOtherMap"
+    node.surface_name = "Filter Holder"
     check(core.build_ir(tree).ctx.subtree_hash(node) == before,
           "asking for a different filter changes no hash before the rebuild")
     spare = built_image("Filter Result Spare", (0.0, 0.0, 1.0, 1.0))
@@ -143,6 +144,7 @@ try:
           "so changing Painterly's changes no hash before the rebuild either")
     node.painter_seed, node.painter_coverage = 42, 70.0
     node.filter_type = 'INVERT'
+    node.surface_name = ""
 
     section("the blend mode is not offered")
     check(not node.ps_shows_blend_mode and node.ps_opacity_label == "Amount",

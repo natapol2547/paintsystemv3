@@ -105,8 +105,8 @@ def on_depsgraph_update_post(scene, depsgraph=None):
         # through a stroke. A pass with nothing to do costs one scan and
         # then unregisters itself.
         layer_job.notify()
-    # A filter layer refused for want of an active mesh or a UV map waits
-    # for the scene to change, and such a change compiles no tree.
+    # A filter layer refused for want of a mesh or a UV map waits for the
+    # scene to change, and such a change compiles no tree.
     layer_job.scene_changed()
     # The live selection looks up a layer's UV map by name, and renaming
     # or removing a UV map shows up only as a geometry update. While the
