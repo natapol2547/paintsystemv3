@@ -2,6 +2,16 @@
 
 Epic E. Size L. Milestone M1.
 
+## Status
+
+Done: the Add Paint System dialog with five material templates, its
+recommendation and live summary (`templates.py`,
+`ops/node_tree_ops.py`), the Add Channel menu with four channel templates
+(`ops/channel_ops.py`, `panels/main_panels.py`), and reconnecting a
+material whose group node was deleted. The v3 design below describes the
+code as it is. Several trees per material stay PS-040, and undoing a
+template stays PS-042.
+
 ## v2 behaviour
 
 `paint_system.new_group` (`operators/group_operators.py:73-380`),
@@ -346,31 +356,353 @@ outputs feed the group output.
 
 ## v3 design
 
-- `ops/templates.py`: a `Template` class per kind with `prepare_material`,
-  `create_channels(tree)`, `wire(material, group_node)` and
-  `dissolve(material, group_node)` (PS-042). `paint_system.new_group`
-  picks the template, creates and initialises the tree as
-  `setup_material` does, records
-  `tree.template`, and calls the three steps. Existing
-  `link_tree_to_material` becomes the NONE/PBR wiring primitive.
-- Channel templates: `CHANNEL_TEMPLATES = {COLOR: (type, use_alpha,
-  color_space, principled socket), ...}` used by both `new_group` and
-  `add_channel`. Wiring to Principled is done by socket name and skips
-  linked sockets.
-- PAINT_OVER keeps the EEVEE-only rule; the render engine check must
-  handle `BLENDER_EEVEE_NEXT` and `BLENDER_EEVEE`.
-- The dialog layout (`draw`, `group_operators.py:330-380`) is ported one
-  to one: template enum expanded with icons, name, per-template options
-  (add solid/image layers, PBR channel checkboxes, blend mode, backface
-  culling).
-- The initial image layer uses `PSImageCreateMixin` (PS-009) so the
-  resolution and UDIM options appear in the same dialog as in v2.
+The user picked the layout on 2026-09-23: template cards, preselected
+from the material with the reason shown, a plain-words summary of what
+changes in the material, then only the chosen template's options, and
+a closed "Material & Viewport" section. v2's features stay; the dialog
+explains them instead of listing them.
+
+### Rules every template follows
+
+- Nothing is deleted and no link is dropped. When a template needs the
+  Material Output's Surface and a link already goes into it (even a
+  muted one, or one from a reroute nothing feeds), the template adds a
+  new Material Output and makes it active. The old output and the nodes
+  that feed it stay, switched off. The summary names the shader that
+  stops showing. The new output also takes the old output's Volume,
+  Displacement and Thickness sources, muted as they were (an output
+  socket can feed several inputs, so no link moves). A link the
+  template needs in another place is moved, and the summary says so.
+- A muted link feeds nothing. Reading the graph (the recommendation,
+  the target node, the summary) skips it, and a reroute that nothing
+  feeds counts as nothing. A muted link that moves under the paint stays
+  muted, and the socket's own value is copied to the group's input as
+  well, since that value is what showed.
+- "The material's output" is `get_output_node('EEVEE')`: painting shows
+  in Material Preview, which always renders with EEVEE, and Blender
+  prefers an output whose target matches exactly over an active ALL
+  output (probed 4.2 to 5.3). A preview output (PS-061) is skipped for
+  the output it replaced. A new output takes the target of the output
+  it replaces. When `get_output_node('CYCLES')` is another node, the
+  summary says Cycles keeps using it.
+- One tree per material, named after the material, so PS-040 stays
+  deferred. The material is the active material of the mesh that
+  `get_ps_object` gives, so an empty parented to a mesh adds to the
+  mesh's material, as the panel already shows.
+- A material without a node tree, one the dialog makes or a node-less
+  one before 5.0, gets Blender's default Principled BSDF and Material
+  Output. Unlit and Normal remove that Principled, the one removal the
+  dialog makes, of a node it made itself. PBR paints into it and Group
+  Only leaves it. Paint Over is refused: until the defaults are made,
+  nothing feeds Surface.
+- Linked data is read again from its library when the file opens, so a
+  change to it would not last. Add Paint System is greyed out when the
+  data it writes to is linked (the active material, or the object or
+  mesh that would get the new material), with "Linked data cannot be
+  set up. Make it local first". Add Channel leaves linked materials
+  alone.
+- `Material.use_nodes` is set only before Blender 5.0. From 5.0 every
+  material has a node tree and the property is deprecated (checked in
+  5.0, 5.2 and 5.3: reading it warns). Before 5.0, a material with a
+  tree and Use Nodes off gets it turned on, and the summary says so.
+- Placement: existing nodes move by a delta on `location`, which works
+  inside frames. New nodes are placed from absolute positions
+  (`location_absolute` from 4.5, the sum of the parent frames' locations
+  on 4.2) and sized by `width`, as `dimensions` is zero in background.
+  A new chain starts right of the right-most node, at the height of the
+  output it replaces, or at the origin in an empty tree.
+
+### Channel templates
+
+`templates.py` (top level, next to `context.py`) holds the channel
+templates, the material templates, the recommendation and the summary.
+The operators in `ops/node_tree_ops.py` and `ops/channel_ops.py` use it.
+
+| Template | Channel | Type | Options besides `channel_defaults` | Paints into |
+| --- | --- | --- | --- | --- |
+| COLOR | Color | COLOR | alpha off when no target has an alpha input | Base Color, or Color on a Diffuse BSDF or an unlit Emission; Alpha, or the unlit Mix factor, through "Color Alpha" |
+| METALLIC | Metallic | FLOAT | Limit Range 0 to 1 | Metallic |
+| ROUGHNESS | Roughness | FLOAT | Limit Range 0 to 1 | Roughness |
+| NORMAL | Normal | VECTOR | Normals, Paint In Tangent, the dialog's UV map | Normal |
+
+Connecting a channel to a shader node: the node's socket link moves onto
+the group's channel input, or the socket's value is copied there when it
+has no link. Then the group's output is linked to the socket. The alpha
+goes the same way, once the colour is connected. So right after Add the
+material looks as it did, and an Image Texture that fed Base Color is
+now the base the layers paint over. A socket the group's channel output
+already feeds is left alone and counts as connected. A socket fed by
+another of the group's outputs (the user connected another channel
+there), or by a node the group feeds, keeps its link, and so does one
+whose group input is already taken: the channel is not connected there.
+
+A Diffuse BSDF has no Alpha input, so a Color channel whose targets are
+all Diffuse is made without alpha (as v2): with a base alpha of 0, a
+half-transparent stroke would otherwise show at full strength. When
+another material's target has an alpha input, the channel keeps its
+alpha, and the Diffuse material's group gets "Color Alpha" 1 instead,
+unless something feeds it. The tree is compiled before the group's
+sockets are read, because `suspend_compile` holds new sockets back.
+
+The target shader node is the Principled BSDF nearest the material's
+output upstream (reroutes followed), else the nearest Diffuse BSDF, else
+the Emission of an unlit shader as Unlit and Paint Over build it: a Mix
+Shader with a Transparent BSDF in its first shader input and the
+Emission in its second. Its alpha input is the Mix factor. A plain
+Emission of the material's own is not a target, like any other shader:
+the unlit shape is recognised so that Unlit and Paint Over materials can
+be connected again. Nodes upstream of the Paint System group node
+are skipped: after Paint Over, the Principled feeds the group, and
+linking the group back into it would make a cycle that Blender drops.
+
+### Material templates
+
+- UNLIT "Unlit": a Color channel. Group Color -> Emission, and a Mix
+  Shader with the factor from "Color Alpha" between a Transparent BSDF
+  and the Emission, into Surface. The Mix factor's own value is 1, so
+  turning Use Alpha off, which drops that link, leaves the material
+  opaque instead of half transparent. The dialog's Canvas colour (white
+  by default, with alpha) goes into the group's Color and "Color Alpha"
+  inputs, so the canvas shows before anything is painted, and a clear
+  Canvas gives a transparent start. The channel row shows that base, and
+  Channel Settings its alpha. v2 added a white Solid Color layer
+  instead.
+- PBR "PBR": the checked channels (Color, Metallic, Roughness, Normal;
+  only Color is checked at first), connected to the target Principled.
+  Without one, a new Principled goes into Surface when it is free,
+  else into a new active output. The nodes that feed the Principled
+  move left to make room for the group node.
+- PAINT_OVER "Paint Over": EEVEE only (`BLENDER_EEVEE_NEXT` on 4.2 and
+  4.5, `BLENDER_EEVEE` from 5.0), and only when something feeds Surface.
+  That source goes into the group's Color input, through a Shader to
+  RGB node when it is a shader. The Shader to RGB's Alpha feeds "Color
+  Alpha", so the material's own transparency is kept (v2 set 1.0; the
+  alpha was checked exact for Principled, Transparent and Emission
+  sources in EEVEE on 4.2 and 5.2). A colour or float source gets
+  "Color Alpha" 1. Then Emission and Transparent mix as in UNLIT, into
+  the same output, which moves right to make room. The source's link to
+  Surface moves onto the Shader to RGB (or the group) input.
+- NORMAL "Normal": a Normal channel into a grey Diffuse BSDF's Normal,
+  into a new active output. The Diffuse shows the painted normals lit.
+- GROUP "Group Only": a Color channel. The group node goes to the right
+  of the material's nodes and is not connected, and the summary says
+  nothing shows until its outputs are connected.
+
+### Recommendation
+
+`recommend(material, scene)` is a plain function that returns the
+template and the reason line. The engine is the scene's render engine.
+
+| Material | Template | Reason |
+| --- | --- | --- |
+| None | UNLIT | Picked: the object has no material yet. |
+| No node tree (before 5.0) | UNLIT | Picked: the material has no nodes yet. |
+| Surface fed by a Principled BSDF | PBR | Picked: the material has a Principled BSDF. |
+| Surface fed by anything else, EEVEE | PAINT_OVER | Picked: the material has its own shader. |
+| The same, another engine, a Principled upstream | PBR | Picked: the material has a Principled BSDF. |
+| The same, no Principled | GROUP | Picked: no Principled BSDF to paint into. |
+| Nothing on Surface | UNLIT | Picked: nothing feeds the Material Output. |
+
+A Principled fed by textures counts as a Principled (v2 counted it as
+complex and picked Paint Over). Its textures move under the paint.
+Paint Over can run with an EEVEE engine and something on Surface.
+
+### Dialog
+
+`paint_system.setup_material` keeps its id (the panel and about twenty
+tests call it) and is relabelled "Add Paint System". Its options are
+UNDO only, without REGISTER: the dialog is the options UI, and an
+Adjust Last Operation panel would redraw the dialog against the
+material after Add, where the recommendation and summary no longer
+hold. `invoke` opens `invoke_props_dialog` at width 360 with the title
+"Add Paint System" and the confirm text "Add". Top to bottom:
+
+1. Cards: one `prop_enum` button per template, in two rows (Unlit, PBR,
+   Paint Over / Normal, Group Only). The icons are Blender icons on the
+   enum items, because `prop_enum` takes no `icon_value`; add-on icons
+   would need an items callback. Paint Over is disabled when it cannot
+   run. Its tooltip says it needs EEVEE and something connected to the
+   Material Output.
+2. The reason line (INFO), while the chosen card is the recommended
+   one.
+3. The summary box: one fact per line, built from the template, the
+   options and the material. Labels do not wrap in Blender, so lines
+   longer than the box are wrapped in Python by their measured width
+   (`wrap_text`, with `blf` at the UI style's widget font size). Each
+   line is a `SummaryLine`: its text, whether it is a warning (a problem
+   to fix before Add, or before painting), and whether it is indented. A
+   warning draws an ERROR icon, and its wrapped lines a blank icon so
+   the text lines up. The lines, in order, each only when it applies:
+   - 'Makes a new material "<name>".' or 'Adds to the material "<name>".'
+     A new material is named "<object> Material", with the first free
+     ".001" suffix when that name is taken, as Blender would name it.
+   - 'Only the active object is set up.' when another selected mesh does
+     not use the material. One that uses it shows the paint as well.
+   - The template's lines: Unlit 'Adds an unlit shader that shows the
+     paint.'; PBR 'Paints into "<Principled>":', or 'Adds a Principled
+     BSDF to paint into:' when there is none, then one indented line per
+     channel, '<socket>, over "<source>"' when a link moves under the
+     paint, else '<socket>', and after Color 'Alpha, over "<source>"'
+     when something feeds the Alpha; Paint Over 'Paints over "<source>" as it
+     renders.' and 'The paint on top is unlit.', or, when it cannot run,
+     "Paint Over needs EEVEE and something connected to the Material
+     Output's Surface." (warning); Normal 'Adds a grey Diffuse shader to
+     show the normals.'; Group Only 'Adds the Paint System node, not
+     connected.' and 'Nothing shows until you connect it.'
+   - '"<shader>" stays, but no longer shows.' when a template that adds
+     a shader (Unlit, Normal, and PBR without a Principled) replaces an
+     output whose Surface shows something, 'The new output keeps the
+     Displacement.' (and Volume, Thickness) when it takes them, and
+     'Cycles keeps using "<output>".' for a split output, for those
+     templates and Paint Over.
+   - 'Turns on the material's nodes.' (before 5.0).
+   - 'Adds a <size> x <size> image layer to "<channel>".'
+   - 'Uses the UV map "<name>".' when a layer or a Normal channel uses
+     one; with no UV map, 'The mesh has no UV map. Unwrap it to paint.'
+     (warning).
+   - 'Turns on smooth transparency.', 'Hides back faces.', 'Switches
+     the view to Standard.'
+   - 'Pick at least one channel.' (warning) in PBR with none checked.
+   - 'Nothing is deleted or disconnected.'
+   A source is named by its image for an Image Texture, else by its
+   label or name.
+4. The chosen template's options: Canvas (Unlit); the Channels
+   checkboxes (PBR); "Start With" (Image Layer or Nothing) with the
+   resolution buttons (1024, 2048, 4096) while it is Image Layer; the UV Map
+   search when the mesh has more than one UV map and a layer or a
+   Normal channel uses it. Empty means the active render UV map, and
+   the summary names it.
+5. "Material & Viewport", a layout panel that starts closed: Smooth
+   Transparency (`surface_render_method` BLENDED, with a warning about
+   sorting), Backface Culling (`use_backface_culling` on and
+   `use_transparency_overlap` off, as v2), and Standard View Transform.
+   The last is drawn only when the scene's own view transform is not
+   Standard and the colour management has a Standard view. It sets the
+   look to None as well, since a Filmic look such as Very High Contrast
+   survives the switch. While a channel preview (PS-061) is saved, the
+   change goes to the display the preview puts back. When the user
+   picked another view during the preview, that view is the one on
+   screen and the one the preview leaves, so it switches to Standard
+   now as well. It is applied last and set through
+   `props/preview.set_enum`.
+
+The properties are SKIP_SAVE, so every opening starts from the
+recommendation. `template` is declared before the options its update
+sets, because keyword arguments are applied in declaration order: a
+caller's explicit option then wins over the template's default. Picking
+a template, in the dialog or as a keyword, sets Backface Culling and
+Standard View Transform to its defaults: on for Unlit and Paint Over,
+whose output is unlit, and off for the others, which keep the
+material's own look. With no template given, `execute` uses
+`recommend()` and fills in the options the caller did not set the same
+way. Start With defaults to Nothing, so a script gets no layer, and
+`invoke` sets Image Layer at 2K. `invoke` does not run in background, so
+its presets are kept to those two lines, and the recommendation is
+tested through `recommend()`.
+
+`execute` first checks every refusal (Paint Over that cannot run, PBR
+with no channel) and cancels with a report before it changes anything.
+Then: make the material if there is none; make the tree with the
+template's channels (`initialize` without its default Color channel);
+make the first channel active and add the first layer to it; compile;
+add the group node (`MATERIAL_GROUP_KEY`) and build the template's
+graph; apply the material and view settings; make the tree the scene's
+active tree and sync the paint canvas (`update_active_image`).
+
+`poll` greys the button out, with a poll message, when the material
+already runs its tree. A material whose tree is set but whose group node
+is gone (deleted, or the panel's tree field pointed it at another tree)
+is reconnected instead, without the dialog: the group node comes back
+and each channel that matches a channel template by name and type is
+connected, as `link_tree_to_material` does. Unlit and Paint Over
+materials connect through their unlit shader (see the target node
+above). Paint Over's Shader to RGB, left feeding nothing, feeds the new
+group's Color and "Color Alpha" again, and a running channel preview's
+output gets the new group's preview output. The report is INFO
+'Connected "<tree>" to "<material>" again' when a channel output is
+linked, else a WARNING that no shader node was found to connect it to.
+Under the panel's material row, a "Connect to the Material" button
+shows in that state.
+
+### Add Channel
+
+The "+" next to the channel list opens a menu: the channel templates the
+tree does not have yet (by name), then "Custom..." for the name and type
+dialog. `paint_system.add_channel` gets a `template` option, CUSTOM by
+default, so scripts keep the name and type call. A template creates the
+channel with its options and connects it in every material that runs
+the tree (each group node found by `find_material_group_node`, as the
+preview does), to that material's target node as above. It reports when
+no material had a target. It adds no layers. A nested tree has no group
+node in a material, so it only gets the channel.
+
+## Known gaps
+
+- Only the active object's material is set up. v2 set up every
+  selected object's material. The summary says so when several meshes
+  are selected.
+- No UV map is made for a mesh without one (auto UV is PS-009); the
+  summary warns instead. No UDIM or float image options.
+- The template is not stored on the tree. Undoing a template (PS-042)
+  would have to read the graph.
+- Turning a channel's Use Alpha back on does not relink its alpha
+  output where it was linked before.
+- The preview (PS-061) finds the material's output by the active flag,
+  so on a material with EEVEE and Cycles outputs its Preview output may
+  not show. That is PS-061's to fix.
+- The dialog's presets in `invoke` (the recommended template, Image
+  Layer at 2K) and the reconnect shortcut through `invoke` run only with
+  a window, so the headless tests call `execute` and `recommend()`.
 
 ## Acceptance
 
-- Each template on a fresh cube produces the v2 material graph (compare
-  node type sets and link endpoints by socket name in a headless test).
-- PAINT_OVER on a material with an Emission -> Output chain inserts
-  Shader to RGB and renders the painted colour over the emission.
-- PBR with all four channels wires Base Color, Metallic, Roughness,
-  Normal.
+- A headless test per template (`tests/test_templates.py`), on the
+  factory cube's material, on a material with a textured Base Color, on
+  a material with nothing on Surface, on one with its own Emission, on
+  one with EEVEE and Cycles outputs, on one with a Displacement, on one
+  with its Principled BSDF in a frame and on an object without a
+  material: the expected node
+  types and links (by socket name, and by identifier for the Mix
+  Shader, whose inputs are both "Shader" and whose factor is "Fac" on
+  4.x and "Factor" from 5.0), the material's output, every node from
+  before still there (but the default Principled Unlit and Normal
+  remove), and every link from before still there or moved onto the
+  group's input or the Shader to RGB.
+- PBR with all four channels connects Base Color, Alpha, Metallic,
+  Roughness and Normal, copies their values, leaves Color active with
+  an sRGB image layer that is the paint canvas, and a Cycles render of
+  the empty stack matches the render from before Add.
+- Unlit renders its Canvas colour unlit. Paint Over on an Emission ->
+  Output chain feeds the emission through Shader to RGB and keeps a
+  Transparent source transparent (graph checks; EEVEE renders are
+  probed by hand, as CI may have no GPU). A refused Paint Over leaves
+  `bpy.data` unchanged.
+- The recommendation table, the summary lines per template and the
+  dialog draw (cards, reason, options per template, the closed
+  section) are checked headlessly, with the render engine set by each
+  test.
+- The Add Channel menu lists only the missing templates. Roughness
+  connects to the Principled's Roughness with its value copied, in
+  every material that runs the tree. After Paint Over, it adds an
+  unconnected channel and leaves every link valid. Color on a Diffuse
+  target has no alpha, and a red layer at opacity 0.5 over a 0.5 grey
+  base gives (0.75, 0.25, 0.25).
+- Deleting the group node and running Add Paint System connects the
+  tree again, for PBR, Unlit and Paint Over (with its Shader to RGB)
+  and during a channel preview, and the panel shows the Connect to the
+  Material button only in between. Group Only reports a warning.
+- Muted links: a muted Surface link or a reroute nothing feeds counts
+  as nothing (recommendation, refusal, summary); a muted link moved
+  under the paint stays muted with its socket's value; a new output
+  copies a muted Displacement muted.
+- Linked data: Add Paint System is greyed out for a linked material and
+  for a linked mesh without a material (until the slot links to the
+  object), and Add Channel connects only the local materials.
+- A copied material and tree (as appending brings) run their own
+  compiled tree, and adding a channel to the original leaves the copy
+  alone.
+- `tests/test_icons.py` follows a module-level name bound by a relative
+  import (such as `SOCKET_ICONS`) to its definition, and checks a
+  `blender_icon(...)` given as an EnumProperty item's icon against
+  Blender's icon names, since Blender draws an unknown item icon as
+  none without an error.

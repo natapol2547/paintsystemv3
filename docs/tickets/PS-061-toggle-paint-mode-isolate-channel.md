@@ -212,8 +212,10 @@ MATERIAL when the engine is exactly CYCLES. It calls
     two previews in one material can end in either order.
   - The preview output joins the group node's frame, since a location
     inside a frame is relative to it. A group node that runs a node
-    group without a `Preview` output, such as the artifact of an
-    appended copy of the material, gets no preview output.
+    group without a `Preview` output, such as one the user pointed at
+    another node group, gets no preview output. An appended copy of the
+    material runs its own copy of the tree, which does not preview (see
+    below).
   - Starting a preview first removes any preview output left for the
     tree, such as one in a material appended from a file saved while
     previewing.

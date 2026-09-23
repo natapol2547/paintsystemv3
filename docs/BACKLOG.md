@@ -162,7 +162,7 @@ groups and templates (040-042), colour history (062).
 | ID | Title | Size | Depends on |
 |---|---|---|---|
 | [PS-040](tickets/PS-040-multiple-groups-per-material.md) | Multiple Paint System groups per material | M | – |
-| [PS-041](tickets/PS-041-group-templates.md) | Group templates and channel templates | L | 040 005 |
+| [PS-041](tickets/PS-041-group-templates.md) | Group templates and channel templates (done) | L | 040 005 |
 | [PS-042](tickets/PS-042-delete-and-move-group.md) | Delete group (dissolve template nodes) and move group | S | 041 |
 | [PS-043](tickets/PS-043-make-tree-single-user.md) | Make tree single user | S | 040 |
 

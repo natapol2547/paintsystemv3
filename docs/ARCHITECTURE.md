@@ -11,7 +11,10 @@ PaintSystemNodeTree  --compile-->  IR  --NodeTreeBuilder-->  ShaderNodeTree (tre
 
 - A `PaintSystemNodeTree` owns exactly one dynamic shader datablock,
   `tree.compiled`. It is tagged with the tree's uuid (`ps_owner`) so a copied
-  tree gets its own artifact instead of sharing one.
+  tree gets its own artifact instead of sharing one. `normalize_all_trees`
+  gives the copy a new uuid, and the group nodes of the materials that use
+  the copy (as an appended material brings one) follow it to that uuid and
+  artifact, instead of running the tree they were copied from.
 - Nodes own no shader datablocks. Image layers own images (user data), and
   that is all.
 - Shared logic lives in static library groups (`compiler/library.py`), built
@@ -243,6 +246,29 @@ points at, and every image the addon created, to `save_image` beside it: a
 packed image or one without a file is packed again, an image with a file
 is written to it, and a failed write drops the path and packs instead.
 Images nothing in a Paint System tree uses are left to Blender.
+
+## Templates (`templates.py`)
+
+Add Paint System (`paint_system.setup_material`) and the Add Channel menu
+build from templates (PS-041). A channel template makes a channel with
+its options and connects it to one input of the shader node it paints
+into: the node's link moves onto the group node's input for the channel,
+or its value is copied there, and the group's output takes its place. A
+material template adds the nodes that show the tree in a material:
+Unlit, PBR, Paint Over, Normal or Group Only. Every template keeps the
+user's nodes and links. A shader the template no longer shows stays
+behind a new active Material Output, and a link the paint needs moves
+under the paint, so right after Add the material looks as it did. The
+material's output is `get_output_node('EEVEE')`, as painting shows in
+Material Preview, with a channel preview's output (PS-061) skipped for
+the one it replaced. The node a channel paints into (`find_target`) is
+the nearest Principled BSDF, else Diffuse BSDF, else the Emission of the
+unlit shader Unlit and Paint Over build, so a material whose group node
+was deleted connects again the same way. A muted link feeds nothing when
+the graph is read, and stays muted when it moves. The dialog's
+recommendation and its summary of what Add changes are plain functions
+of the material, the scene and the options, in the same module as the
+build, so they describe what it does and are tested without a window.
 
 ## Triggers
 
