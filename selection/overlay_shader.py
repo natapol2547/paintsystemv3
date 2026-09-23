@@ -16,8 +16,8 @@ from bleeding into a selected island.
 
 - Both outline shaders share one push constant layout, `PUSH_CONSTANTS`,
   of 128 bytes, the most Vulkan guarantees.
-- Their output is linear, so colours are converted from sRGB before
-  upload (`overlay.srgb_to_linear`).
+- Their output is linear with straight alpha, so colours are converted
+  from sRGB before upload (`overlay.srgb_to_linear`).
 - Linear filtering of float textures is an optional device feature on
   Vulkan and Metal, so every read is a `texelFetch`.
 """
@@ -25,31 +25,32 @@ import gpu
 
 PUSH_CONSTANTS = (
     ('MAT4', "view_projection"),
-    ('VEC4', "wash"),       # rgb, opacity
-    ('VEC4', "ant_a"),      # rgb, dash phase in pixels
-    ('VEC4', "ant_b"),      # rgb, dash length in pixels
-    ('VEC4', "params"),     # tile offset xy, clip z offset (3D only), half line width in pixels
+    ('VEC4', "wash"),       # rgba
+    ('VEC4', "ant_a"),      # rgba of the dashes
+    ('VEC4', "ant_b"),      # rgba of the gaps between them
+    ('VEC4', "params"),     # dash phase and dash length in pixels, clip z offset (3D only), half line width in pixels
 )
 """The push constants of the image and screen shaders, in declaration order."""
 
 ANT_GLSL = """
-vec3 ant_color(vec2 tangent, vec4 dash_a, vec4 dash_b)
+vec4 ant_color(vec2 tangent, vec4 color_a, vec4 color_b, vec2 dash)
 {
   /* Dash along the screen axis closest to the outline's tangent, so a
      dash is 1 to 1.41 dash lengths long in any direction. The dashes
-     march along the tangent. dash_a.w is the phase and dash_b.w is the
+     march along the tangent. dash.x is the phase and dash.y is the
      dash length, both in pixels. */
   float along = abs(tangent.x) >= abs(tangent.y) ?
                     (tangent.x < 0.0 ? -gl_FragCoord.x : gl_FragCoord.x) :
                     (tangent.y < 0.0 ? -gl_FragCoord.y : gl_FragCoord.y);
-  float stripe = step(dash_b.w, mod(along - dash_a.w, 2.0 * dash_b.w));
-  return mix(dash_a.rgb, dash_b.rgb, stripe);
+  float stripe = step(dash.y, mod(along - dash.x, 2.0 * dash.y));
+  return mix(color_a, color_b, stripe);
 }
 """
-"""`vec3 ant_color(vec2 tangent, vec4 dash_a, vec4 dash_b)`: the dash colour at this fragment.
+"""`vec4 ant_color(vec2 tangent, vec4 color_a, vec4 color_b, vec2 dash)`: the ants' colour at this fragment.
 
-Pass the `ant_a` and `ant_b` push constants. Any shader whose outline
-tangent is known can use it, so every set of ants crawls in step.
+Pass the colours and the dash from `overlay.ant_style`. The result has
+straight alpha. Any shader whose outline tangent is known can use it, so
+every set of ants crawls in step.
 """
 
 MASK_GLSL = """
@@ -81,13 +82,14 @@ vec4 shade(float m, float right, float left, float up, float down)
   float distance = abs(m - 0.5) / max(length(slopes), 1e-6);
   float line = 1.0 - smoothstep(params.w - 0.5, params.w + 0.5, distance);
   vec2 direction = vec2(right - left, up - down);
-  vec3 ant = ant_color(vec2(-direction.y, direction.x), ant_a, ant_b);
+  vec4 ant = ant_color(vec2(-direction.y, direction.x), ant_a, ant_b, params.xy);
   /* Put the ants over the wash, both with straight alpha. Mixing the
      colours by `line` instead would carry the wash colour into the ants'
      soft edge, even when the wash is transparent. */
+  float ant_alpha = ant.a * line;
   float wash_alpha = wash.a * clamp(m, 0.0, 1.0);
-  float alpha = line + wash_alpha * (1.0 - line);
-  vec3 color = ant * line + wash.rgb * (wash_alpha * (1.0 - line));
+  float alpha = ant_alpha + wash_alpha * (1.0 - ant_alpha);
+  vec3 color = ant.rgb * ant_alpha + wash.rgb * (wash_alpha * (1.0 - ant_alpha));
   return vec4(color / max(alpha, 1e-6), alpha);
 }
 """
@@ -103,14 +105,13 @@ void main()
 _IMAGE_FRAGMENT = MASK_GLSL + _SHADE_GLSL + """
 void main()
 {
-  vec2 uv = v_uv - params.xy;
   ivec2 last = textureSize(mask, 0) - ivec2(1);
-  vec2 t = uv * vec2(last + ivec2(1)) - 0.5;
+  vec2 t = v_uv * vec2(last + ivec2(1)) - 0.5;
   /* Take derivatives before any discard. After a discard they can be
      undefined. */
   vec2 dt_dx = dFdx(t);
   vec2 dt_dy = dFdy(t);
-  if (uv.x < 0.0 || uv.y < 0.0 || uv.x >= 1.0 || uv.y >= 1.0) {
+  if (v_uv.x < 0.0 || v_uv.y < 0.0 || v_uv.x >= 1.0 || v_uv.y >= 1.0) {
     discard;
   }
   vec4 color = shade(mask_at(t, last),
@@ -191,7 +192,7 @@ def _outline_info(name: str) -> gpu.types.GPUShaderCreateInfo:
 
 
 def create_image_shader() -> gpu.types.GPUShader:
-    """Build the image editor's one-pass shader (a quad with `position` and `uv`, sampler `mask`)."""
+    """Build the image editor's one-pass shader (a quad with `position`, `uv` 0 to 1 across the tile, sampler `mask`)."""
     interface = gpu.types.GPUStageInterfaceInfo("ps_selection_image_interface")
     interface.smooth('VEC2', "v_uv")
     info = _outline_info("mask")

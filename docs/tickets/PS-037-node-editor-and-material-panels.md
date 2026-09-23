@@ -152,7 +152,7 @@ Operators the panels reach:
 - Shader editor sidebar panel: material's trees (PS-040), "Edit Paint
   System Tree" (switches the editor to the `PaintSystemNodeTree`),
   "Inspect Compiled" (enters the artifact group), compiled info block
-  under `developer_mode`.
+  under Developer Extras (`show_developer_extras`, PS-039).
 - Material properties injection ported verbatim.
 - `paint_system.inspect_layer`: enters the artifact and selects/frames the
   nodes whose `ps_identifier` starts with the active layer's uuid. There

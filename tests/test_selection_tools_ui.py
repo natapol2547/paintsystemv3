@@ -49,9 +49,9 @@ stencil = import_from("selection.stencil")
 overlay = import_from("selection.overlay")
 
 RED_GREEN_ANTS = {
-    "selection_ant_color_a": (1.0, 0.0, 0.0),
-    "selection_ant_color_b": (0.0, 1.0, 0.0),
-    "selection_wash_opacity": 0.0,
+    "selection_ant_color_a": (1.0, 0.0, 0.0, 1.0),
+    "selection_ant_color_b": (0.0, 1.0, 0.0, 1.0),
+    "selection_wash_color": (0.0, 0.0, 0.0, 0.0),
 }
 """Overlay settings for the pixel checks: dash colours nothing else in the 3D view draws, and no wash."""
 
@@ -121,6 +121,12 @@ def dashes(pixels):
     out[high[..., 0] & low[..., 1] & low[..., 2] & opaque] = 0
     out[low[..., 0] & high[..., 1] & low[..., 2] & opaque] = 1
     return out
+
+
+def dash_phase(frame):
+    """The dash phase of the ant style a captured frame was drawn with (`overlay.ant_style`)."""
+    _dash_color, _gap_color, (phase, _length) = frame[1]
+    return phase
 
 
 class LayoutRecorder:
@@ -563,11 +569,10 @@ def run_sections():
             check(thickness.min() == thickness.max() == want_width,
                   f"the bottom edge is {want_width} px thick (min {thickness.min()}, max {thickness.max()})")
             row = window_rows[int(np.argmax((window_rows >= 0).sum(axis=1)))]
-            ant_a, ant_b = frame[1]
-            dash = ant_b[3]
+            _dash_color, _gap_color, (phase, dash) = frame[1]
             # The outline runs clockwise, so the bottom edge runs towards -x.
             along = -(columns + 0.5)
-            formula = (np.mod(along - ant_a[3], 2.0 * dash) >= dash).astype(int)
+            formula = (np.mod(along - phase, 2.0 * dash) >= dash).astype(int)
             drawn = row >= 0
             agree = float((row[drawn] == formula[drawn]).mean()) if drawn.any() else 0.0
             check(drawn.mean() > 0.9 and agree > 0.95,
@@ -589,14 +594,15 @@ def run_sections():
             later = yield from capture(area, tag=False)
             if first is None or later is None or first[1] is None or later[1] is None:
                 break
-            phases.append(round(later[1][0][3], 2))
-            if later[1][0][3] != first[1][0][3] and not np.array_equal(dashes(first[0])[rows], dashes(later[0])[rows]):
+            phases.append(round(dash_phase(later), 2))
+            if dash_phase(later) != dash_phase(first) and not np.array_equal(dashes(first[0])[rows],
+                                                                             dashes(later[0])[rows]):
                 moved = True
                 break
         if first is None or first[1] is None or not phases:
             check(False, "two frames were drawn without a tag")
         else:
-            check(moved, f"the dashes move between untagged draws (phase {first[1][0][3]:.2f} then {phases})")
+            check(moved, f"the dashes move between untagged draws (phase {dash_phase(first):.2f} then {phases})")
     finally:
         remove_capture_handlers()
     region_event('ESC', 'PRESS', empty_high)

@@ -11,16 +11,21 @@ Run:  blender -b --factory-startup --python tests/test_selection_tools.py
 import math
 import os
 import sys
+from types import SimpleNamespace
 
 import bpy
+import gpu
 from mathutils import Euler, Matrix
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import before, check, finish, guarded, import_from, op_points, register_addon, section  # noqa: E402
+from harness import (  # noqa: E402
+    before, check, finish, guarded, import_from, op_points, register_addon, section, skip)
 
 register_addon()
 tools = import_from("tools")
 shapes = import_from("tools.shapes")
+preview = import_from("tools.preview")
+core = import_from("gpu_passes.core")
 select_ops = import_from("tools.select_ops")
 workspace_tools = import_from("tools.workspace_tools")
 undo = import_from("undo")
@@ -143,6 +148,47 @@ def test_clockwise_and_quads():
           "every vertex carries its segment's unit tangent, the closing segment too")
     positions, _ = shapes.quad_strip([(0.0, 0.0), (0.0, 0.0), (5.0, 0.0)], 2.0)
     check(len(positions) == 12, f"a zero-length segment is skipped ({len(positions)})")
+
+
+def test_preview_coverage():
+    """Translucent preview ants cover every pixel once, although the segment quads overlap at the joints."""
+    section("preview coverage")
+    if not core.gpu_available():
+        skip("no GPU context in this session; gpu.init() arrived in Blender 5.2")
+        return
+    size = 128
+    check(core.region_offscreen(SimpleNamespace(width=0, height=size)) is None, "an empty region gets no canvas")
+    canvas = core.region_offscreen(SimpleNamespace(width=size, height=size))
+    check(core.region_offscreen(SimpleNamespace(width=size, height=size), canvas) is canvas,
+          "a canvas of the region's size is kept")
+    lasso, step = [], 2.0
+    for i in range(720):
+        angle = 2.0 * math.pi * i / 720
+        step = shapes.lasso_append(lasso, (64.0 + 40.0 * math.cos(angle), 64.0 + 40.0 * math.sin(angle)), step)
+    outlines = (
+        ("box", shapes.box_outline((20.0, 20.0), (100.0, 100.0))),
+        ("ellipse", shapes.ellipse_outline((24.0, 24.0), (104.0, 104.0))),
+        ("lasso with a point every 2 px", lasso),
+    )
+    # Black dashes and gaps at half alpha over white read 128 wherever they are drawn.
+    style = ((0.0, 0.0, 0.0, 0.5), (0.0, 0.0, 0.0, 0.5), (0.0, 4.0))
+    target = gpu.types.GPUTexture((size, size), format='RGBA8')
+    framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
+    pixels = Matrix(((2.0 / size, 0.0, 0.0, -1.0), (0.0, 2.0 / size, 0.0, -1.0),
+                     (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
+    for name, outline in outlines:
+        with framebuffer.bind():
+            framebuffer.clear(color=(1.0, 1.0, 1.0, 1.0))
+            blend = gpu.state.blend_get()
+            with gpu.matrix.push_pop(), gpu.matrix.push_pop_projection():
+                gpu.matrix.load_identity()
+                gpu.matrix.load_projection_matrix(pixels)
+                preview.draw_ants(canvas, shapes.clockwise(outline), style, 2)
+            check(gpu.state.blend_get() == blend, f"{name}: the blend mode is put back")
+        red = core.read_color_bytes(framebuffer, size, 0, size)[..., 0].astype(int)
+        drawn = red[red != 255]
+        check(drawn.size > 300 and abs(drawn - 128).max() <= 2,
+              f"{name}: every drawn pixel is covered once ({drawn.size} pixels, {sorted(set(drawn.tolist()))})")
 
 
 def test_keymap_and_tools():
@@ -294,12 +340,16 @@ guarded(test_ellipse_outline)
 guarded(test_lasso_append)
 guarded(test_degenerate)
 guarded(test_clockwise_and_quads)
+guarded(test_preview_coverage)
 guarded(test_keymap_and_tools)
 setup()
 guarded(test_flat)
 guarded(test_execute)
 guarded(test_poll)
 
+# Free the GPU objects while the context is still up; freeing them at
+# interpreter shutdown segfaults a background Blender.
+preview.release()
 session.release()
 raster.release()
 finish("SELECTION TOOLS TEST")

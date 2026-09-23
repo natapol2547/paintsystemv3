@@ -113,6 +113,24 @@ def offscreen_state(blend: str = 'NONE'):
         yield
 
 
+def region_offscreen(region, offscreen: gpu.types.GPUOffScreen | None = None) -> gpu.types.GPUOffScreen | None:
+    """An `RGBA16F` offscreen buffer the size of *region*, for a draw handler.
+
+    Returns *offscreen* when it already has that size, so a caller can
+    keep one across redraws. Returns None when the region is empty or
+    the buffer cannot be allocated.
+    """
+    if offscreen is not None and (offscreen.width, offscreen.height) == (region.width, region.height):
+        return offscreen
+    if region.width <= 0 or region.height <= 0:
+        return None
+    try:
+        return gpu.types.GPUOffScreen(region.width, region.height, format='RGBA16F')
+    except RuntimeError as error:
+        log.debug("Could not allocate a %d x %d offscreen buffer: %s", region.width, region.height, error)
+        return None
+
+
 def draw_in_bands(framebuffer: gpu.types.GPUFrameBuffer, height: int, draw_band) -> None:
     """Bind *framebuffer* and call ``draw_band(first, last)`` for each band of its rows.
 

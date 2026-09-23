@@ -321,7 +321,8 @@ Registered but never drawn:
 - Sub-panels use `layout.panel()` with the v2 idnames so open/closed
   state is remembered per file exactly like v2.
 - The node editor panel keeps the compiled-info block for developers,
-  gated by the `developer_mode` preference.
+  gated by the Developer Extras preference (`show_developer_extras`,
+  PS-039).
 
 ## Acceptance
 

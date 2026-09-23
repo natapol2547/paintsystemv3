@@ -256,8 +256,14 @@ select by face or UV island and the image editor tools are PS-097.
   clockwise first, because the dash direction follows the tangent, and
   each segment is a `TRIS` quad `round(2 * LINE_HALF_WIDTH * ui_scale)`
   wide, extended by half a width at each end: 1 pixel lines read thinner
-  than the ants at UI scale 2. The overlay's redraw timer runs only while
-  a selection shows, so the preview owns a window timer at
+  than the ants at UI scale 2. The extensions make the quads overlap at
+  every joint, so `preview.draw_ants` draws them without blending into a
+  region-sized canvas (`core.region_offscreen`) and blends the canvas
+  over the region once. Blended straight onto the region, a translucent
+  dash or gap colour would cover each joint two or three times, and a
+  2 px lasso would read at about 0.75 alpha instead of 0.5. The
+  overlay's redraw timer runs only while a selection shows, so the
+  preview owns a window timer at
   `overlay.REDRAW_INTERVAL` and the dashes keep moving while the mouse
   is still. The mask is built once, after release.
 - A shape that encloses nothing is cancelled, not stored: a box or

@@ -16,7 +16,8 @@ System tab as in v2:
 - the Layer Settings `layout.panel` (PS-035).
 
 The main panel keeps the channel list and moves the compiled shader info
-into a collapsed "Compiled Shader" sub-panel.
+into a collapsed "Compiled Shader" sub-panel, shown only while the
+Developer Extras preference is on (PS-039).
 
 Open: `MAT_MT_LayerMenu` (copy, paste and merge are M2), the "not
 connected" warning, the warnings box (PS-019), the bake box, the header

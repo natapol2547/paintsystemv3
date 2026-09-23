@@ -31,7 +31,6 @@ shows the previous batch for one frame. `handlers.node_tree_handlers`
 drops every batch when a file is read.
 """
 import functools
-import logging
 import time
 
 import bpy
@@ -43,8 +42,6 @@ from ..common import addon_preferences
 from ..context import get_active_tree, get_ps_object
 from ..gpu_passes import core, surface, texel_map
 from . import overlay_shader, raster
-
-log = logging.getLogger(__name__)
 
 REDRAW_INTERVAL = 0.125
 """Seconds between redraws that march the ants."""
@@ -63,12 +60,16 @@ DEPTH_OFFSET = 1.0
 
 DEFAULTS = {
     "show_selection_3d": True,
-    "selection_wash_color": (0.25, 0.55, 1.0),
-    "selection_wash_opacity": 0.0,
-    "selection_ant_color_a": (0.0, 0.0, 0.0),
-    "selection_ant_color_b": (1.0, 1.0, 1.0),
+    "selection_wash_color": (0.25, 0.55, 1.0, 0.0),
+    "selection_ant_color_a": (0.0, 0.0, 0.0, 1.0),
+    "selection_ant_color_b": (1.0, 1.0, 1.0, 1.0),
 }
-"""The preferences the overlay reads, with the values used when the add-on has no preferences entry."""
+"""The preferences the overlay reads, with the values used when the add-on has no preferences entry.
+
+`PaintSystemPreferences` takes its defaults from here. The colours are
+sRGB with straight alpha. The tint starts transparent, because any tint
+hides the true colour of what is being painted.
+"""
 
 _SHADER_FACTORIES = {
     "image": overlay_shader.create_image_shader,
@@ -85,14 +86,15 @@ _offscreens: dict[int, gpu.types.GPUOffScreen] = {}
 _batches: dict[tuple, tuple[bytes | None, gpu.types.GPUBatch | None]] = {}
 
 
-def srgb_to_linear(color) -> tuple[float, float, float]:
-    """The RGB of sRGB display colour *color* as the linear values a shader must write.
+def srgb_to_linear(color) -> tuple[float, ...]:
+    """sRGB display colour *color* as the linear values a shader must write. An alpha is kept as is.
 
     The viewport and the image editor treat the output of a
     `GPUShaderCreateInfo` shader as linear and encode it to sRGB. A
     preference colour written as is would look lighter than its swatch.
     """
-    return tuple(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in color[:3])
+    rgb = tuple(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in color[:3])
+    return rgb + tuple(color[3:])
 
 
 def settings(context) -> dict:
@@ -106,17 +108,16 @@ def settings(context) -> dict:
 def _ant_style(prefs: dict, scale: float):
     dash = DASH_PIXELS * scale
     phase = (time.monotonic() * DASH_SPEED * scale) % (2.0 * dash)
-    return ((*srgb_to_linear(prefs["selection_ant_color_a"]), phase),
-            (*srgb_to_linear(prefs["selection_ant_color_b"]), dash))
+    return (srgb_to_linear(prefs["selection_ant_color_a"]), srgb_to_linear(prefs["selection_ant_color_b"]),
+            (phase, dash))
 
 
-def ant_style(context) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float]]:
-    """The `ant_a` and `ant_b` push constants for `overlay_shader.ANT_GLSL` at this moment.
+def ant_style(context) -> tuple[tuple[float, ...], tuple[float, ...], tuple[float, float]]:
+    """The dash colour, the gap colour and the dash for `overlay_shader.ANT_GLSL` at this moment.
 
-    `ant_a` is linear RGB plus the dash phase. `ant_b` is linear RGB plus
-    the dash length. Both are in pixels, scaled by the UI scale. A shader
-    that draws its own ants with these values crawls in step with the
-    overlay.
+    The colours are linear RGBA. The dash is its phase and its length, in
+    pixels scaled by the UI scale. A shader that draws its own ants with
+    these values crawls in step with the overlay.
     """
     return _ant_style(settings(context), context.preferences.system.ui_scale)
 
@@ -259,18 +260,9 @@ def _cached_batch(obj, uv_map: str, tree, depsgraph) -> gpu.types.GPUBatch | Non
 def _offscreen(region) -> gpu.types.GPUOffScreen | None:
     """The coverage buffer of *region*, made again when the region changed size."""
     key = region.as_pointer()
-    offscreen = _offscreens.get(key)
-    if offscreen is not None and (offscreen.width, offscreen.height) == (region.width, region.height):
-        return offscreen
-    _offscreens.pop(key, None)
-    if region.width <= 0 or region.height <= 0:
-        return None
-    try:
-        offscreen = gpu.types.GPUOffScreen(region.width, region.height, format='RGBA16F')
-    except RuntimeError as error:
-        log.debug("Could not allocate the selection coverage buffer: %s", error)
-        return None
-    _offscreens[key] = offscreen
+    offscreen = core.region_offscreen(region, _offscreens.pop(key, None))
+    if offscreen is not None:
+        _offscreens[key] = offscreen
     return offscreen
 
 
@@ -282,15 +274,15 @@ def _prune_offscreens(pointers: set[int]) -> None:
 
 # ── Drawing ──────────────────────────────────────────────────────────
 
-def _uniforms(shader, context, prefs: dict, view_projection, tile: int, offset: float) -> None:
+def _uniforms(shader, context, prefs: dict, view_projection, offset: float) -> None:
     """Set the `overlay_shader.PUSH_CONSTANTS` of *shader*."""
     scale = context.preferences.system.ui_scale
-    ant_a, ant_b = _ant_style(prefs, scale)
+    ant_a, ant_b, dash = _ant_style(prefs, scale)
     shader.uniform_float("view_projection", view_projection)
-    shader.uniform_float("wash", (*srgb_to_linear(prefs["selection_wash_color"]), prefs["selection_wash_opacity"]))
+    shader.uniform_float("wash", srgb_to_linear(prefs["selection_wash_color"]))
     shader.uniform_float("ant_a", ant_a)
     shader.uniform_float("ant_b", ant_b)
-    shader.uniform_float("params", (*core.tile_offset(tile), offset, LINE_HALF_WIDTH * scale))
+    shader.uniform_float("params", (*dash, offset, LINE_HALF_WIDTH * scale))
 
 
 def _draw_view3d() -> None:
@@ -334,7 +326,7 @@ def _draw_view3d() -> None:
         gpu.state.depth_test_set('LESS_EQUAL')
         gpu.state.depth_mask_set(False)
         screen.bind()
-        _uniforms(screen, context, prefs, view_projection, state.tile, clip_offset(rv3d, DEPTH_OFFSET))
+        _uniforms(screen, context, prefs, view_projection, clip_offset(rv3d, DEPTH_OFFSET))
         screen.uniform_sampler("screen", offscreen.texture_color)
         batch.draw(screen)
 
@@ -367,8 +359,7 @@ def _draw_image_editor() -> None:
     batch = batch_for_shader(shader, 'TRIS', {
         "position": ((px0, py0, 0.0), (px1, py0, 0.0), (px1, py1, 0.0),
                      (px0, py0, 0.0), (px1, py1, 0.0), (px0, py1, 0.0)),
-        "uv": ((ox, oy), (ox + 1.0, oy), (ox + 1.0, oy + 1.0),
-               (ox, oy), (ox + 1.0, oy + 1.0), (ox, oy + 1.0)),
+        "uv": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
     })
     view_projection = gpu.matrix.get_projection_matrix() @ gpu.matrix.get_model_view_matrix()
     with core.saved_state():
@@ -376,7 +367,7 @@ def _draw_image_editor() -> None:
         gpu.state.depth_test_set('NONE')
         gpu.state.depth_mask_set(False)
         shader.bind()
-        _uniforms(shader, context, settings(context), view_projection, state.tile, 0.0)
+        _uniforms(shader, context, settings(context), view_projection, 0.0)
         shader.uniform_sampler("mask", mask.texture)
         batch.draw(shader)
 

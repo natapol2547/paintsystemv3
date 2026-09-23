@@ -40,9 +40,9 @@ overlay = import_from("selection.overlay")
 SIZE = 256
 PLACED = Matrix.LocRotScale((0.4, -0.3, 0.2), Euler((0.0, 0.0, 0.3)), (1.3, 0.9, 1.1))
 RED_GREEN_ANTS = {
-    "selection_ant_color_a": (1.0, 0.0, 0.0),
-    "selection_ant_color_b": (0.0, 1.0, 0.0),
-    "selection_wash_opacity": 0.0,
+    "selection_ant_color_a": (1.0, 0.0, 0.0, 1.0),
+    "selection_ant_color_b": (0.0, 1.0, 0.0, 1.0),
+    "selection_wash_color": (0.0, 0.0, 0.0, 0.0),
 }
 """Overlay settings for the ant counts: dash colours the Stencil Mask display cannot produce, and no wash."""
 

@@ -18,6 +18,7 @@ from harness import RecordingLayout, check, finish, guarded, import_from, regist
 
 register_addon()
 main_panels = import_from("panels.main_panels")
+preferences = import_from("preferences")
 icon_kwargs = import_from("common").icon_kwargs
 find_material_group_node = import_from("context").find_material_group_node
 # The Brush and Color sections ask the active tool for the paint mode,
@@ -261,11 +262,49 @@ def test_connect_button():
           "which puts the group node back, and the button goes")
 
 
+class NodeEditorContext:
+    """bpy.context as the node editor's panel sees it, editing *tree*."""
+
+    def __init__(self, tree):
+        self.space_data = SimpleNamespace(edit_tree=tree)
+
+    def __getattr__(self, name):
+        return getattr(bpy.context, name)
+
+
+def test_developer_extras():
+    section("the Compiled Shader section shows only with Developer Extras on")
+    bpy.context.view_layer.objects.active = cube
+    tree = cube.active_material.paint_system.tree
+    props = preferences.PaintSystemPreferences.bl_rna.properties
+    check(props["show_developer_extras"].default is False, "Developer Extras starts off")
+
+    def compiled_sections():
+        """Whether the 3D view's panel and the node editor's panel draw the section."""
+        node_editor = []
+        main_panels.PAINTSYSTEM_PT_main_node_editor.draw(
+            SimpleNamespace(layout=RecordingLayout(node_editor)), NodeEditorContext(tree))
+        return ["paint_system_compiled_panel" in panels(calls) for calls in (draw_main_panel(), node_editor)]
+
+    check(compiled_sections() == [False, False],
+          f"hidden while the add-on has no preferences entry ({compiled_sections()})")
+    real_preferences = main_panels.addon_preferences
+    try:
+        for on in (False, True):
+            main_panels.addon_preferences = lambda context, on=on: SimpleNamespace(show_developer_extras=on)
+            check(compiled_sections() == [on, on],
+                  f"in both panels, follows the preference while it is {'on' if on else 'off'} "
+                  f"({compiled_sections()})")
+    finally:
+        main_panels.addon_preferences = real_preferences
+
+
 guarded(test_the_panel_follows_the_mesh)
 guarded(test_preview_button)
 guarded(test_sections_collapse)
 guarded(test_channel_settings)
 guarded(test_add_channel_menu)
 guarded(test_connect_button)
+guarded(test_developer_extras)
 
 finish("MAIN PANEL TEST")

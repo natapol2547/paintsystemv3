@@ -360,12 +360,13 @@ Draw handlers only, so showing or hiding a selection never changes the
 material and never recompiles a shader.
 
 - Both editors draw marching ants along the selection's outline, plus a
-  wash inside it when "Tint Opacity" is above 0 (off by default, since
-  any tint hides the true colour of what is being painted). The ants
-  are found from mask samples one screen pixel to either side and
-  dashed along the screen axis closest to the outline's tangent. The
-  ants are composited over the wash: mixing their colours instead put
-  the tint colour in the ants' soft edge even at opacity 0.
+  wash inside it when the "Selection Tint" colour's alpha is above 0
+  (0 by default, since any tint hides the true colour of what is being
+  painted). The ants are found from mask samples one screen pixel to
+  either side and dashed along the screen axis closest to the outline's
+  tangent. The ants are composited over the wash, with the dash and gap
+  colours' own alpha: mixing their colours instead put the tint colour
+  in the ants' soft edge even at alpha 0.
   `overlay_shader.ANT_GLSL` holds the dash math, so PS-093's drag
   preview can crawl in step with the committed ants
   (`overlay.ant_style(context)`). Every read is a `texelFetch`, because
@@ -407,11 +408,13 @@ material and never recompiles a shader.
 - Failures show in the panel only, not in the viewport.
 - Preferences (`PaintSystemPreferences`, "Selection" box):
   `show_selection_3d` ("Show Selection in 3D View", on),
-  `selection_wash_color` ("Selection Tint", 0.25, 0.55, 1.0),
-  `selection_wash_opacity` ("Tint Opacity", 0), `selection_ant_color_a`
-  ("Outline Dash Color", black) and `selection_ant_color_b` ("Outline Gap
-  Color", white). `overlay.settings()` falls back to these defaults when
-  the add-on has no preferences entry.
+  `selection_wash_color` ("Selection Tint", 0.25, 0.55, 1.0 at alpha
+  0), `selection_ant_color_a` ("Outline Dash Color", opaque black) and
+  `selection_ant_color_b` ("Outline Gap Color", opaque white). The
+  colours are RGBA with straight alpha; the tint's alpha replaced a
+  separate "Tint Opacity" slider. `overlay.DEFAULTS` holds these values:
+  the preferences take their defaults from it, and `overlay.settings()`
+  falls back to it when the add-on has no preferences entry.
 - Milestone 1 dropped the batch after every undo, redo and entry to
   texture paint mode, which all report a geometry update, and rebuilt it
   lazily (48–98 ms at about 100k triangles). On 5.3 alpha every native

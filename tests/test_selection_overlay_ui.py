@@ -115,9 +115,9 @@ def ants(pixels):
 
 
 RED_GREEN_ANTS = {
-    "selection_ant_color_a": (1.0, 0.0, 0.0),
-    "selection_ant_color_b": (0.0, 1.0, 0.0),
-    "selection_wash_opacity": 0.0,
+    "selection_ant_color_a": (1.0, 0.0, 0.0, 1.0),
+    "selection_ant_color_b": (0.0, 1.0, 0.0, 1.0),
+    "selection_wash_color": (0.0, 0.0, 0.0, 0.0),
 }
 """Overlay settings for the 3D checks: dash colours the Stencil Mask display cannot produce, and no wash."""
 

@@ -2,7 +2,7 @@ from bpy.types import Menu, Panel, UIList
 from bpy.utils import register_classes_factory
 
 from .brush_panels import draw_paint_sections
-from ..common import icon_kwargs
+from ..common import addon_preferences, icon_kwargs
 from ..compiler.core import artifact_fingerprint
 from ..context import find_material_group_node, get_active_tree, get_ps_object, material_input, node_editor_tree
 from ..nodes.layers.base_layer_node import draw_uv_map
@@ -157,7 +157,11 @@ def _draw_selection_section(layout, context, tree):
         body.label(text=selection_session.label(state), **icon_kwargs('INFO'))
 
 
-def _draw_compiled_info(layout, tree):
+def _draw_compiled_info(layout, context, tree):
+    """Draw the Compiled Shader section, only while the Developer Extras preference is on."""
+    prefs = addon_preferences(context)
+    if prefs is None or not prefs.show_developer_extras:
+        return
     header, body = layout.panel("paint_system_compiled_panel", default_closed=True)
     header.label(text="Compiled Shader")
     if body is None:
@@ -214,7 +218,7 @@ class PAINTSYSTEM_PT_main_3dview(Panel):
         draw_paint_sections(layout, context)
         if context.mode == 'PAINT_TEXTURE':
             _draw_selection_section(layout, context, tree)
-        _draw_compiled_info(layout, tree)
+        _draw_compiled_info(layout, context, tree)
 
 
 class PAINTSYSTEM_PT_main_node_editor(Panel):
@@ -233,7 +237,7 @@ class PAINTSYSTEM_PT_main_node_editor(Panel):
         tree = context.space_data.edit_tree
 
         _draw_channels_section(layout, context, tree)
-        _draw_compiled_info(layout, tree)
+        _draw_compiled_info(layout, context, tree)
 
 
 classes = (

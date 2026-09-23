@@ -21,7 +21,9 @@ import numpy as np
 from mathutils import Matrix
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import PACKAGE, check, finish, guarded, import_from, register_addon, section, skip  # noqa: E402
+from harness import (  # noqa: E402
+    PACKAGE, RecordingLayout, check, finish, guarded, import_from, register_addon, section, skip,
+)
 
 register_addon()
 common = import_from("common")
@@ -83,19 +85,20 @@ def read_rgba8(framebuffer, width=SIZE, height=SIZE):
     return np.frombuffer(buffer, dtype=np.uint8).reshape(height, width, 4).astype(np.int32)
 
 
-def set_uniforms(shader, wash=(0.2, 0.5, 1.0, 0.25), offset=0.0):
+def set_uniforms(shader, wash=(0.2, 0.5, 1.0, 0.25), offset=0.0, ant_alphas=(1.0, 1.0), phase=0.0):
+    """Black dashes and white gaps with the given alphas."""
     shader.uniform_float("view_projection", Matrix.Identity(4))
     shader.uniform_float("wash", wash)
-    shader.uniform_float("ant_a", (0.0, 0.0, 0.0, 0.0))
-    shader.uniform_float("ant_b", (1.0, 1.0, 1.0, overlay.DASH_PIXELS))
-    shader.uniform_float("params", (0.0, 0.0, offset, overlay.LINE_HALF_WIDTH))
+    shader.uniform_float("ant_a", (0.0, 0.0, 0.0, ant_alphas[0]))
+    shader.uniform_float("ant_b", (1.0, 1.0, 1.0, ant_alphas[1]))
+    shader.uniform_float("params", (phase, overlay.DASH_PIXELS, offset, overlay.LINE_HALF_WIDTH))
 
 
 QUAD = ((-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, -1, 0), (1, 1, 0), (-1, 1, 0))
 QUAD_UV = ((0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1))
 
 
-def draw_image(mask, wash=(0.2, 0.5, 1.0, 0.25), target_format='RGBA8'):
+def draw_image(mask, wash=(0.2, 0.5, 1.0, 0.25), target_format='RGBA8', ant_alphas=(1.0, 1.0), phase=0.0):
     """The image shader over the whole target, the mask stretched across it."""
     from gpu_extras.batch import batch_for_shader
 
@@ -109,7 +112,7 @@ def draw_image(mask, wash=(0.2, 0.5, 1.0, 0.25), target_format='RGBA8'):
             gpu.state.blend_set('ALPHA')
             gpu.state.depth_test_set('NONE')
             shader.bind()
-            set_uniforms(shader, wash)
+            set_uniforms(shader, wash, ant_alphas=ant_alphas, phase=phase)
             shader.uniform_sampler("mask", mask)
             batch.draw(shader)
     return read_rgba8(framebuffer)
@@ -129,26 +132,32 @@ def test_preferences_and_colours():
     ours = {name: value if isinstance(value, tuple) else (value,) for name, value in overlay.DEFAULTS.items()}
     check(all(abs(a - b) < 1e-6 for name in ours for a, b in zip(pref_defaults[name], ours[name], strict=True)),
           f"the overlay defaults match the preference defaults ({pref_defaults})")
-    check(overlay.DEFAULTS["selection_wash_opacity"] == 0.0, "the selection is untinted by default")
-    check(all(props[name].subtype == 'COLOR_GAMMA' for name in
-              ("selection_wash_color", "selection_ant_color_a", "selection_ant_color_b")),
-          "the colours are display colours")
+    check(overlay.DEFAULTS["selection_wash_color"][3] == 0.0, "the selection is untinted by default")
+    colours = ("selection_wash_color", "selection_ant_color_a", "selection_ant_color_b")
+    check(all(props[name].subtype == 'COLOR_GAMMA' and props[name].array_length == 4 for name in colours),
+          "the colours are display colours with alpha")
+    calls = []
+    preferences.PaintSystemPreferences.draw(SimpleNamespace(layout=RecordingLayout(calls)), bpy.context)
+    drawn = [args[1] for name, args, _kwargs in calls if name == "prop"]
+    declared = sorted(name for name in props.keys() if name not in ("rna_type", "bl_idname"))
+    check(sorted(drawn) == declared, f"the preferences draw every preference once ({drawn})")
 
     got = [overlay.srgb_to_linear((v, v, v))[0] for v in (0.0, 0.04045, 0.5, 1.0)]
     want = [0.0, 0.04045 / 12.92, ((0.5 + 0.055) / 1.055) ** 2.4, 1.0]
     check(all(abs(a - b) < 1e-9 for a, b in zip(got, want)) and abs(got[2] - 0.21404) < 1e-4,
           f"sRGB to linear at 0, 0.04045, 0.5 and 1 ({[round(v, 5) for v in got]})")
+    check(overlay.srgb_to_linear((0.5, 0.5, 0.5, 0.25))[2:] == (want[2], 0.25), "the alpha is not converted")
 
     scale = bpy.context.preferences.system.ui_scale
     if scale > 0.0:
-        ant_a, ant_b = overlay.ant_style(bpy.context)
+        ant_a, ant_b, (phase, dash) = overlay.ant_style(bpy.context)
     else:
         # Background Blender reports a UI scale of 0, and draws nothing.
         scale = 1.0
-        ant_a, ant_b = overlay._ant_style(overlay.DEFAULTS, scale)
-    dash = overlay.DASH_PIXELS * scale
-    check(ant_a[:3] == (0.0, 0.0, 0.0) and ant_b[:3] == (1.0, 1.0, 1.0) and ant_b[3] == dash
-          and 0.0 <= ant_a[3] < 2.0 * dash, f"ant style is the dash colours, phase and length ({ant_a}, {ant_b})")
+        ant_a, ant_b, (phase, dash) = overlay._ant_style(overlay.DEFAULTS, scale)
+    check(ant_a == (0.0, 0.0, 0.0, 1.0) and ant_b == (1.0, 1.0, 1.0, 1.0)
+          and dash == overlay.DASH_PIXELS * scale and 0.0 <= phase < 2.0 * dash,
+          f"ant style is the dash and gap colours, the phase and the length ({ant_a}, {ant_b}, {phase}, {dash})")
 
     perspective = Matrix(((1.5, 0, 0, 0), (0, 2.0, 0, 0), (0, 0, -1.002, -0.2002), (0, 0, -1, 0)))
     rv3d = SimpleNamespace(window_matrix=perspective, view_distance=10.0, view_perspective='PERSP')
@@ -162,6 +171,26 @@ def test_preferences_and_colours():
     rv3d.view_perspective = 'CAMERA'
     check(abs(overlay.clip_offset(rv3d, 2.0) - 0.00001 * 5.0) < 1e-9,
           "orthographic camera: the view distance comes from the matrix scale")
+
+
+def test_uniforms():
+    section("the draws hand the preference colours and the dash to the shaders")
+    recorded = {}
+    shader = SimpleNamespace(uniform_float=lambda name, value: recorded.__setitem__(name, value))
+    context = SimpleNamespace(preferences=SimpleNamespace(system=SimpleNamespace(ui_scale=2.0)))
+    prefs = dict(overlay.DEFAULTS, selection_wash_color=(0.5, 0.5, 0.5, 0.25),
+                 selection_ant_color_a=(1.0, 0.0, 0.0, 0.5), selection_ant_color_b=(0.0, 1.0, 0.0, 0.75))
+    overlay._uniforms(shader, context, prefs, Matrix.Identity(4), 0.125)
+    names = [name for _kind, name in overlay_shader.PUSH_CONSTANTS]
+    check(sorted(recorded) == sorted(names), f"every push constant is set ({sorted(recorded)})")
+    grey = overlay.srgb_to_linear((0.5,))[0]
+    check(tuple(recorded["wash"]) == (grey, grey, grey, 0.25), f"the tint is linear with its alpha ({recorded['wash']})")
+    check(tuple(recorded["ant_a"]) == (1.0, 0.0, 0.0, 0.5) and tuple(recorded["ant_b"]) == (0.0, 1.0, 0.0, 0.75),
+          f"the dash and gap colours keep their alpha ({recorded['ant_a']}, {recorded['ant_b']})")
+    phase, dash, offset, half_width = recorded["params"]
+    check(dash == overlay.DASH_PIXELS * 2.0 and 0.0 <= phase < 2.0 * dash
+          and (offset, half_width) == (0.125, overlay.LINE_HALF_WIDTH * 2.0),
+          f"params are the dash, the clip offset and the half line width at UI scale 2 ({recorded['params']})")
 
 
 def test_shaders():
@@ -242,18 +271,54 @@ def test_ants_over_wash():
           f"a transparent blue wash leaves the edge grey ({partial} partly covered pixels, channels differ by {spread})")
 
     wash = (1.0, 0.0, 0.0, 0.5)
-    rgb = draw_image(mask, wash=wash)[..., :3] / 255.0
     alpha = (wash[3] * np.clip(m, 0.0, 1.0))[..., None]
     under = np.array(wash[:3]) * alpha + GREY * (1.0 - alpha)
-    error = np.full(m.shape, np.inf)
-    for ant in (0.0, 1.0):
-        line = (rgb[..., 1] - under[..., 1]) / (ant - under[..., 1])
-        fits = np.abs(under + line[..., None] * (ant - under) - rgb).max(-1)
-        error = np.where((line > -0.02) & (line < 1.02), np.minimum(error, fits), error)
-    edge = int((np.abs(rgb - under).max(-1) > 2 / 255).sum())
-    worst = float(error.max()) * 255
-    check(edge > 500 and worst <= 3.0,
-          f"every pixel is an ant colour over the wash ({edge} edge pixels, worst off by {worst:.1f}/255)")
+    for ant_alpha in (1.0, 0.5):
+        rgb = draw_image(mask, wash=wash, ant_alphas=(ant_alpha, ant_alpha))[..., :3] / 255.0
+        # Each pixel should be the wash over the grey, with a black or
+        # white ant over that. `cover` is how much of the ant shows,
+        # which the ants' alpha caps.
+        error = np.full(m.shape, np.inf)
+        for ant in (0.0, 1.0):
+            cover = (rgb[..., 1] - under[..., 1]) / (ant - under[..., 1])
+            fits = np.abs(under + cover[..., None] * (ant - under) - rgb).max(-1)
+            error = np.where((cover > -0.02) & (cover < ant_alpha + 0.02), np.minimum(error, fits), error)
+        edge = int((np.abs(rgb - under).max(-1) > 2 / 255).sum())
+        worst = float(error.max()) * 255
+        check(edge > 500 and worst <= 3.0,
+              f"at ant alpha {ant_alpha} every pixel is an ant colour over the wash "
+              f"({edge} edge pixels, worst off by {worst:.1f}/255)")
+
+
+def test_ant_alpha():
+    section("the alpha of the dash and gap colours")
+    if not available():
+        return
+    n = 64
+    yy, xx = np.mgrid[0:n, 0:n] + 0.5
+    mask = mask_texture(((xx > 16) & (xx < 48) & (yy > 16) & (yy < 48)).astype(np.float32))
+    no_wash = (0.0, 0.0, 0.0, 0.0)
+    grey = GREY * 255
+
+    rgb = draw_image(mask, wash=no_wash, ant_alphas=(0.0, 0.0))[..., :3]
+    check(np.abs(rgb - grey).max() <= 1, f"transparent ants draw nothing ({rgb.min()} to {rgb.max()})")
+    rgb = draw_image(mask, wash=no_wash, ant_alphas=(0.5, 0.5))[..., :3]
+    darkest, lightest = 0.5 * grey, 0.5 * grey + 0.5 * 255
+    check(abs(rgb.min() - darkest) <= 2 and abs(rgb.max() - lightest) <= 2,
+          f"half transparent ants show the grey through ({rgb.min()} to {rgb.max()}, "
+          f"want {darkest:.0f} to {lightest:.0f})")
+    rgb = draw_image(mask, wash=no_wash, ant_alphas=(1.0, 0.0))[..., :3]
+    check(rgb.min() <= 2 and rgb.max() <= grey + 1,
+          f"an opaque dash colour and a transparent gap colour draw only the dashes ({rgb.min()} to {rgb.max()})")
+
+    # Fragment centres fall on half pixels and the dash is 4 pixels, so no
+    # fragment sits on a dash boundary and a shift of one dash length swaps
+    # every dash for a gap.
+    shifted = draw_image(mask, wash=no_wash, ant_alphas=(1.0, 0.0), phase=overlay.DASH_PIXELS)[..., :3]
+    dashes, dashes_shifted = (rgb < 30).all(-1), (shifted < 30).all(-1)
+    check(dashes.sum() > 100 and dashes_shifted.sum() > 100 and not (dashes & dashes_shifted).any(),
+          f"a phase of one dash length moves the dashes onto the gaps ({int(dashes.sum())} and "
+          f"{int(dashes_shifted.sum())} dash pixels, {int((dashes & dashes_shifted).sum())} in both)")
 
 
 def test_two_passes_draw_no_seam():
@@ -577,8 +642,10 @@ def test_wiring():
 
 
 guarded(test_preferences_and_colours)
+guarded(test_uniforms)
 guarded(test_shaders)
 guarded(test_ants_over_wash)
+guarded(test_ant_alpha)
 guarded(test_two_passes_draw_no_seam)
 guarded(test_mesh_batch)
 guarded(test_batch_follows_surface_key)
