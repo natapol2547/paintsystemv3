@@ -26,6 +26,7 @@ from .ir import IR, Ref, SocketId, hash_payload, _serialize
 from .library import MIX_IN_A_COLOR, MIX_IN_B_COLOR, MIX_IN_FACTOR, MIX_OUT_COLOR
 from .profile import phase
 from .vector import input_value
+from ..context import MATERIAL_GROUP_KEY
 from ..nodetree.stack_ops import feeding_link, feeds_clip_run, link_index, producing_link, stack_output
 from ..props.channel import PREVIEW_OUTPUT, channel_alpha_name, interface_socket_specs
 
@@ -105,12 +106,34 @@ def normalize_all_trees() -> None:
     for tree in ps_trees():
         ensure_tree_uuid(tree)
         if tree.uuid in seen:
+            old_uuid = tree.uuid
             tree.uuid = str(_uuid.uuid4())
             tree.compiled = None
             # The preview outputs in the materials keep the old uuid, so
             # the other tree keeps the preview and this copy has none.
             tree.preview_channel = False
+            _rekey_group_nodes(tree, old_uuid)
         seen.add(tree.uuid)
+
+
+def _rekey_group_nodes(tree, old_uuid: str) -> None:
+    """Make the materials that use the copied *tree* run it.
+
+    A copied material, such as one appended from another file, brings a
+    copy of its tree along. Its group node still names the tree it was
+    copied from, by *old_uuid*, so it would run that tree instead, and
+    the other tree's changes would reach it.
+    """
+    art = ensure_artifact(tree)
+    for material in bpy.data.materials:
+        if material.paint_system.tree != tree or material.node_tree is None:
+            continue
+        for node in material.node_tree.nodes:
+            if node.bl_idname == 'ShaderNodeGroup' and node.get(MATERIAL_GROUP_KEY) == old_uuid:
+                node[MATERIAL_GROUP_KEY] = tree.uuid
+                node.node_tree = art
+    # The new artifact is empty until the tree compiles.
+    _dirty_uuids.add(tree.uuid)
 
 
 # ── Compile context ──────────────────────────────────────────────────
