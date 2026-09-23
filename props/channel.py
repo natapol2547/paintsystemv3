@@ -15,6 +15,13 @@ CHANNEL_SOCKET_TYPES = [
     ('VECTOR', "Vector", "Vector (XYZ) channel"),
 ]
 
+# Add-on icon of each channel type, for ``icon_kwargs``.
+SOCKET_ICONS = {
+    'COLOR': 'color_socket',
+    'FLOAT': 'float_socket',
+    'VECTOR': 'vector_socket',
+}
+
 CHANNEL_COLOR_SPACES = [
     ('COLOR', "Color", "The values are colours, stored as sRGB"),
     ('NONCOLOR', "Non-Color", "The values are data, such as roughness or height, stored as they are"),

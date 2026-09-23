@@ -16,7 +16,7 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
-from ..common import is_newer_than, rounded_rect
+from ..common import is_newer_than, node_location, rounded_rect
 
 
 def draw_header(node):
@@ -33,15 +33,7 @@ def draw_header(node):
         return
 
     scale = context.preferences.system.ui_scale
-    # Older Blender versions only have the location relative to the parent
-    # frame, so add up the parents' locations.
-    location = getattr(node, 'location_absolute', None)
-    if location is None:
-        location = node.location.copy()
-        parent = node.parent
-        while parent is not None:
-            location += parent.location
-            parent = parent.parent
+    location = node_location(node)
     padding = 1.5 * scale
     left, top = location.x * scale - padding, location.y * scale + padding
     corner_radius = 5 * scale

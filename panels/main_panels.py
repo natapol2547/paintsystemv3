@@ -1,21 +1,14 @@
-from bpy.types import Panel, UIList
+from bpy.types import Menu, Panel, UIList
 from bpy.utils import register_classes_factory
 
 from .brush_panels import draw_paint_sections
 from ..common import icon_kwargs
 from ..compiler.core import artifact_fingerprint
-from ..context import get_active_tree, get_ps_object, material_input, node_editor_tree
+from ..context import find_material_group_node, get_active_tree, get_ps_object, material_input, node_editor_tree
 from ..nodes.layers.base_layer_node import draw_uv_map
-from ..props.channel import channel_alpha_name
+from ..props.channel import SOCKET_ICONS, channel_alpha_name
 from ..selection import session as selection_session
-
-
-# Add-on icon of each channel type, for ``icon_kwargs``.
-SOCKET_ICONS = {
-    'COLOR': 'color_socket',
-    'FLOAT': 'float_socket',
-    'VECTOR': 'vector_socket',
-}
+from ..templates import CHANNEL_TEMPLATES
 
 
 class PAINTSYSTEM_UL_channels(UIList):
@@ -33,6 +26,24 @@ class PAINTSYSTEM_UL_channels(UIList):
         row.prop(item, "name", text="", emboss=False, **icon_kwargs(SOCKET_ICONS.get(item.type, 'NONE')))
         if base is not None:
             row.prop(base, "default_value", text="")
+
+
+class PAINTSYSTEM_MT_add_channel(Menu):
+    """The channel templates the tree does not have yet, then a custom channel."""
+    bl_idname = "PAINTSYSTEM_MT_add_channel"
+    bl_label = "Add Channel"
+
+    def draw(self, context):
+        layout = self.layout
+        tree = get_active_tree(context)
+        names = {channel.name for channel in tree.channels} if tree is not None else set()
+        missing = [(key, template) for key, template in CHANNEL_TEMPLATES.items() if template.name not in names]
+        for key, template in missing:
+            layout.operator("paint_system.add_channel", text=template.name,
+                            **icon_kwargs(SOCKET_ICONS[template.type])).template = key
+        if missing:
+            layout.separator()
+        layout.operator("paint_system.add_channel", text="Custom...", **icon_kwargs('ADD')).template = 'CUSTOM'
 
 
 def _draw_channel_settings(layout, context, tree):
@@ -89,7 +100,7 @@ def _draw_channels_section(layout, context, tree):
         rows=3,
     )
     col = row.column(align=True)
-    col.operator("paint_system.add_channel", text="", **icon_kwargs('ADD'))
+    col.menu("PAINTSYSTEM_MT_add_channel", text="", **icon_kwargs('ADD'))
     col.operator("paint_system.remove_channel", text="", **icon_kwargs('REMOVE'))
     col.separator()
     col.operator("paint_system.move_channel_up", text="", **icon_kwargs('TRIA_UP'))
@@ -186,6 +197,11 @@ class PAINTSYSTEM_PT_main_3dview(Panel):
             row = layout.row(align=True)
             row.label(text=mat.name, **icon_kwargs('MATERIAL'))
             row.prop(mat.paint_system, "tree", text="")
+            # The tree's group node was deleted, or the tree field now names
+            # another tree, so the material does not show the tree.
+            if find_material_group_node(mat, mat.paint_system.tree) is None:
+                layout.operator("paint_system.setup_material", text="Connect to the Material",
+                                **icon_kwargs('LINKED'))
 
         tree = get_active_tree(context)
         if tree is None:
@@ -222,6 +238,7 @@ class PAINTSYSTEM_PT_main_node_editor(Panel):
 
 classes = (
     PAINTSYSTEM_UL_channels,
+    PAINTSYSTEM_MT_add_channel,
     PAINTSYSTEM_PT_main_3dview,
     PAINTSYSTEM_PT_main_node_editor,
 )

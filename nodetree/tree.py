@@ -155,15 +155,16 @@ class PaintSystemNodeTree(NodeTree):
     def is_initialized(self) -> bool:
         return len(self.channels) > 0 or len(self.nodes) > 0
 
-    def initialize(self):
-        """Give a new tree Group Input and Output nodes and a Color channel.
+    def initialize(self, add_channel: bool = True):
+        """Give a new tree Group Input and Output nodes and, with *add_channel*, a Color channel.
 
-        The channel's input is linked straight through to the output.
+        The channel's input is linked straight through to the output. A
+        template (``templates.py``) passes False and adds its own channels.
         """
         ensure_tree_uuid(self)
         with suspend_compile(self):
             self.ensure_io_nodes()
-            if len(self.channels) == 0:
+            if add_channel and len(self.channels) == 0:
                 self.create_channel('Color', 'COLOR')
 
     def ensure_io_nodes(self):

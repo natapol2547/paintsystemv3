@@ -583,7 +583,9 @@ def setup_session():
     obj = cube()
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
-    bpy.ops.paint_system.setup_material()
+    # Each test calls this; the cube is set up by the first one.
+    if obj.active_material is None or obj.active_material.paint_system.tree is None:
+        bpy.ops.paint_system.setup_material()
     bpy.ops.paint_system.add_layer(layer_type='IMAGE', resolution='1024')
     obj.active_material.paint_system.tree.nodes.active.image = bpy.data.images.new("PS View Layer", 256, 256)
     bpy.context.view_layer.update()

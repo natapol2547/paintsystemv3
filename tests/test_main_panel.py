@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import check, finish, guarded, import_from, register_addon, section  # noqa: E402
+from harness import RecordingLayout, check, finish, guarded, import_from, register_addon, section  # noqa: E402
 
 register_addon()
 main_panels = import_from("panels.main_panels")
@@ -23,31 +23,6 @@ find_material_group_node = import_from("context").find_material_group_node
 # The Brush and Color sections ask the active tool for the paint mode,
 # which needs a 3D view. They are not what this test looks at.
 main_panels.draw_paint_sections = lambda layout, context: None
-
-
-class RecordingLayout:
-    """Stands in for a UILayout: records each call and returns another recorder.
-
-    Collapsible sub-panels come back closed, so their bodies are skipped,
-    unless *open_panels* is set. Attribute writes such as `row.scale_x`
-    or an operator property are accepted and ignored.
-    """
-
-    def __init__(self, calls, open_panels=False):
-        object.__setattr__(self, "calls", calls)
-        object.__setattr__(self, "open_panels", open_panels)
-
-    def __getattr__(self, name):
-        def call(*args, **kwargs):
-            self.calls.append((name, args, kwargs))
-            child = RecordingLayout(self.calls, self.open_panels)
-            if name != "panel":
-                return child
-            return child, (RecordingLayout(self.calls, True) if self.open_panels else None)
-        return call
-
-    def __setattr__(self, name, value):
-        pass
 
 
 def draw_main_panel():
@@ -238,11 +213,59 @@ def test_channel_settings():
     calls = []
     main_panels._draw_channels_section(RecordingLayout(calls, open_panels=True), bpy.context, tree)
     check("paint_system_channel_settings" in panels(calls), "the open channel list draws Channel Settings below it")
+    check([call[1] for call in calls if call[0] == "menu"] == [("PAINTSYSTEM_MT_add_channel",)]
+          and not any(call[0] == "operator" and call[1] == ("paint_system.add_channel",) for call in calls)
+          and hasattr(bpy.types, "PAINTSYSTEM_MT_add_channel"),
+          "its + button opens the registered Add Channel menu")
+
+
+def test_add_channel_menu():
+    section("the Add Channel menu offers the channel templates the tree lacks, then a custom channel")
+    bpy.context.view_layer.objects.active = cube
+    tree = cube.active_material.paint_system.tree
+
+    def menu():
+        calls = []
+        main_panels.PAINTSYSTEM_MT_add_channel.draw(SimpleNamespace(layout=RecordingLayout(calls)), bpy.context)
+        # Each button's template is written to the properties the operator call returned.
+        items = [(call[2].get("text"), call.result.written.get("template")) for call in calls if call[0] == "operator"]
+        return items, [call[0] for call in calls]
+
+    items, names = menu()
+    check(items == [("Metallic", 'METALLIC'), ("Roughness", 'ROUGHNESS'), ("Normal", 'NORMAL'),
+                    ("Custom...", 'CUSTOM')],
+          f"the cube's tree has Color, so the other three and Custom ({items})")
+    check(names.index("separator") == 3, "with a separator before Custom")
+    rough = tree.create_channel("Roughness", 'FLOAT')
+    items, _names = menu()
+    check([template for _text, template in items] == ['METALLIC', 'NORMAL', 'CUSTOM'],
+          f"a channel the tree has drops out ({items})")
+    tree.delete_channel(list(tree.channels).index(rough))
+
+
+def test_connect_button():
+    section("a material whose group node was deleted gets a Connect to the Material button")
+    bpy.context.view_layer.objects.active = cube
+    material = cube.active_material
+    tree = material.paint_system.tree
+
+    def setup_buttons():
+        return [kwargs.get("text") for name, args, kwargs in draw_main_panel()
+                if name == "operator" and args[0] == "paint_system.setup_material"]
+
+    check(setup_buttons() == [], "none while the material runs its tree")
+    material.node_tree.nodes.remove(find_material_group_node(material, tree))
+    check(setup_buttons() == ["Connect to the Material"], f"one once its group node is gone ({setup_buttons()})")
+    bpy.ops.paint_system.setup_material()
+    check(find_material_group_node(material, tree) is not None and setup_buttons() == [],
+          "which puts the group node back, and the button goes")
 
 
 guarded(test_the_panel_follows_the_mesh)
 guarded(test_preview_button)
 guarded(test_sections_collapse)
 guarded(test_channel_settings)
+guarded(test_add_channel_menu)
+guarded(test_connect_button)
 
 finish("MAIN PANEL TEST")

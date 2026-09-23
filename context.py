@@ -91,6 +91,11 @@ def get_ps_object(obj) -> bpy.types.Object | None:
 
 # A material's group node stores the uuid of the tree it runs under this key.
 MATERIAL_GROUP_KEY = "ps_tree_uuid"
+# A channel preview's Material Output (PS-061) stores the uuid of the tree
+# it shows under the first key, and the name of the output that was active
+# before it under the second.
+PREVIEW_TREE_KEY = "ps_preview_tree"
+PREVIEW_RESTORE_KEY = "ps_preview_restore"
 
 
 def find_material_group_node(material, tree) -> bpy.types.ShaderNodeGroup | None:

@@ -31,6 +31,24 @@ def redraw_paint_views(window_manager) -> None:
 def is_newer_than(major, minor=0, patch=0):
     return bpy.app.version >= (major, minor, patch)
 
+
+def node_location(node):
+    """*node*'s location in its node tree, outside any frame, as a Vector.
+
+    ``location`` is relative to the parent frame. Blender 4.5 and later
+    also have ``location_absolute``. Older versions only have the relative
+    one, so the parents' locations are added up.
+    """
+    location = getattr(node, 'location_absolute', None)
+    if location is not None:
+        return location.copy()
+    location = node.location.copy()
+    parent = node.parent
+    while parent is not None:
+        location += parent.location
+        parent = parent.parent
+    return location
+
 # UI
 
 

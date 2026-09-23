@@ -5,15 +5,24 @@ from bpy.utils import register_classes_factory
 from ..props.channel import CHANNEL_SOCKET_TYPES, get_next_unique_name
 from ..common import icon_kwargs
 from ..context import get_active_tree as _get_active_tree
+from ..templates import CHANNEL_TEMPLATES, add_template_channel
 from ..undo import undo_restores_data
+
+
+CUSTOM_CHANNEL = ('CUSTOM', "Custom", "A channel with the name and type you pick")
+CHANNEL_TEMPLATE_ITEMS = [CUSTOM_CHANNEL] + [
+    (key, template.name, template.description) for key, template in CHANNEL_TEMPLATES.items()]
 
 
 class PAINTSYSTEM_OT_add_channel(Operator):
     bl_idname = "paint_system.add_channel"
     bl_label = "Add Channel"
-    bl_description = "Add a new channel to the Paint System node tree"
     bl_options = {'REGISTER', 'UNDO'}
 
+    # A template makes its channel with its options, and connects it in
+    # every material that runs the tree (``templates.add_template_channel``).
+    template: EnumProperty(name="Template", items=CHANNEL_TEMPLATE_ITEMS, default='CUSTOM',
+                           options={'SKIP_SAVE'})
     name: StringProperty(name="Name", default="Channel")
     type: EnumProperty(
         name="Type",
@@ -22,21 +31,42 @@ class PAINTSYSTEM_OT_add_channel(Operator):
     )
 
     @classmethod
+    def description(cls, context, properties):
+        if properties.template == 'CUSTOM':
+            return "Add a channel with the name and type you pick"
+        template = CHANNEL_TEMPLATES[properties.template]
+        return f"{template.description}. Connected in every material that runs the tree"
+
+    @classmethod
     def poll(cls, context):
         return _get_active_tree(context) is not None
 
     def execute(self, context):
         tree = _get_active_tree(context)
-        tree.create_channel(self.name, self.type)
+        if self.template == 'CUSTOM':
+            tree.create_channel(self.name, self.type)
+            return {'FINISHED'}
+        name = CHANNEL_TEMPLATES[self.template].name
+        if any(channel.name == name for channel in tree.channels):
+            self.report({'ERROR'}, f'The tree already has a "{name}" channel')
+            return {'CANCELLED'}
+        _channel, connected = add_template_channel(tree, self.template)
+        if connected == 0:
+            self.report({'INFO'}, f'Added "{name}". No material has a shader node to paint it into')
         return {'FINISHED'}
 
     def invoke(self, context, event):
+        if self.template != 'CUSTOM':
+            return self.execute(context)
         tree = _get_active_tree(context)
         self.name = get_next_unique_name(
             self.name, [channel.name for channel in tree.channels])
         return context.window_manager.invoke_props_dialog(self)
 
     def draw(self, context):
+        # A template picks the name and type itself.
+        if self.template != 'CUSTOM':
+            return
         layout = self.layout
         layout.prop(self, "name")
         layout.prop(self, "type")

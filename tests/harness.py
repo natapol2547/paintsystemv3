@@ -88,6 +88,56 @@ def guarded(fn):
         _failures.append(f"exception in {getattr(fn, '__name__', fn)}")
 
 
+class Call(tuple):
+    """One call a `RecordingLayout` recorded. Unpacks as ``(name, args, kwargs)``.
+
+    ``layout`` is the recorder the call was made on, and ``result`` the one
+    it returned, such as the properties of an operator button.
+    """
+
+    def __new__(cls, name, args, kwargs, layout, result):
+        call = super().__new__(cls, (name, args, kwargs))
+        call.layout = layout
+        call.result = result
+        return call
+
+
+class RecordingLayout:
+    """Stands in for a UILayout: records each call and returns another recorder.
+
+    Collapsible sub-panels come back closed, so their bodies are skipped,
+    unless *open_panels* is set. Attribute writes, such as ``row.enabled``
+    or an operator button's property, are kept in ``written``.
+    """
+
+    def __init__(self, calls, open_panels=False, parent=None):
+        object.__setattr__(self, "calls", calls)
+        object.__setattr__(self, "open_panels", open_panels)
+        object.__setattr__(self, "parent", parent)
+        object.__setattr__(self, "written", {})
+
+    def __getattr__(self, name):
+        def call(*args, **kwargs):
+            child = RecordingLayout(self.calls, self.open_panels, self)
+            self.calls.append(Call(name, args, kwargs, self, child))
+            if name != "panel":
+                return child
+            return child, (RecordingLayout(self.calls, True, self) if self.open_panels else None)
+        return call
+
+    def __setattr__(self, name, value):
+        self.written[name] = value
+
+    def setting(self, name, default=None):
+        """The value written to *name* on this layout, or else on the nearest layout it is in."""
+        layout = self
+        while layout is not None:
+            if name in layout.written:
+                return layout.written[name]
+            layout = layout.parent
+        return default
+
+
 def use_tree(obj, tree):
     """Give *obj* a material driven by *tree*, and return the material.
 

@@ -60,6 +60,12 @@ def rna_func(type_name, func):
     return ok, f"bpy.types.{type_name}.{func}()"
 
 
+def rna_param(type_name, func, param):
+    t = getattr(bpy.types, type_name, None)
+    ok = t is not None and func in t.bl_rna.functions and param in t.bl_rna.functions[func].parameters
+    return ok, f"bpy.types.{type_name}.{func}({param}=)"
+
+
 def op(idname):
     mod, name = idname.split(".")
     ok = hasattr(bpy.ops, mod) and name in dir(getattr(bpy.ops, mod))
@@ -283,6 +289,28 @@ SURFACE = [
     op("wm.tool_set_by_id"),
     op("ed.undo_redo"),
     rna_prop("Screen", "is_temporary"),
+
+    # Add Paint System and its templates (PS-041).
+    rna_func("ShaderNodeTree", "get_output_node"),
+    rna_prop("ShaderNodeOutputMaterial", "target"),
+    rna_prop("ShaderNodeOutputMaterial", "is_active_output"),
+    attr("bpy.types.ShaderNodeShaderToRGB"),
+    rna_prop("Material", "surface_render_method"),
+    rna_prop("Material", "use_transparency_overlap"),
+    rna_prop("Material", "use_backface_culling"),
+    gated(rna_prop("Material", "use_nodes"), until_v=(5, 0)),
+    gated(rna_prop("Node", "location_absolute"), since_v=(4, 5)),
+    rna_func("UILayout", "prop_enum"),
+    rna_func("UILayout", "prop_search"),
+    rna_func("UILayout", "enum_item_name"),
+    rna_param("WindowManager", "invoke_props_dialog", "title"),
+    rna_param("WindowManager", "invoke_props_dialog", "confirm_text"),
+    attr("bpy.types.bpy_struct.is_property_set"),
+    attr("bpy.types.Operator.poll_message_set"),
+    rna_prop("ThemeStyle", "widget"),
+    rna_prop("ThemeFontStyle", "points"),
+    attr("blf.size"),
+    attr("blf.dimensions"),
 ]
 
 

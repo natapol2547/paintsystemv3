@@ -3,15 +3,10 @@ from bpy.types import Operator
 from bpy.utils import register_classes_factory
 
 from ..compiler.core import ps_trees
-from ..context import find_material_group_node, get_active_tree, get_ps_object, update_active_image
+from ..context import (PREVIEW_RESTORE_KEY, PREVIEW_TREE_KEY, find_material_group_node, get_active_tree,
+                       get_ps_object, update_active_image)
 from ..props.channel import PREVIEW_OUTPUT
 from ..props.preview import restore_preview_displays
-
-# A preview's Material Output stores the uuid of the tree it shows under
-# the first key, and the name of the output that was active before it
-# under the second.
-PREVIEW_TREE_KEY = "ps_preview_tree"
-PREVIEW_RESTORE_KEY = "ps_preview_restore"
 
 
 def _material_shading(context) -> str:

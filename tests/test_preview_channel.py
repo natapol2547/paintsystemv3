@@ -25,7 +25,7 @@ compile_tree = core.compile_tree
 preview_module = import_from("props.preview")
 find_material_group_node = import_from("context").find_material_group_node
 link_tree_to_material = import_from("ops.node_tree_ops").link_tree_to_material
-PREVIEW_TREE_KEY = import_from("ops.paint_ops").PREVIEW_TREE_KEY
+PREVIEW_TREE_KEY = import_from("context").PREVIEW_TREE_KEY
 
 SIZE = 8
 # The checker behind a colour that is not opaque.
@@ -46,7 +46,9 @@ def new_painted_object(name):
     obj = bpy.data.objects.new(name, mesh)
     bpy.context.scene.collection.objects.link(obj)
     activate(obj)
-    ops.setup_material()
+    # The Unlit template would switch the view to Standard, and this test
+    # sets the display itself.
+    ops.setup_material(use_standard_view=False)
     material = obj.active_material
     return obj, material, material.paint_system.tree
 

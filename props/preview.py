@@ -30,7 +30,7 @@ def preview_view_transform(channel) -> str:
     return 'Raw' if channel is not None and channel.color_space == 'NONCOLOR' else 'Standard'
 
 
-def _set_enum(owner, prop: str, value: str) -> bool:
+def set_enum(owner, prop: str, value: str) -> bool:
     """Set the enum *prop* to *value*, and return False when it is not one of its items.
 
     A custom OpenColorIO configuration may have no Standard or Raw view,
@@ -80,8 +80,8 @@ class PaintSystemPreviewDisplay(bpy.types.PropertyGroup):
             return
         # Setting the view transform resets the look, so the look comes after it.
         if (view_settings.view_transform == self.applied
-                and _set_enum(view_settings, 'view_transform', self.view_transform)):
-            _set_enum(view_settings, 'look', self.look)
+                and set_enum(view_settings, 'view_transform', self.view_transform)):
+            set_enum(view_settings, 'look', self.look)
         if view_settings.exposure == NEUTRAL_EXPOSURE:
             view_settings.exposure = self.exposure
         if view_settings.gamma == NEUTRAL_GAMMA:
@@ -90,7 +90,7 @@ class PaintSystemPreviewDisplay(bpy.types.PropertyGroup):
         self.applied = ""
 
     def _apply_view_transform(self, view_settings, channel) -> None:
-        _set_enum(view_settings, 'view_transform', preview_view_transform(channel))
+        set_enum(view_settings, 'view_transform', preview_view_transform(channel))
         # When the switch fails, the view transform on screen is still the
         # one the preview gives back at the end, so it is recorded either way.
         self.applied = view_settings.view_transform
