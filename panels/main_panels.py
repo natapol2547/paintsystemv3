@@ -20,10 +20,12 @@ class PAINTSYSTEM_UL_channels(UIList):
         # The base value is the material's input, so a shared tree can
         # start from a different value in each material. A vector does not
         # fit in the row (PS-006).
-        base = material_input(context, data, item.name) if item.type != 'VECTOR' else None
+        base = material_input(
+            context, data, item.name) if item.type != 'VECTOR' else None
         if base is not None:
             row = row.split(factor=0.7, align=True)
-        row.prop(item, "name", text="", emboss=False, **icon_kwargs(SOCKET_ICONS.get(item.type, 'NONE')))
+        row.prop(item, "name", text="", emboss=False, **
+                 icon_kwargs(SOCKET_ICONS.get(item.type, 'NONE')))
         if base is not None:
             row.prop(base, "default_value", text="")
 
@@ -35,15 +37,38 @@ class PAINTSYSTEM_MT_add_channel(Menu):
 
     def draw(self, context):
         layout = self.layout
+        # The + button opens this menu with ``wm.call_menu``, and such a
+        # popup starts in EXEC_REGION_WIN. "Custom..." asks for a name and a
+        # type in its invoke, which that context would skip.
+        layout.operator_context = 'INVOKE_REGION_WIN'
         tree = get_active_tree(context)
-        names = {channel.name for channel in tree.channels} if tree is not None else set()
-        missing = [(key, template) for key, template in CHANNEL_TEMPLATES.items() if template.name not in names]
+        names = {
+            channel.name for channel in tree.channels} if tree is not None else set()
+        missing = [(key, template) for key, template in CHANNEL_TEMPLATES.items(
+        ) if template.name not in names]
         for key, template in missing:
             layout.operator("paint_system.add_channel", text=template.name,
                             **icon_kwargs(SOCKET_ICONS[template.type])).template = key
         if missing:
             layout.separator()
-        layout.operator("paint_system.add_channel", text="Custom...", **icon_kwargs('ADD')).template = 'CUSTOM'
+        layout.operator("paint_system.add_channel", text="Custom...",
+                        **icon_kwargs('ADD')).template = 'CUSTOM'
+
+
+class PAINTSYSTEM_PT_channel_select(Panel):
+    """The channel list on its own, so the closed Channels section can still switch channel."""
+    bl_idname = 'PAINTSYSTEM_PT_channel_select'
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "WINDOW"
+    bl_label = "Channels"
+    bl_options = {"INSTANCED"}
+    bl_ui_units_x = 10
+
+    def draw(self, context):
+        tree = get_active_tree(context)
+        if tree is None:
+            return
+        _draw_channel_list(self.layout, context, tree)
 
 
 def _draw_channel_settings(layout, context, tree):
@@ -51,7 +76,8 @@ def _draw_channel_settings(layout, context, tree):
     channel = tree.active_channel
     if channel is None:
         return
-    header, body = layout.panel("paint_system_channel_settings", default_closed=True)
+    header, body = layout.panel(
+        "paint_system_channel_settings", default_closed=True)
     header.label(text="Channel Settings")
     if body is None:
         return
@@ -75,24 +101,13 @@ def _draw_channel_settings(layout, context, tree):
         col.row().prop(channel, "vector_kind", expand=True)
         col.prop(channel, "paint_space")
         if channel.paint_space == 'TANGENT':
-            draw_uv_map(context, col, channel, get_ps_object(context.object), prop="tangent_uv_map")
+            draw_uv_map(context, col, channel, get_ps_object(
+                context.object), prop="tangent_uv_map")
 
 
-def _draw_channels_section(layout, context, tree):
-    """Draw the channel list and the channel settings in a section that can be collapsed.
-
-    While the section is closed, its header names the active channel, so
-    the channel being painted stays in view.
-    """
-    header, body = layout.panel("paint_system_channels", default_closed=False)
-    row = header.row()
-    row.label(text="Channels")
-    if body is None:
-        channel = tree.active_channel
-        if channel is not None:
-            row.label(text=channel.name, **icon_kwargs(SOCKET_ICONS.get(channel.type, 'NONE')))
-        return
-    row = body.row()
+def _draw_channel_list(layout, context, tree):
+    """Draw the channel list with the buttons that add, remove and move a channel."""
+    row = layout.row()
     row.template_list(
         "PAINTSYSTEM_UL_channels", "",
         tree, "channels",
@@ -100,11 +115,39 @@ def _draw_channels_section(layout, context, tree):
         rows=3,
     )
     col = row.column(align=True)
-    col.menu("PAINTSYSTEM_MT_add_channel", text="", **icon_kwargs('ADD'))
-    col.operator("paint_system.remove_channel", text="", **icon_kwargs('REMOVE'))
+    col.operator("wm.call_menu", text="", **icon_kwargs('ADD')
+                 ).name = PAINTSYSTEM_MT_add_channel.bl_idname
+    col.operator("paint_system.remove_channel",
+                 text="", **icon_kwargs('REMOVE'))
     col.separator()
-    col.operator("paint_system.move_channel_up", text="", **icon_kwargs('TRIA_UP'))
-    col.operator("paint_system.move_channel_down", text="", **icon_kwargs('TRIA_DOWN'))
+    col.operator("paint_system.move_channel_up",
+                 text="", **icon_kwargs('TRIA_UP'))
+    col.operator("paint_system.move_channel_down",
+                 text="", **icon_kwargs('TRIA_DOWN'))
+
+
+def _draw_channels_section(layout, context, tree):
+    """Draw the channel list and the channel settings in a section that can be collapsed.
+
+    While the section is closed, its header carries a popover of the same
+    list named for the active channel, so the channel being painted stays
+    in view and can still be switched.
+    """
+    header, body = layout.panel("paint_system_channels", default_closed=False)
+    header.label(text="Channels", **icon_kwargs('channel'))
+    if body is None:
+        channel = tree.active_channel
+        if channel is not None:
+            row = header.row(align=True)
+            row.scale_x = 1.1
+            row.alignment = 'RIGHT'
+            row.popover(
+                panel="PAINTSYSTEM_PT_channel_select",
+                text=channel.name, **
+                icon_kwargs(SOCKET_ICONS.get(channel.type, 'NONE'))
+            )
+        return
+    _draw_channel_list(body, context, tree)
     _draw_channel_settings(body, context, tree)
 
 
@@ -115,8 +158,10 @@ def _draw_paint_mode_row(layout, context, tree):
     row.operator("paint_system.toggle_paint_mode", text="Toggle Paint Mode",
                  depress=context.mode == 'PAINT_TEXTURE', **icon_kwargs('paintbrush'))
     channel = tree.active_channel
-    icon = SOCKET_ICONS.get(channel.type, 'HIDE_OFF') if channel is not None else 'HIDE_OFF'
-    row.operator("paint_system.preview_channel", text="", depress=tree.preview_channel, **icon_kwargs(icon))
+    icon = SOCKET_ICONS.get(
+        channel.type, 'HIDE_OFF') if channel is not None else 'HIDE_OFF'
+    row.operator("paint_system.preview_channel", text="",
+                 depress=tree.preview_channel, **icon_kwargs(icon))
     row.operator("wm.save_mainfile", text="", **icon_kwargs('save'))
 
 
@@ -142,13 +187,18 @@ def _draw_selection_section(layout, context, tree):
     row.operator("paint_system.select_all", text="None").action = 'DESELECT'
     row.operator("paint_system.select_all", text="Invert").action = 'INVERT'
     row = body.row(align=True)
-    row.operator("paint_system.clear_pixels", text="Clear", **icon_kwargs('IMAGE_ALPHA'))
-    row.operator("paint_system.fill_pixels", text="Fill", **icon_kwargs('SNAP_FACE'))
-    row.operator("paint_system.invert_pixels", text="Invert Colors", **icon_kwargs('MOD_MASK'))
-    row.menu("PAINTSYSTEM_MT_invert_channels", text="", **icon_kwargs('DOWNARROW_HLT'))
+    row.operator("paint_system.clear_pixels", text="Clear",
+                 **icon_kwargs('IMAGE_ALPHA'))
+    row.operator("paint_system.fill_pixels",
+                 text="Fill", **icon_kwargs('SNAP_FACE'))
+    row.operator("paint_system.invert_pixels",
+                 text="Invert Colors", **icon_kwargs('MOD_MASK'))
+    row.menu("PAINTSYSTEM_MT_invert_channels",
+             text="", **icon_kwargs('DOWNARROW_HLT'))
     row = body.row(align=True)
     # Placeholder icons.
-    row.operator("paint_system.blur_pixels", text="Blur", **icon_kwargs('MOD_SMOOTH'))
+    row.operator("paint_system.blur_pixels", text="Blur",
+                 **icon_kwargs('MOD_SMOOTH'))
     row.operator("paint_system.sharpen_pixels", text="Sharpen",
                  **icon_kwargs('MOD_EDGESPLIT'))
     if problem:
@@ -162,7 +212,8 @@ def _draw_compiled_info(layout, context, tree):
     prefs = addon_preferences(context)
     if prefs is None or not prefs.show_developer_extras:
         return
-    header, body = layout.panel("paint_system_compiled_panel", default_closed=True)
+    header, body = layout.panel(
+        "paint_system_compiled_panel", default_closed=True)
     header.label(text="Compiled Shader")
     if body is None:
         return
@@ -194,9 +245,11 @@ class PAINTSYSTEM_PT_main_3dview(Panel):
         mat = obj.active_material if obj is not None else None
 
         if mat is None or mat.paint_system.tree is None:
-            layout.operator("paint_system.setup_material", **icon_kwargs('ADD'))
+            layout.operator("paint_system.setup_material",
+                            **icon_kwargs('ADD'))
             layout.separator()
-            layout.prop(context.scene.paint_system, "active_node_tree", text="Tree")
+            layout.prop(context.scene.paint_system,
+                        "active_node_tree", text="Tree")
         else:
             row = layout.row(align=True)
             row.label(text=mat.name, **icon_kwargs('MATERIAL'))
@@ -213,7 +266,6 @@ class PAINTSYSTEM_PT_main_3dview(Panel):
 
         if obj is not None:
             _draw_paint_mode_row(layout, context, tree)
-        layout.separator()
         _draw_channels_section(layout, context, tree)
         draw_paint_sections(layout, context)
         if context.mode == 'PAINT_TEXTURE':
@@ -243,6 +295,7 @@ class PAINTSYSTEM_PT_main_node_editor(Panel):
 classes = (
     PAINTSYSTEM_UL_channels,
     PAINTSYSTEM_MT_add_channel,
+    PAINTSYSTEM_PT_channel_select,
     PAINTSYSTEM_PT_main_3dview,
     PAINTSYSTEM_PT_main_node_editor,
 )

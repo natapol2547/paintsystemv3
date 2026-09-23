@@ -30,7 +30,8 @@ def layer_rows(tree) -> dict[str, LayerRow]:
             parent = rows[folder.name]
             visible = parent.visible and folder.is_expanded
             parent_enabled = parent.parent_enabled and folder.enabled
-        rows[item.node.name] = LayerRow(order, item.level, visible, parent_enabled)
+        rows[item.node.name] = LayerRow(
+            order, item.level, visible, parent_enabled)
     return rows
 
 
@@ -99,9 +100,20 @@ class PAINTSYSTEM_UL_layers(UIList):
 class PAINTSYSTEM_MT_add_layer(Menu):
     bl_idname = "PAINTSYSTEM_MT_add_layer"
     bl_label = "Add Layer"
+    bl_options = {'SEARCH_ON_KEY_PRESS'}
 
     def draw(self, context):
         layout = self.layout
+
+        if layout.operator_context == 'EXEC_REGION_WIN':
+            layout.operator_context = 'INVOKE_REGION_WIN'
+            layout.operator(
+                "WM_OT_search_single_menu",
+                text="Search...",
+                **icon_kwargs('VIEWZOOM'),
+            ).menu_idname = "PAINTSYSTEM_MT_add_layer"
+            layout.separator()
+
         layout.operator_context = 'INVOKE_REGION_WIN'
         section = None
         for node_class in layer_types():
@@ -130,7 +142,8 @@ def draw_layer_properties(layout, context, node):
     clip.prop(node, "is_clip", text="", **icon_kwargs('SELECT_INTERSECT'))
     if node.paint_image is not None:
         clip.prop(node, "lock_alpha", text="", **icon_kwargs('TEXTURE'))
-    row.prop(node, "lock_layer", text="", **icon_kwargs('VIEW_LOCKED', 'LOCKED'))
+    row.prop(node, "lock_layer", text="", **
+             icon_kwargs('VIEW_LOCKED', 'LOCKED'))
     if node.ps_shows_blend_mode:
         blend = row.row(align=True)
         blend.enabled = not node.lock_layer
@@ -139,19 +152,24 @@ def draw_layer_properties(layout, context, node):
     opacity.enabled = not node.lock_layer
     if not wide:
         opacity.scale_y = 0.8
-    opacity.prop(node, "opacity", text="" if wide else node.ps_opacity_label, slider=True)
+    opacity.prop(node, "opacity",
+                 text="" if wide else node.ps_opacity_label, slider=True)
 
 
 def draw_layer_sidebar(col):
     col.scale_x = 1.2
-    col.operator("wm.call_menu", text="", **icon_kwargs('layer_add')).name = PAINTSYSTEM_MT_add_layer.bl_idname
-    op = col.operator("paint_system.add_layer", text="", **icon_kwargs('folder'))
+    col.operator("wm.call_menu", text="", **icon_kwargs('layer_add')
+                 ).name = PAINTSYSTEM_MT_add_layer.bl_idname
+    op = col.operator("paint_system.add_layer",
+                      text="", **icon_kwargs('folder'))
     op.layer_type = 'FOLDER'
     col.separator(type='LINE')
     col.operator("paint_system.remove_layer", text="", **icon_kwargs('trash'))
     col.separator(type='LINE')
-    col.operator("paint_system.move_layer_up", text="", **icon_kwargs('TRIA_UP'))
-    col.operator("paint_system.move_layer_down", text="", **icon_kwargs('TRIA_DOWN'))
+    col.operator("paint_system.move_layer_up",
+                 text="", **icon_kwargs('TRIA_UP'))
+    col.operator("paint_system.move_layer_down",
+                 text="", **icon_kwargs('TRIA_DOWN'))
 
 
 class LayersPanel:

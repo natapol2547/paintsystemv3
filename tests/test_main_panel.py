@@ -107,6 +107,11 @@ def panels(calls):
     return {args[0]: kwargs for name, args, kwargs in calls if name == "panel"}
 
 
+def popovers(calls):
+    """(panel, button text) of each popover button drawn."""
+    return [(kwargs.get("panel"), kwargs.get("text")) for name, _args, kwargs in calls if name == "popover"]
+
+
 def test_sections_collapse():
     section("the channel list and the Selection section can be collapsed")
     bpy.context.view_layer.objects.active = cube
@@ -115,8 +120,11 @@ def test_sections_collapse():
     check(panels(calls).get("paint_system_channels") == {"default_closed": False},
           f"the channel list is in a section that starts open (panels {panels(calls)})")
     channel = tree.active_channel
-    check(channel is not None and channel.name in labels(calls),
-          f"while it is closed its header names the active channel (labels {labels(calls)})")
+    popover = main_panels.PAINTSYSTEM_PT_channel_select
+    check(channel is not None and (popover.bl_idname, channel.name) in popovers(calls)
+          and hasattr(bpy.types, popover.bl_idname),
+          f"while it is closed its header opens the registered channel popover, named for the active "
+          f"channel (popovers {popovers(calls)})")
     check(not any(name == "template_list" for name, _args, _kwargs in calls),
           "and the list itself is not drawn")
 
@@ -124,6 +132,35 @@ def test_sections_collapse():
     main_panels._draw_selection_section(RecordingLayout(calls), bpy.context, tree)
     check(panels(calls).get("paint_system_selection") == {"default_closed": True},
           f"the Selection section starts closed (panels {panels(calls)})")
+
+
+def test_channel_popover():
+    section("the channel popover switches channel without leaving the panel")
+    bpy.context.view_layer.objects.active = cube
+    calls = []
+    main_panels.PAINTSYSTEM_PT_channel_select.draw(
+        SimpleNamespace(layout=RecordingLayout(calls, open_panels=True)), bpy.context)
+    check(any(name == "template_list" for name, _args, _kwargs in calls), "the popover lists the channels")
+    check([call.result.written.get("name") for call in calls
+           if call[0] == "operator" and call[1] == ("wm.call_menu",)] == ["PAINTSYSTEM_MT_add_channel"],
+          "with the + button of the list beside it")
+    # A section inside the popover could be collapsed down to a button that
+    # only reopens the popover, and Blender keeps that closed for the session.
+    check(panels(calls) == {}, f"and nothing in it collapses ({panels(calls)})")
+    check("paint_system_channel_settings" not in panels(calls),
+          "Channel Settings is left to the panel, which has the room for it")
+
+    # A popover draws on its own, after the panel that opened it has gone:
+    # nothing else is left to check that there is a tree to draw.
+    scene = bpy.context.scene.paint_system
+    active, scene.active_node_tree = scene.active_node_tree, None
+    bpy.context.view_layer.objects.active = bpy.data.objects["Camera"]
+    calls = []
+    main_panels.PAINTSYSTEM_PT_channel_select.draw(
+        SimpleNamespace(layout=RecordingLayout(calls, open_panels=True)), bpy.context)
+    check(calls == [], f"with no tree it draws nothing instead of raising ({calls})")
+    scene.active_node_tree = active
+    bpy.context.view_layer.objects.active = cube
 
 
 def drawn_props(calls):
@@ -214,10 +251,12 @@ def test_channel_settings():
     calls = []
     main_panels._draw_channels_section(RecordingLayout(calls, open_panels=True), bpy.context, tree)
     check("paint_system_channel_settings" in panels(calls), "the open channel list draws Channel Settings below it")
-    check([call[1] for call in calls if call[0] == "menu"] == [("PAINTSYSTEM_MT_add_channel",)]
+    called = [call.result.written.get("name") for call in calls
+              if call[0] == "operator" and call[1] == ("wm.call_menu",)]
+    check(called == ["PAINTSYSTEM_MT_add_channel"]
           and not any(call[0] == "operator" and call[1] == ("paint_system.add_channel",) for call in calls)
           and hasattr(bpy.types, "PAINTSYSTEM_MT_add_channel"),
-          "its + button opens the registered Add Channel menu")
+          f"its + button opens the registered Add Channel menu ({called})")
 
 
 def test_add_channel_menu():
@@ -225,14 +264,23 @@ def test_add_channel_menu():
     bpy.context.view_layer.objects.active = cube
     tree = cube.active_material.paint_system.tree
 
+    drawn = []
+
     def menu():
         calls = []
-        main_panels.PAINTSYSTEM_MT_add_channel.draw(SimpleNamespace(layout=RecordingLayout(calls)), bpy.context)
+        layout = RecordingLayout(calls)
+        drawn.append(layout)
+        main_panels.PAINTSYSTEM_MT_add_channel.draw(SimpleNamespace(layout=layout), bpy.context)
         # Each button's template is written to the properties the operator call returned.
         items = [(call[2].get("text"), call.result.written.get("template")) for call in calls if call[0] == "operator"]
         return items, [call[0] for call in calls]
 
     items, names = menu()
+    # The + button opens the menu with wm.call_menu, which starts it in the
+    # context that executes an operator instead of invoking it.
+    context = drawn[0].written.get("operator_context")
+    check(context == 'INVOKE_REGION_WIN',
+          f"the menu asks for the invoke context, so Custom... opens its name and type dialog ({context})")
     check(items == [("Metallic", 'METALLIC'), ("Roughness", 'ROUGHNESS'), ("Normal", 'NORMAL'),
                     ("Custom...", 'CUSTOM')],
           f"the cube's tree has Color, so the other three and Custom ({items})")
@@ -302,6 +350,7 @@ def test_developer_extras():
 guarded(test_the_panel_follows_the_mesh)
 guarded(test_preview_button)
 guarded(test_sections_collapse)
+guarded(test_channel_popover)
 guarded(test_channel_settings)
 guarded(test_add_channel_menu)
 guarded(test_connect_button)

@@ -13,6 +13,9 @@ System tab as in v2:
   icon came in slice 5, `lock_alpha` with PS-060 in slice 6);
 - the list (PS-011) at `rows=min(max(6, n), 7)` and `scale_y` 1.5;
 - the sidebar: Add Layer menu, new folder, remove, move up and down;
+  the menu carries `SEARCH_ON_KEY_PRESS` and the "Search..." entry
+  Blender's own Add menu uses (`bl_ui/node_add_menu.py`), so a layer
+  type can be found by typing;
 - the Layer Settings `layout.panel` (PS-035).
 
 The main panel keeps the channel list and moves the compiled shader info

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import check, finish, import_from, register_addon, section, use_tree  # noqa: E402
+from harness import RecordingLayout, check, finish, import_from, register_addon, section, use_tree  # noqa: E402
 
 register_addon()
 core = import_from("compiler.core")
@@ -260,6 +260,23 @@ try:
         check(description.startswith(cls.ps_description), f"{cls.ps_type} tooltip")
     check(registry.layer_type('IMAGE').bl_idname == 'PaintSystemImageLayerNode' and registry.layer_type('NOPE') is None,
           "lookup by type")
+
+    section("the Add Layer menu")
+    calls = []
+    menu_layout = RecordingLayout(calls)
+    # Blender draws a menu with EXEC_REGION_WIN. Its menu search draws the
+    # same menu with another context, which is how the Search entry stays
+    # out of the search results.
+    menu_layout.operator_context = 'EXEC_REGION_WIN'
+    layers_panels.PAINTSYSTEM_MT_add_layer.draw(SimpleNamespace(layout=menu_layout), bpy.context)
+    offered = [call.result.written.get("layer_type") for call in calls
+               if call[0] == "operator" and call[1] == ("paint_system.add_layer",)]
+    check(offered == [cls.ps_type for cls in types], f"it offers every layer type {offered}")
+    searched = [call.result.written.get("menu_idname") for call in calls
+                if call[0] == "operator" and call[1] == ("WM_OT_search_single_menu",)]
+    check(searched == [layers_panels.PAINTSYSTEM_MT_add_layer.bl_idname]
+          and hasattr(bpy.types, layers_panels.PAINTSYSTEM_MT_add_layer.bl_idname),
+          f"and its Search entry searches the registered menu itself {searched}")
     category_items = [item.nodetype for item in node_categories()[0].items(None)]
     check(all(cls.bl_idname in category_items for cls in types), f"node editor Layers category {category_items}")
 

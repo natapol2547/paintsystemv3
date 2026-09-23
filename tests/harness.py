@@ -107,7 +107,8 @@ class RecordingLayout:
 
     Collapsible sub-panels come back closed, so their bodies are skipped,
     unless *open_panels* is set. Attribute writes, such as ``row.enabled``
-    or an operator button's property, are kept in ``written``.
+    or an operator button's property, are kept in ``written`` and read
+    back from there.
     """
 
     def __init__(self, calls, open_panels=False, parent=None):
@@ -117,6 +118,11 @@ class RecordingLayout:
         object.__setattr__(self, "written", {})
 
     def __getattr__(self, name):
+        # A value written to the layout reads back, the way Blender's does:
+        # a menu that branches on its own `operator_context` needs that.
+        if name in self.written:
+            return self.written[name]
+
         def call(*args, **kwargs):
             child = RecordingLayout(self.calls, self.open_panels, self)
             self.calls.append(Call(name, args, kwargs, self, child))

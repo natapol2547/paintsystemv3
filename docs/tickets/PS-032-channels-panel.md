@@ -9,8 +9,27 @@ unlinked input, and a closed "Channel Settings" section below the list
 draws the PS-005 options. PS-005 also decided that the Add Channel dialog
 keeps Name and Type, with the options set from the type, so the CUSTOM
 dialog properties below are dropped. Channel Settings also draws the
-PS-006 vector settings. Still to do: the add-channel menu with templates
-(PS-041), and the PS-007 settings.
+PS-006 vector settings. The add-channel menu with templates came with
+PS-041. Still to do: the PS-007 settings.
+
+The closed header's popover is ported as
+`PAINTSYSTEM_PT_channel_select`, VIEW_3D / WINDOW, INSTANCED,
+`bl_ui_units_x` 10, like v2's `MAT_PT_ChannelsSelect`. It draws
+`_draw_channel_list`, the list and its side buttons, and nothing that
+can be collapsed: a section closed inside a popover leaves a button that
+only reopens the popover, and Blender keeps a popover's sections closed
+for the rest of the session. Channel Settings stays in the panel, which
+has the room it needs. The popover draws on its own, after the panel
+that opened it has gone, so it checks for a tree itself. Its button
+carries the active channel's name and socket icon; with no active
+channel the header draws nothing, where v2 raised. The open header is
+the label "Channels" with the `channel` icon.
+
+The + button opens the menu through `wm.call_menu`, the form the layers
+sidebar uses, so it matches the icon buttons beside it. A `wm.call_menu`
+popup starts in `EXEC_REGION_WIN`, so `PAINTSYSTEM_MT_add_channel` asks
+for `INVOKE_REGION_WIN`; without it "Custom..." would add a channel
+straight away instead of opening its name and type dialog.
 
 ## v2 behaviour
 
