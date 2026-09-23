@@ -596,9 +596,9 @@ whose output is unlit, and off for the others, which keep the
 material's own look. With no template given, `execute` uses
 `recommend()` and fills in the options the caller did not set the same
 way. Start With defaults to Nothing, so a script gets no layer, and
-`invoke` sets Image Layer at 2K. `invoke` does not run in background, so
-its presets are kept to those two lines, and the recommendation is
-tested through `recommend()`.
+`invoke` sets Image Layer at 2K. `invoke` only runs with a window, so its
+presets are kept to those two lines. The tests call it on a stand-in
+whose context records the dialog instead of opening it.
 
 `execute` first checks every refusal (Paint Over that cannot run, PBR
 with no channel) and cancels with a report before it changes anything.
@@ -639,8 +639,8 @@ node in a material, so it only gets the channel.
 ## Known gaps
 
 - Only the active object's material is set up. v2 set up every
-  selected object's material. The summary says so when several meshes
-  are selected.
+  selected object's material. The summary says so when another selected
+  mesh does not use the material.
 - No UV map is made for a mesh without one (auto UV is PS-009); the
   summary warns instead. No UDIM or float image options.
 - The template is not stored on the tree. Undoing a template (PS-042)
@@ -650,9 +650,6 @@ node in a material, so it only gets the channel.
 - The preview (PS-061) finds the material's output by the active flag,
   so on a material with EEVEE and Cycles outputs its Preview output may
   not show. That is PS-061's to fix.
-- The dialog's presets in `invoke` (the recommended template, Image
-  Layer at 2K) and the reconnect shortcut through `invoke` run only with
-  a window, so the headless tests call `execute` and `recommend()`.
 
 ## Acceptance
 
@@ -691,6 +688,10 @@ node in a material, so it only gets the channel.
   tree again, for PBR, Unlit and Paint Over (with its Shader to RGB)
   and during a channel preview, and the panel shows the Connect to the
   Material button only in between. Group Only reports a warning.
+- Through `invoke`, on stand-ins: Add Paint System opens its dialog on
+  the recommended template with an image layer, Connect to the Material
+  and a channel template from the menu skip their dialogs, and
+  Custom... opens the name dialog with a free name.
 - Muted links: a muted Surface link or a reroute nothing feeds counts
   as nothing (recommendation, refusal, summary); a muted link moved
   under the paint stays muted with its socket's value; a new output

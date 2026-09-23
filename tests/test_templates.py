@@ -1055,6 +1055,75 @@ def reconnect():
     return reports
 
 
+class Setup(Reconnect):
+    """Stands in for Add Paint System as its button calls it, through invoke."""
+    invoke = SETUP.invoke
+
+
+ADD_CHANNEL = import_from("ops.channel_ops").PAINTSYSTEM_OT_add_channel
+
+
+class AddChannel(SimpleNamespace):
+    """Stands in for Add Channel as its menu calls it, through invoke."""
+    invoke = ADD_CHANNEL.invoke
+    execute = ADD_CHANNEL.execute
+
+
+class DialogContext:
+    """bpy.context, but its window manager records the dialog it is asked for instead of opening it.
+
+    ``invoke`` only runs with a window, so the tests call it on stand-ins
+    with this context.
+    """
+
+    def __init__(self):
+        self.dialogs = []
+        self.window_manager = SimpleNamespace(invoke_props_dialog=self._dialog)
+
+    def _dialog(self, operator, **kwargs):
+        self.dialogs.append(kwargs)
+        return {'RUNNING_MODAL'}
+
+    def __getattr__(self, name):
+        return getattr(bpy.context, name)
+
+
+def ignore_report(kind, text):
+    """A stand-in's report, where the test does not look at it."""
+
+
+def test_invoke():
+    section("the buttons open a dialog only when there is something to ask")
+    scene.render.engine = EEVEE
+    material = default_material("PS Invoke")
+    new_object("PS Invoke", material)
+    context = DialogContext()
+    setup = Setup(template='UNLIT', start_with='NOTHING', report=ignore_report)
+    check(setup.invoke(context, None) == {'RUNNING_MODAL'}
+          and context.dialogs == [dict(width=node_tree_ops.DIALOG_WIDTH, title="Add Paint System", confirm_text="Add")],
+          f"Add Paint System opens its dialog {context.dialogs}")
+    check((setup.template, setup.start_with) == ('PBR', 'IMAGE'),
+          f"on the recommended template, with an image layer to start ({setup.template}, {setup.start_with})")
+
+    run(template='PBR')
+    tree = material.paint_system.tree
+    material.node_tree.nodes.remove(find_material_group_node(material, tree))
+    context = DialogContext()
+    check(Setup(report=ignore_report).invoke(context, None) == {'FINISHED'} and context.dialogs == []
+          and find_material_group_node(material, tree) is not None,
+          "Connect to the Material connects the tree again without the dialog")
+
+    context = DialogContext()
+    menu_item = AddChannel(template='METALLIC', name="Channel", type='COLOR', report=ignore_report)
+    check(menu_item.invoke(context, None) == {'FINISHED'}
+          and context.dialogs == [] and 'Metallic' in tree.channels,
+          "a channel template from the Add Channel menu adds its channel without a dialog")
+    custom = AddChannel(template='CUSTOM', name="Metallic", type='FLOAT', report=ignore_report)
+    check(custom.invoke(context, None) == {'RUNNING_MODAL'} and context.dialogs == [{}]
+          and custom.name == "Metallic 1",
+          f"Custom... asks for the name and type, starting from a free name ({custom.name})")
+
+
 def test_linked_data():
     section("linked data is not set up, and Add Channel leaves a linked material alone")
     scene.render.engine = EEVEE
@@ -1356,6 +1425,7 @@ guarded(test_standard_view_while_previewing)
 guarded(test_add_channel)
 guarded(test_reconnect)
 guarded(test_linked_data)
+guarded(test_invoke)
 guarded(test_summary)
 guarded(test_dialog)
 
