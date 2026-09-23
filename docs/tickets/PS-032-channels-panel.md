@@ -8,8 +8,9 @@ Partly done by PS-005: the list row shows the material group node's
 unlinked input, and a closed "Channel Settings" section below the list
 draws the PS-005 options. PS-005 also decided that the Add Channel dialog
 keeps Name and Type, with the options set from the type, so the CUSTOM
-dialog properties below are dropped. Still to do: the add-channel menu
-with templates (PS-041), and the PS-006/PS-007 settings.
+dialog properties below are dropped. Channel Settings also draws the
+PS-006 vector settings. Still to do: the add-channel menu with templates
+(PS-041), and the PS-007 settings.
 
 ## v2 behaviour
 

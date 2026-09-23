@@ -285,7 +285,12 @@ Channel bake is the node cache applied at the Group Output:
   the same image (same as v2 `select_all_baked_objects` semantics).
 - "Bake as Layer" = bake into a fresh managed image, insert an image layer
   at the top, leave `use_bake_image` off.
-- Vector channels bake in `bake_vector_space` (PS-006).
+- A vector channel bakes its layer values, as a layer cache does
+  (PS-006): a float Non-Color image in the channel's Paint In space, with
+  normals as normal map colours. It reads back through the same
+  conversion, and Bake as Layer can put it on top of the stack as it is.
+  Whether to offer v2's `bake_vector_space`, a bake in another space, is
+  decided here.
 
 ## Acceptance
 

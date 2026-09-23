@@ -106,7 +106,7 @@ groups and templates (040-042), colour history (062).
 | [PS-003](tickets/PS-003-artifact-owned-parameter-nodes.md) | Artifact-owned parameter nodes (curves, ramps, texture parameters) | M | – |
 | [PS-004](tickets/PS-004-ir-drivers.md) | IR support for drivers | S | – |
 | [PS-005](tickets/PS-005-channel-options.md) | Channel options: alpha socket, colour space, factor range, defaults (done) | M | – |
-| [PS-006](tickets/PS-006-vector-channels.md) | Vector channels: normal and tangent space transforms | M | 002 005 |
+| [PS-006](tickets/PS-006-vector-channels.md) | Vector channels: normal and tangent space transforms (done) | M | 005 |
 | [PS-007](tickets/PS-007-channel-bake.md) | Channel-level bake ("Use Baked") | M | 005 |
 | [PS-008](tickets/PS-008-coordinate-mixin.md) | Coordinate and transform mixin for texture-driven layers | L | 002 |
 | [PS-009](tickets/PS-009-ps-uvmap-and-udim.md) | `PS_UVMap` auto UV and UDIM tile detection | S | – |

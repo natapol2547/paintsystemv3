@@ -188,7 +188,9 @@ MATERIAL when the engine is exactly CYCLES. It calls
   - `tree.preview_channel` (BoolProperty, saved) adds a `Preview` shader
     output at the end of the compiled interface. The Group Output
     emitter feeds it an Emission of what the active channel outputs,
-    after the flatten of a channel without alpha. A Float channel's
+    after the flatten of a channel without alpha. For a vector channel
+    that is its layer values, before the conversion to world space
+    (PS-006). A Float channel's
     colour goes through a float socket first (a Math node), so the
     preview shows the value the material gets, not the colour painted.
     A channel with alpha shows a checker behind the parts that are not
@@ -252,8 +254,10 @@ MATERIAL when the engine is exactly CYCLES. It calls
   and the saved display all come back together, and the button shows the
   preview is on. The ticket's earlier SKIP_SAVE idea does not work, since
   SKIP_SAVE only applies to operator properties.
-- PS-006 decides what a vector channel previews; until then it is the
-  channel's output as a colour.
+- A vector channel previews its layer values, before they are converted
+  to world space (PS-006): a normals channel shows the colours of its
+  normal map, flat blue for an empty tangent-space stack, and a Vectors
+  channel shows its values in its Paint In space.
 
 ## Known gaps
 

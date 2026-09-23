@@ -94,9 +94,8 @@ Color         = mix(cb, source, source_share)
   a transparent texel.
 - `LIBRARY_VERSION` 2. Groups from an older version are rebuilt in place
   on first use, keeping interface identifiers. Non-mixing groups
-  (projection, parallax, aspect, tangent normal, occlusion) are still
-  appended from `library2.blend` per PS-002; the three v2 mixing groups
-  are not.
+  (projection, parallax, aspect, occlusion) are still appended from
+  `library2.blend` per PS-002; the three v2 mixing groups are not.
 
 ## Acceptance
 

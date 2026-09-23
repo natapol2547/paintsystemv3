@@ -2,6 +2,13 @@
 
 Epic A. Size M. Milestone M2.
 
+## Status
+
+Done: Holds, Paint In and the tangent UV map, with the conversions in
+`compiler/vector.py` and the normal map inverse and tangent groups in
+`compiler/library.py`. The v3 design below describes the code as it is. Bakes (`bake_vector_space`)
+are PS-007, and geometry layers that write normals are PS-027.
+
 ## v2 behaviour
 
 `Channel.update_node_tree` (`paintsystem/data.py:1735-1802, 1866-1886,
@@ -275,21 +282,197 @@ Normal template (`paintsystem/data.py:2739-2750`):
 
 ## v3 design
 
-- Add the properties above to `PaintSystemChannel`. Each `update=` marks
-  the tree dirty.
-- New `compiler/vector.py` with `emit_vector_input(ctx, channel, ref)` and
-  `emit_vector_output(ctx, channel, ref)` called by the Group Input and
-  Group Output emitters for VECTOR channels. Roles
-  `"<channel uuid>:vin_*"` / `":vout_*"`.
-- `disable_output_transform` is not stored on the channel. Preview Channel
-  (PS-061) is a compile option on the tree (`tree.preview_channel`), and
-  its Group Output emitter can pick what a vector channel shows, so the
-  artifact reflects preview state without mutating channel data.
-- Geometry layers writing normals use `normalize_normal` (PS-027) to match
-  `normalize_input`.
+One choice replaces v2's three spaces and two toggles. Every shader
+socket that takes a vector (a BSDF's Normal, Bump, Displacement) expects
+world space, so the material's input and output are always world-space
+vectors, and the user picks only the space the layers paint in. That
+removes v2's states whose output the material cannot read, such as
+Normalize with Transform Output off, which leaves colour-encoded values.
+
+Properties of `PaintSystemChannel` (`props/channel.py`), all with
+`_on_channel_changed`, so a change recompiles the tree:
+
+- `vector_kind` "Holds": Normals or Vectors, default Normals. It replaces
+  `vector_type` and `normalize_input`.
+  - Normals are unit vectors, stored as the colours of a normal map, so
+    a normal map image painted or loaded into a layer is right as it is.
+    An unlinked material input stands for the shading normal, so an empty
+    stack gives the surface back as it is, and the interface input hides
+    its value (`hide_value`). Hiding the field does not clear a value
+    typed while the channel held Vectors, so switching to Normals resets
+    each material's unlinked input to (0, 0, 0) (`_on_vector_kind_changed`).
+  - Vectors are stored as they are, and the interface input shows its
+    value, which the stack starts from. Every other channel sets
+    `hide_value` off, so a socket that stops holding normals shows its
+    value again. The Group Input's hash leaves `hide_value` out, since it
+    changes no value.
+  - v2's Point is dropped. It differs from Vector only in Object space,
+    by the object's location, and painting positions is rare. It can come
+    back as a third kind.
+- `paint_space` "Paint In": Tangent, Object or World, default Tangent,
+  the space of most normal maps.
+- `tangent_uv_map` "UV Map", used by Tangent only. Empty means the mesh's
+  active render UV map, which is also what a layer without a UV map of
+  its own paints on. v2's default was the name "UVMap".
+- No `default_value`. Normals fall back to the shading normal, and
+  Vectors start from the input's value. v2's World and Object Position
+  defaults are dropped with Point.
+- No `disable_output_transform`. Preview Channel (PS-061) is a compile
+  option, and its Group Output emitter shows the layer values as the
+  layers hold them: normals as normal map colours, flat blue for an
+  empty tangent-space stack.
+
+Compiler (`compiler/vector.py`):
+
+- `from_world(ctx, owner, role, channel, vector)` turns a world-space
+  vector into a layer value, and `to_world` reads one back. Both return
+  anything but a vector channel as it is. The nodes are *owner*'s, with
+  roles that start with *role*.
+- The compiled group's inputs are read through `CompileContext
+  .channel_base`, one `NodeGroupInput` (IR id `group:in`) for the whole
+  tree. For a vector channel it calls `input_value`, whose nodes belong
+  to the channel (`<channel uuid>:input:*`), so a Group Input and a
+  flattened Group Output share them.
+- The Group Output calls `to_world` for each channel
+  (`<node uuid>:out:<socket identifier>:*`). The flatten of a channel
+  without alpha happens before it, in layer values.
+- Unlinked normal input: Vector Math LENGTH, Math LESS_THAN 1e-5 and a
+  Mix (VECTOR) with the Geometry Normal, as v2's `vector_mix`. An
+  unlinked input reads (0, 0, 0): that is its default, its field is
+  hidden, and switching to Normals clears a value typed before.
+- Normals are read back with a Normal Map node set to the paint space
+  and, in Tangent, the channel's UV map. It is how Blender reads a normal
+  map, and it normalises, so a painted layer looks as its image would
+  through a plain Normal Map node.
+- Normals are encoded by the library group "Normal Map Inverse"
+  (`normal_map_inverse_group`), which gives the colour that node reads as
+  a given world-space normal. Four more Normal Map nodes, set up as the
+  decoder, read +X, +Y, +Z and (1, 1, 1) (`NORMAL_MAP_PROBES`). In both
+  engines and every space the node reads a colour c as
+  normalize(F (2c - 1)), with F a matrix of the point being shaded: the
+  UV map's tangent frame, the object's matrix, or none, turned round on a
+  back face where the engine does that. The first three readings are F's
+  columns, normalised, and the fourth is their sum, normalised, which
+  recovers the lengths the first three lost. Part i of the colour is
+  N . R_i over XYZ . R_i, where R_i is the cross product of the other two
+  readings; that is F^-1 N up to a scale the normalising cancels, along
+  with the sign of F's determinant. Where the readings span no volume
+  (|det| < 1e-4), the colour is flat (0.5, 0.5, 1).
+  - Why: the node's F differs between engines and cases, and copying it
+    fails somewhere. A first version encoded through the tangent groups
+    and Vector Transform NORMAL, and it disagreed with the decoder on
+    back faces and on unevenly scaled objects in Tangent space (up to
+    0.24 in Cycles on a stretched mesh). Inverting the node itself is
+    exact on back faces, mirrored UV maps and unevenly or negatively
+    scaled objects, in Cycles and EEVEE (scratch probes, see
+    Acceptance).
+  - Switching spaces changes only the `space` and `uv_map` of the five
+    Normal Map nodes, so the compiled tree is patched in place.
+- Vectors in Object space: a Vector Transform (VECTOR) between World and
+  Object, so they turn and scale with the object.
+- Vectors in Tangent space: the library groups "World To Tangent" and
+  "Tangent To World" (`compiler/library.py`), built in Python, so PS-002
+  is not needed. A group cannot pick a UV map, so the compiled tree feeds
+  each one a Tangent node (UV_MAP) and a Normal Map node (Tangent) reading
+  pure +Y, both on the channel's UV map. The frame (`_tangent_frame`) is
+  T, the tangent made perpendicular to the shading normal (EEVEE's
+  Tangent node is not); N, the shading normal turned round on a back
+  face, where it faces the viewer; and B, the shading normal x T, turned
+  round where the probe says the bitangent points the other way (a
+  mirrored UV map) and on a back face. So a vector means the same seen
+  from either side, and the frame is orthonormal, so the two groups undo
+  each other. v2's `.PS Tangent Normal` has no mirroring sign, so on a
+  mirrored half its encoding and the Normal Map node's decoding disagree
+  (inferred from the group's math).
+- Group layers: the tree a group layer wraps takes and gives world-space
+  vectors, and a stack in the parent holds the parent channel's layer
+  values. So the group layer calls `to_world` before the wrapped tree and
+  `from_world` after it, on the parent's vector channel that each output
+  feeds, not the one of its name (`_outer_channels`). That channel comes
+  from `stack_ops.output_channel`, which follows the stack up through
+  layers, folders and group layers to the active Group Output, the way
+  the compiler reads it. `channel_of`, which filter layers use, is built
+  on it. Its hash includes those channels' settings.
+- Hashes: `space_settings(channel)` (kind, space and, in Tangent only,
+  the UV map) is part of the Group Input's `hash_parts`, keyed by socket
+  identifier, so a layer cache above the input goes stale when they
+  change, and part of a group layer's.
+- Layer caches (`bake_node_cache`): a vector channel's cache is a float
+  image in Non-Color, since Vectors can be negative, which a byte image
+  clamps to 0, and encoded normals keep more precision. The values are
+  data, so the cache is Non-Color whatever colour space the channel's
+  layers paint in. A cache baked before the channel changed type is
+  replaced, and the old image is removed when nothing else uses it. Other
+  channels' caches stay byte images, now in the channel's colour space
+  (`image_colorspace`) rather than always sRGB, so the cache of a Float
+  channel in Non-Color is Non-Color too.
+- Filter layers refuse any channel that is not a colour channel
+  (`resolve_input`), so they never see vector values.
+
+UI (`panels/main_panels.py`): Channel Settings shows, for a vector
+channel, "Holds" as two buttons, "Paint In", and in Tangent the UV map
+search (`draw_uv_map`, the layers' field). The channel list row shows no
+value for a vector channel, since three fields do not fit.
+
+## Known gaps
+
+- A colour property cannot be negative, so a Solid Color layer cannot
+  paint a Vectors value with a negative component. Normals are encoded,
+  so they are not affected, and a blend such as Subtract can still take
+  a Vectors value below 0.
+- Filter layers refuse vector channels. Their results are byte images,
+  which would clamp Vectors below 0 and lose precision on normals, so
+  allowing them needs float results first.
+- A tangent UV map the mesh does not have (a typo, or a UV map renamed
+  after it was picked, since the name is not followed): in Cycles the
+  Tangent node gives 0 and the Normal Map node the plain normal, so the
+  inverse group finds no volume and encodes flat. A linked normal input
+  is then lost and the shading normal comes out; a painted layer still
+  matches a plain Normal Map node on that name, and Tangent-space Vectors
+  lose their T and B. EEVEE falls back to a UV map it has. A mesh with no
+  UV maps at all gets Blender's generated tangents in both engines, so it
+  keeps a frame.
+- Switching a channel's type to Vector keeps its Use Alpha and colour
+  space (PS-005), so a vector channel made from a colour channel has an
+  alpha socket and paints new images in sRGB until those are changed.
+  A new Vector channel starts with both right (`channel_defaults`), and
+  so will the channel templates of PS-041.
 
 ## Acceptance
 
-- Test: normal channel with a solid (0.5,0.5,1) layer and tangent output
-  produces the same vector as v2 on a UV sphere (compare a baked pixel).
-- Test: switching spaces patches nodes in place without artifact churn.
+`tests/test_vector_channels.py` bakes with Cycles on a curved, rotated
+mesh whose tangent UV map is mirrored on one half, so both handednesses
+are checked, and renders the back faces with an orthographic Cycles
+camera behind the mesh (`render_back`). It compares the compiled shader
+with Blender's own nodes, not with v2, which disagrees with them on
+mirrored UVs.
+
+- An empty stack gives the linked normal back in all three spaces, on
+  the front and the back faces, and on an unevenly scaled object in all
+  three spaces.
+- A painted normal equals a Normal Map node of that colour in each
+  space, on both sides.
+- Vectors pass through an empty stack, and a painted vector points where
+  a normal map of it points (Tangent) or turns and scales with the object
+  (Object). A tangent-space (0, 0, 1) is the surface's own normal,
+  (1, 0, 0) the UV tangent and (0, 1, 0) runs along the UV map's V, seen
+  from either side.
+- A group layer converts between a parent in Tangent and a child in
+  Object, and its hash follows the parent's space. A group layer whose
+  Normal sockets are wired into the parent's Bump stack converts on Bump,
+  so a normal its tree paints comes out as painted.
+- A cache of a Vectors stack below 0 is a float Non-Color image, even
+  with the channel in sRGB, and gives the same values as the live stack.
+- Switching a channel to Normals clears a typed input value and hides the
+  field; switching it to another type shows the field again.
+- The preview of an empty tangent-space stack is flat (0.5, 0.5, 1), on
+  the channel's UV map and on one the mesh does not have.
+- Switching spaces patches the same Normal Map node, and the kind, the
+  space and the tangent UV map each change a cache's hash above the
+  input.
+
+Scratch probes, not in the suite, rendered the same round trips on both
+sides in Cycles and EEVEE on Blender 4.2, 4.5, 5.0, 5.1, 5.2 and 5.3,
+including unevenly scaled objects, and on negatively scaled objects on
+4.2 and 5.2. The largest error was below 0.0001 everywhere but the
+missing UV map above.

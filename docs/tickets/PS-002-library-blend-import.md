@@ -46,7 +46,10 @@ Groups in the file (name: inputs -> outputs):
   artifact instances keep working without a recompile.
 - Expose typed helpers used by later tickets: `projection_group()`,
   `uv_parallax_group()`, `object_parallax_group()`, `correct_aspect_group()`,
-  `tangent_normal_group()`, `occlusion_group()`.
+  `occlusion_group()`. `.PS Tangent Normal` is not appended: vector
+  channels (PS-006) build their own tangent and normal map groups in
+  Python, and v2's group disagrees with the Normal Map node on mirrored
+  UV maps.
 
 ## Acceptance
 

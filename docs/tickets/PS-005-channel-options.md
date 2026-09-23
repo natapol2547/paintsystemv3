@@ -284,22 +284,23 @@ Compiled interface:
 - The Paint System tree has one RGBA socket per channel (PS-098), so
   `use_alpha` touches no socket there. It changes the compiled interface
   (`interface_socket_specs`) and the places that cross it:
-  `CompileContext.set_channel_output`, `link_channel` and
-  `link_flattened`. With it off, neither side of the compiled group has
-  a `<name> Alpha` socket and the Group Input gives alpha 1, so the stack
-  starts from an opaque base, as in v2. Blend modes such as Multiply then
-  act on the base. The Group Input's `hash_parts` holds each channel's
-  interface specs, keyed by socket identifier, so a layer cache above it
-  goes stale when these options change, but not on a rename or a move.
+  `CompileContext.channel_base` and `flattened`, and the Group Output
+  and group layer emitters. With it off, neither side of the compiled
+  group has a `<name> Alpha` socket and the Group Input gives alpha 1, so
+  the stack starts from an opaque base, as in v2. Blend modes such as
+  Multiply then act on the base. The Group Input's `hash_parts` holds
+  each channel's interface specs, keyed by socket identifier, so a layer
+  cache above it goes stale when these options change, but not on a
+  rename or a move.
 - At the Group Output, a channel without alpha is flattened onto its
   input: a Mix node lays the colour over the compiled group's own
-  `<name>` input, by the alpha (`link_flattened`). An unlinked channel is
-  an empty stack, so the input comes out as it is. v2 drops the alpha
-  instead. Normal layers keep an opaque base opaque, so the mix changes
-  nothing there. A filter layer does not keep it opaque: it replaces the
-  stack with pixels filtered without the base, so without the mix a
-  blurred stroke would show its colour at full strength out to the last
-  pixel of its soft edge. Multiplying by the alpha, which is what
+  `<name>` input, by the alpha (`CompileContext.flattened`). An unlinked
+  channel is an empty stack, so the input comes out as it is. v2 drops
+  the alpha instead. Normal layers keep an opaque base opaque, so the mix
+  changes nothing there. A filter layer does not keep it opaque: it
+  replaces the stack with pixels filtered without the base, so without
+  the mix a blurred stroke would show its colour at full strength out to
+  the last pixel of its soft edge. Multiplying by the alpha, which is what
   converting straight colour to premultiplied would do, flattens onto
   black instead, which is right only when the input is black.
 - A group layer follows its child's channels. A child channel without

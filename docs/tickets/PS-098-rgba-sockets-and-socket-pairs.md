@@ -62,10 +62,12 @@ Made with the user on 2026-09-23.
   becomes a Value or RGB node with the role `const:<identifier>:<half>`.
 - Consumers read that pair through `CompileContext.rgba_input` (the
   unlinked default's fourth value is the alpha), `connect_input` (one
-  value, used for `Mask`) and `link_channel` / `set_channel_output` (the
-  only consumers that link by the `<channel> Alpha` name;
-  `interface_socket_specs` declares it). At the Group Output, a channel
-  without alpha goes through `link_flattened` instead (PS-005).
+  value, used for `Mask`) and `upstream` (the pair as it is, which the
+  Group Output and group layer emitters link by the `<channel>` and
+  `<channel> Alpha` names; `interface_socket_specs` declares them). The
+  compiled group's inputs are read through `channel_base`. At the Group
+  Output, a channel without alpha goes through `flattened` instead
+  (PS-005).
 - A colour linked into `Mask` is converted by the shader's implicit
   conversion, which is luminance. PS-015 decides whether masks should
   read luminance, the red channel or alpha.

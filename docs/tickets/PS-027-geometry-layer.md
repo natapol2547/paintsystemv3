@@ -136,6 +136,10 @@ Behaviour implied by the UI:
   parameter node (PS-003) because its Normal input and Color input are
   user-editable in v2; the others are plain IR nodes.
 - VECTOR_TRANSFORM behaves like an adjustment (`is_clip` forced).
+- In a vector channel, layers hold values in the channel's Paint In space,
+  and normals encoded when it holds Normals (PS-006). A layer that writes
+  world-space normals can give them through `compiler.vector.from_world`
+  instead of asking the user for `normalize_normal`.
 
 ## Acceptance
 

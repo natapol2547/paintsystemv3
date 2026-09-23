@@ -33,7 +33,7 @@ PaintSystemNodeTree  --compile-->  IR  --NodeTreeBuilder-->  ShaderNodeTree (tre
    order and calls `node.emit(ctx)` on each node. Nodes append to the IR and
    register which IR sockets provide their outputs; downstream nodes read
    those back through `ctx.rgba_input(socket)`, `ctx.connect_input(...)`
-   or `ctx.link_channel(...)`.
+   or `ctx.upstream(socket)`.
 3. `IR.fingerprint()` hashes the result. If it differs from the
    fingerprint stored on the artifact (`ps_fingerprint`), `IR.apply`
    patches the artifact through the diff-based `NodeTreeBuilder`
@@ -125,17 +125,34 @@ nothing has to repair the links afterwards. The compiler splits the value
 where it needs to: it records each Paint System output as a (colour,
 alpha) pair of IR references, keyed by node uuid and socket identifier
 (`CompileContext.set_output`), and a consumer reads the pair back through
-`rgba_input`, `connect_input` or `link_channel`. The compiled node group
+`rgba_input`, `connect_input` or `upstream`. The compiled node group
 keeps `<channel>` and `<channel> Alpha` sockets, so materials still see
 the colour and alpha separately. Channel sockets in the Paint System tree
 are always `NodeSocketColor`; only the compiled interface follows the
-channel type. A channel with `use_alpha` off (PS-005) has no alpha socket
-on either side: the Group Input gives alpha 1, so its stack starts from an
-opaque base, and the Group Output lays the result over the channel's input
-by its alpha (`link_flattened`) instead of dropping the alpha. While
+channel type. Every read of the compiled group's inputs goes through
+`CompileContext.channel_base`, which adds one `NodeGroupInput` node (IR
+id `group:in`) and gives each channel's input as the (colour, alpha) pair
+its stack starts from. A channel with `use_alpha` off (PS-005) has no
+alpha socket on either side: its input pair has alpha 1, so its stack
+starts from an opaque base, and the Group Output lays the result over the
+channel's input by its alpha (`CompileContext.flattened`) instead of
+dropping the alpha. A vector channel's input and output are world-space
+vectors, while its layers hold values in the channel's Paint In space
+(PS-006). `compiler/vector.py` converts between the two: `channel_base`
+calls `input_value` on the way in, the Group Output calls `to_world` on
+the way out, and a group layer converts at its edges, because the tree it
+wraps may paint in another space. Its sockets sit in the stack their
+output feeds (`stack_ops.output_channel`), which need not be the channel
+of their name. Normals are read back with a Normal Map node, so a painted
+layer looks as its image would through a plain Normal Map node, and they
+are encoded by `normal_map_inverse_group`, which inverts that node from
+its readings of four colours. Vectors in Tangent space go through two
+library groups built in Python (`world_to_tangent_group`,
+`tangent_to_world_group`). While
 `tree.preview_channel` is on (PS-061), the compiled group also has a
 `Preview` shader output, after the channels, that shows the active
-channel's output as emission. `paint_system.preview_channel` links it to a
+channel's stack as emission: its layer values, so a normals channel shows
+the colours of its normal map. `paint_system.preview_channel` links it to a
 Material Output of its own in each material, so the material's nodes stay
 as they are. The IR marks that socket and its nodes (`IR.adding_preview`),
 and a group layer hashes the tree it wraps without them
