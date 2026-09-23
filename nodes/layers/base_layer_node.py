@@ -48,8 +48,8 @@ def new_hidden_input(node, socket_type: str, name: str, default):
     return socket
 
 
-def draw_uv_map(context, layout, node, obj=None):
-    """Draw *node*'s ``uv_map`` field.
+def draw_uv_map(context, layout, node, obj=None, prop="uv_map"):
+    """Draw *node*'s UV map field, the property *prop*.
 
     The field searches the UV maps of the mesh *obj*, else of the active
     mesh. With neither, it is a plain text field.
@@ -57,9 +57,9 @@ def draw_uv_map(context, layout, node, obj=None):
     if obj is None or obj.type != 'MESH':
         obj = getattr(context, 'object', None)
     if obj is not None and obj.type == 'MESH':
-        layout.prop_search(node, "uv_map", obj.data, "uv_layers", text="UV")
+        layout.prop_search(node, prop, obj.data, "uv_layers", text="UV")
     else:
-        layout.prop(node, "uv_map")
+        layout.prop(node, prop)
 
 
 def emit_image_texture(ctx, node, role: str, image, uv_map: str = ""):

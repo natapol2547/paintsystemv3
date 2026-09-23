@@ -6,10 +6,11 @@ from bpy.utils import register_classes_factory
 
 from ..base_node import PaintSystemBaseNode
 from ...common import blender_icon, icon_kwargs
-from ...props.channel import channel_socket_specs
-from ...nodetree.stack_ops import channel_sockets, tree_references
+from ...props.channel import channel_alpha_name, channel_socket_specs
+from ...nodetree.stack_ops import channel_sockets, output_channel, tree_references
 from ...nodetree.tree import sync_sockets
 from ...compiler.core import compile_tree, compile_wrapped_tree, mark_dirty
+from ...compiler.vector import from_world, space_settings, to_world
 
 
 def is_ps_node_tree_poll(self, node_tree: bpy.types.NodeTree):
@@ -69,14 +70,30 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
 
     # -- compiler -----------------------------------------------------------------
 
+    def _outer_channels(self) -> dict:
+        """This tree's vector channel around each of the wrapped tree's vector channels, by name.
+
+        The wrapped tree takes and gives world-space vectors, and a stack
+        in this tree holds its own channel's layer values (see
+        ``compiler.vector``). A channel's input and output sit in the
+        stack its output feeds, which need not be the channel of its name.
+        """
+        outers = {}
+        for channel, socket in channel_sockets(self.outputs, self.node_tree.channels):
+            outer = output_channel(self.id_data, socket) if channel.type == 'VECTOR' else None
+            if outer is not None and outer.type == 'VECTOR':
+                outers[channel.name] = outer
+        return outers
+
     def hash_parts(self, ctx):
-        """Compile the wrapped tree and return its fingerprint.
+        """Compile the wrapped tree and return its fingerprint, with the conversions at its edges.
 
         So an edit inside the wrapped tree changes this node's subtree hash.
         """
         if not self.node_tree:
             return []
-        return [compile_wrapped_tree(self.node_tree)]
+        return [compile_wrapped_tree(self.node_tree),
+                {name: space_settings(outer) for name, outer in self._outer_channels().items()}]
 
     def emit(self, ctx):
         child = self.node_tree
@@ -85,10 +102,27 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
         compile_tree(child)
         gid = ctx.emit_node(self, 'group', 'ShaderNodeGroup',
                             properties={'node_tree': child.compiled})
+        outers = self._outer_channels()
         for channel, sock in channel_sockets(self.inputs, child.channels):
-            ctx.link_channel(sock, channel, gid)
+            pair = ctx.upstream(sock)
+            # Unlinked, the wrapped tree keeps the defaults of its interface.
+            if pair is None:
+                continue
+            color, alpha = pair
+            outer = outers.get(channel.name)
+            if outer is not None:
+                color = to_world(ctx, self, f"in:{sock.identifier}", outer, color)
+            ctx.link(color, gid, channel.name)
+            if channel.use_alpha:
+                ctx.link(alpha, gid, channel_alpha_name(channel.name))
         for channel, sock in channel_sockets(self.outputs, child.channels):
-            ctx.set_channel_output(sock, channel, gid)
+            color = (gid, channel.name)
+            outer = outers.get(channel.name)
+            if outer is not None:
+                color = from_world(ctx, self, f"out:{sock.identifier}", outer, color)
+            # A channel without alpha gives an opaque stack.
+            alpha = (gid, channel_alpha_name(channel.name)) if channel.use_alpha else 1.0
+            ctx.set_output(sock, color, alpha)
 
 
 classes = (

@@ -5,6 +5,7 @@ from .brush_panels import draw_paint_sections
 from ..common import icon_kwargs
 from ..compiler.core import artifact_fingerprint
 from ..context import get_active_tree, get_ps_object, material_input, node_editor_tree
+from ..nodes.layers.base_layer_node import draw_uv_map
 from ..props.channel import channel_alpha_name
 from ..selection import session as selection_session
 
@@ -59,6 +60,11 @@ def _draw_channel_settings(layout, context, tree):
         sub.active = channel.use_range
         sub.prop(channel, "range_min")
         sub.prop(channel, "range_max")
+    elif channel.type == 'VECTOR':
+        col.row().prop(channel, "vector_kind", expand=True)
+        col.prop(channel, "paint_space")
+        if channel.paint_space == 'TANGENT':
+            draw_uv_map(context, col, channel, get_ps_object(context.object), prop="tangent_uv_map")
 
 
 def _draw_channels_section(layout, context, tree):

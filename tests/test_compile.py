@@ -193,7 +193,7 @@ try:
     mix = next(n for n in art.nodes if n.get("ps_identifier") == flatten)
     mix_feeds = [(index, link.from_node.get("ps_identifier"), link.from_socket.name)
                  for index, sock in enumerate(mix.inputs) for link in sock.links]
-    check(mix_feeds == [(0, opaque, 'Value'), (6, f"{gout.uuid}:base", 'Roughness'), (7, group_id, 'Mask')],
+    check(mix_feeds == [(0, opaque, 'Value'), (6, "group:in", 'Roughness'), (7, group_id, 'Mask')],
           f"that lays the colour over the channel's input by its alpha ({mix_feeds})")
     tree.links.new(gin.outputs['Roughness'], gout.inputs['Roughness'])
 

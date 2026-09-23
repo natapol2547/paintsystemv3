@@ -45,7 +45,7 @@ import bpy
 from ..context import get_ps_object, uses_tree
 from ..gpu_passes.core import gpu_known
 from ..gpu_passes.texel_map import resolve_uv_map
-from ..nodetree.stack_ops import below_input, consumer_input, feeding_link, is_layer, link_index
+from ..nodetree.stack_ops import below_input, channel_of, feeding_link
 from . import composite
 from .core import Refused
 
@@ -80,32 +80,6 @@ class InputPlan:
     @property
     def is_composite(self) -> bool:
         return self.path == COMPOSITE
-
-
-def channel_of(tree, node):
-    """The channel *node*'s stack feeds, or None when it reaches no output.
-
-    Walks up the way the compiler does, so a layer inside a folder
-    reports the folder's channel.
-    """
-    output = tree.get_output_node()
-    if output is None:
-        return None
-    visited = {node.name}
-    with link_index(tree):
-        current = node
-        while True:
-            socket = consumer_input(current)
-            if socket is None:
-                return None
-            if socket.node == output:
-                return next((channel for channel in tree.channels
-                             if channel.name == socket.name), None)
-            consumer = socket.node
-            if not is_layer(consumer) or consumer.name in visited:
-                return None
-            visited.add(consumer.name)
-            current = consumer
 
 
 def resolve_input(context, tree, node) -> InputPlan:

@@ -23,6 +23,8 @@ import contextlib
 import bpy
 import numpy as np
 
+from ..nodetree.stack_ops import channel_of
+from ..props.channel import image_colorspace
 from .core import build_ir, mark_dirty
 
 
@@ -234,9 +236,17 @@ def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int 
     # does not leave an unused image datablock behind.
     check_bake_object(obj)
 
-    image = node.cache_image
-    if image is None:
-        image = create_managed_image(f"{tree.name} {node.name} Cache", width, height)
+    channel = channel_of(tree, node)
+    # A vector channel's values can be negative, which a byte image would
+    # clamp to 0, and encoded normals keep more precision in float. They
+    # are data, so they are stored as they are, whatever colour space the
+    # channel's layers paint in.
+    float_buffer = channel is not None and channel.type == 'VECTOR'
+    colorspace = 'Non-Color' if float_buffer else image_colorspace(channel)
+    old = image = node.cache_image
+    if image is None or image.is_float != float_buffer:
+        image = create_managed_image(f"{tree.name} {node.name} Cache", width, height,
+                                     float_buffer=float_buffer, colorspace=colorspace)
     elif tuple(image.size) != (width, height):
         image.scale(width, height)
 
@@ -245,6 +255,10 @@ def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int 
     image.pack()
 
     node.cache_image = image
+    if old is not None and old != image and old.get(PS_IMAGE_KEY) and old.users == 0:
+        # The cache from before the channel changed type, which nothing
+        # else uses.
+        bpy.data.images.remove(old)
     node.cache_hash = subtree_hash
     if uv_map:
         node.cache_uv_map = uv_map

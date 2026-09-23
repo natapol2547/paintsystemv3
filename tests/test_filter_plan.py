@@ -386,14 +386,14 @@ try:
     check("nothing below" in message, f"a filter layer on its own is refused: {message}")
 
     section("the channel a layer feeds")
-    check(layer_plan.channel_of(tree, node) is not None,
+    check(stack_ops.channel_of(tree, node) is not None,
           "a top-level layer reports its channel")
     with core.suspend_compile(tree):
         folder = tree.insert_layer_node(FOLDER, target=picture)
         inside = tree.insert_layer_node(SOLID, target=folder)
     core.flush_now()
-    outer_channel = layer_plan.channel_of(tree, node)
-    check(layer_plan.channel_of(tree, inside) == outer_channel,
+    outer_channel = stack_ops.channel_of(tree, node)
+    check(stack_ops.channel_of(tree, inside) == outer_channel,
           "and so does one inside a folder, through the folder")
 
     section("a float channel")
@@ -402,17 +402,28 @@ try:
         ground = tree.insert_layer_node(SOLID, channel_name="Height")
         float_filter = tree.insert_layer_node(FILTER, channel_name="Height")
     core.flush_now()
-    channel = layer_plan.channel_of(tree, float_filter)
+    channel = stack_ops.channel_of(tree, float_filter)
     check(channel is not None and channel.type == 'FLOAT',
           "a layer in a float channel reports it")
-    check(layer_plan.channel_of(tree, ground) == channel, "and so does the one below it")
+    check(stack_ops.channel_of(tree, ground) == channel, "and so does the one below it")
     message = refusal(FakeContext(plane), tree, float_filter)
     check("colour channels" in message,
           f"a filter layer on a float channel is refused: {message}")
 
+    section("through a group layer")
+    # A group layer passes a stack on from an input to its output of the
+    # same name, whichever channel of this tree that output feeds.
+    passing = tree.nodes.new('PaintSystemGroupLayerNode')
+    passing.node_tree = group_inner
+    tree.links.new(ground.outputs['Color'], passing.inputs['Color'])
+    tree.links.new(passing.outputs['Color'], float_filter.inputs['Color'])
+    core.flush_now()
+    check(stack_ops.channel_of(tree, ground) == channel,
+          "a layer below one reports the channel the group layer's output feeds")
+
     section("a detached layer")
     stack_ops.detach(tree, inside)
-    check(layer_plan.channel_of(tree, inside) is None,
+    check(stack_ops.channel_of(tree, inside) is None,
           "a layer that reaches no output has no channel")
 
 except Exception:

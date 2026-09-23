@@ -20,6 +20,22 @@ CHANNEL_COLOR_SPACES = [
     ('NONCOLOR', "Non-Color", "The values are data, such as roughness or height, stored as they are"),
 ]
 
+# What a vector channel holds, and the space its layers paint in (PS-006).
+# The material's input and output are world-space vectors either way.
+VECTOR_KINDS = [
+    ('NORMAL', "Normals",
+     "Surface directions, painted as the colours of a normal map. An empty stack gives the surface's own normal"),
+    ('VECTOR', "Vectors", "Any vectors, such as offsets, painted as they are"),
+]
+
+PAINT_SPACES = [
+    ('TANGENT', "Tangent",
+     "Along the surface: X follows the UV map's U, Y its V, and Z points out of the surface. "
+     "The space of most normal maps"),
+    ('OBJECT', "Object", "The object's own axes, so the values turn with the object"),
+    ('WORLD', "World", "The scene's axes"),
+]
+
 
 def channel_defaults(channel_type: str) -> dict:
     """The options a new channel of *channel_type* starts with.
@@ -90,6 +106,11 @@ def interface_socket_specs(channels) -> list[tuple[str, str, dict]]:
             props['default_value'] = (0.0, 0.0, 0.0, 0.0)
         elif ch.type == 'FLOAT':
             props = _float_range_props(ch)
+        # An unlinked normal input stands for the shading normal
+        # (``compiler.vector``), so it has no value to type in. Every other
+        # channel sets it too, so a socket that stops holding normals shows
+        # its value again.
+        props['hide_value'] = ch.type == 'VECTOR' and ch.vector_kind == 'NORMAL'
         specs.append((ch.name, channel_socket_type(ch.type), props))
         if ch.use_alpha:
             specs.append((channel_alpha_name(ch.name), 'NodeSocketFloat',
@@ -163,6 +184,23 @@ def _on_channel_changed(self, context):
     tree.on_channels_changed()
 
 
+def _on_vector_kind_changed(self, context):
+    _on_channel_changed(self, context)
+    compiled = getattr(self.id_data, 'compiled', None)
+    if self.vector_kind != 'NORMAL' or compiled is None:
+        return
+    # A value typed while the channel held vectors stays in the material's
+    # input once the input hides it, and it would stand in for the shading
+    # normal. So clear it.
+    for material in bpy.data.materials:
+        if material.node_tree is None:
+            continue
+        for node in material.node_tree.nodes:
+            socket = node.inputs.get(self.name) if getattr(node, 'node_tree', None) == compiled else None
+            if socket is not None and not socket.is_linked:
+                socket.default_value = (0.0, 0.0, 0.0)
+
+
 def _on_color_space_changed(self, context):
     # The colour space picks the view transform of a preview.
     tree = self.id_data
@@ -209,6 +247,26 @@ class PaintSystemChannel(bpy.types.PropertyGroup):
     )
     range_min: FloatProperty(name="Min", default=0.0, update=_on_channel_changed)
     range_max: FloatProperty(name="Max", default=1.0, update=_on_channel_changed)
+    vector_kind: EnumProperty(
+        name="Holds",
+        description="What a vector channel holds",
+        items=VECTOR_KINDS,
+        default='NORMAL',
+        update=_on_vector_kind_changed,
+    )
+    paint_space: EnumProperty(
+        name="Paint In",
+        description="The space the layers of a vector channel paint in",
+        items=PAINT_SPACES,
+        default='TANGENT',
+        update=_on_channel_changed,
+    )
+    tangent_uv_map: StringProperty(
+        name="UV Map",
+        description=("The UV map Tangent space follows. "
+                     "Empty uses the mesh's active render UV map, as a layer without a UV map does"),
+        update=_on_channel_changed,
+    )
     uuid: StringProperty(name="UUID")
 
     def ensure_uuid(self):

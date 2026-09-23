@@ -25,6 +25,7 @@ from .builder import BuildStats
 from .ir import IR, Ref, SocketId, hash_payload, _serialize
 from .library import MIX_IN_A_COLOR, MIX_IN_B_COLOR, MIX_IN_FACTOR, MIX_OUT_COLOR
 from .profile import phase
+from .vector import input_value
 from ..nodetree.stack_ops import feeding_link, feeds_clip_run, link_index, producing_link, stack_output
 from ..props.channel import PREVIEW_OUTPUT, channel_alpha_name, interface_socket_specs
 
@@ -32,6 +33,9 @@ log = logging.getLogger(__name__)
 
 PS_TREE_ID = 'PaintSystemNodeTree'
 ARTIFACT_OWNER_KEY = "ps_owner"
+# The IR node of the compiled tree's inputs. It belongs to no Paint System
+# node, because every channel reads its input from it.
+_INPUT_ID = "group:in"
 # The fingerprint is stored on the artifact, not on the tree. So it always
 # describes the nodes stored with it, whichever copy undo restores.
 ARTIFACT_FINGERPRINT_KEY = "ps_fingerprint"
@@ -123,6 +127,7 @@ class CompileContext:
         self.ir = ir
         self.bake_target = bake_target
         self._outputs: dict[tuple[str, str], tuple[Ref, Ref]] = {}
+        self._inputs: dict[str, tuple[Ref, Ref | float]] = {}
         self._subtree_hashes: dict[str, str] = {}
 
     # -- emitting -------------------------------------------------------
@@ -176,15 +181,25 @@ class CompileContext:
                                  outputs={0: {'default_value': _copy_value(value)}})
         return nid, 0
 
-    def set_channel_output(self, socket, channel, ir_id: str) -> None:
-        """Record *channel*'s two sockets on the IR node *ir_id* as the value of *socket*.
+    def channel_base(self, channel) -> tuple[Ref, Ref | float]:
+        """The (colour, alpha) *channel*'s stack starts from, which is the material's input.
 
-        A channel without ``use_alpha`` has no alpha socket, so its alpha
-        is 1. At the Group Input, that makes the stack start from an
-        opaque base.
+        A vector channel's input is converted into its layer value
+        (``vector.input_value``). A channel without ``use_alpha`` has no
+        alpha input, so its alpha is 1, and the stack starts from an
+        opaque base. The nodes are emitted once per build, so the Group
+        Input and the Group Output share them.
         """
-        alpha = (ir_id, channel_alpha_name(channel.name)) if channel.use_alpha else 1.0
-        self.set_output(socket, (ir_id, channel.name), alpha)
+        pair = self._inputs.get(channel.uuid)
+        if pair is None:
+            if _INPUT_ID not in self.ir.nodes:
+                self.ir.add_node(_INPUT_ID, 'NodeGroupInput')
+            color = (_INPUT_ID, channel.name)
+            if channel.type == 'VECTOR':
+                color = input_value(self, channel, color)
+            alpha = (_INPUT_ID, channel_alpha_name(channel.name)) if channel.use_alpha else 1.0
+            pair = self._inputs[channel.uuid] = (color, alpha)
+        return pair
 
     def output(self, socket) -> tuple[Ref, Ref] | None:
         """The (colour, alpha) refs recorded for the output *socket*, or None."""
@@ -195,7 +210,7 @@ class CompileContext:
 
     # -- reading inputs -------------------------------------------------
 
-    def _upstream(self, socket) -> tuple[Ref, Ref] | None:
+    def upstream(self, socket) -> tuple[Ref, Ref] | None:
         """Return the (colour, alpha) refs that feed *socket*, or None if unlinked.
 
         Reroutes are skipped. Only Paint System nodes emit IR, so a link
@@ -212,7 +227,7 @@ class CompileContext:
         Unlinked, the socket's default value gives the colour and its
         fourth component the alpha.
         """
-        pair = self._upstream(socket)
+        pair = self.upstream(socket)
         if pair is not None:
             return pair
         value = _copy_value(socket.default_value)
@@ -224,47 +239,29 @@ class CompileContext:
         Linked, it reads the colour half, and the shader converts that to
         the input's type.
         """
-        pair = self._upstream(socket)
+        pair = self.upstream(socket)
         self.link_or_set(pair[0] if pair is not None else _copy_value(socket.default_value),
                          to_id, to_socket)
 
-    def link_channel(self, socket, channel, to_id: str) -> tuple[Ref, Ref] | None:
-        """Link what feeds *socket* into *channel*'s two sockets on the IR node *to_id*.
-
-        Returns the (colour, alpha) refs it linked. An unlinked *socket*
-        links nothing and returns None, so *to_id* keeps the defaults of
-        the compiled interface. Without ``use_alpha`` the channel has no
-        alpha socket, and the alpha half is dropped.
-        """
-        pair = self._upstream(socket)
-        if pair is not None:
-            color, alpha = pair
-            self.link(color, to_id, channel.name)
-            if channel.use_alpha:
-                self.link(alpha, to_id, channel_alpha_name(channel.name))
-        return pair
-
-    def link_flattened(self, socket, channel, to_id: str, base: Ref) -> Ref:
-        """Link what feeds *socket* into *channel*'s socket on *to_id*, laid over *base*.
+    def flattened(self, socket, channel) -> Ref:
+        """The colour that feeds *socket*, laid over the value *channel*'s stack started from.
 
         For a channel without ``use_alpha`` at the Group Output, where the
-        alpha has no socket to go to. It weights the colour over *base*,
-        the value the stack started from, instead of being dropped. Layers
-        keep an opaque base opaque, so the mix usually changes nothing. A
-        filter layer does not: it replaces the stack with pixels filtered
-        without the base, and its soft edges would otherwise show their
-        colour at full strength. Over a black base this is the same as
-        multiplying the colour by its alpha. An unlinked *socket* is an
-        empty stack, so only *base* shows. Returns the ref it linked.
+        alpha has no socket to go to. It weights the colour over the
+        channel's input instead of being dropped. Layers keep an opaque
+        base opaque, so the mix usually changes nothing. A filter layer
+        does not: it replaces the stack with pixels filtered without the
+        base, and its soft edges would otherwise show their colour at full
+        strength. Over a black base this is the same as multiplying the
+        colour by its alpha. An unlinked *socket* is an empty stack, so
+        only the input shows.
         """
-        pair = self._upstream(socket)
+        base = self.channel_base(channel)[0]
+        pair = self.upstream(socket)
         if pair is None:
-            self.link(base, to_id, channel.name)
             return base
         color, alpha = pair
-        flat = self.mix_colors(socket.node, f"flatten:{socket.identifier}", alpha, base, color)
-        self.link(flat, to_id, channel.name)
-        return flat
+        return self.mix_colors(socket.node, f"flatten:{socket.identifier}", alpha, base, color)
 
     def mix_colors(self, node, role: str, factor: Ref | Any, a: Ref, b: Ref) -> Ref:
         """Emit a mix from colour *a* to colour *b* by *factor*, and return its result."""

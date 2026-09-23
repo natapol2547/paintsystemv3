@@ -213,6 +213,18 @@ def test_channel_settings():
     normal = tree.create_channel("Normal", 'VECTOR')
     check(not any(prop == "default_value" for _owner, prop, _text in row(normal)),
           "a vector channel's row shows no value, since three fields do not fit")
+
+    def uv_searches():
+        calls = []
+        main_panels._draw_channel_settings(RecordingLayout(calls, open_panels=True), bpy.context, tree)
+        return [(args[0], args[1], args[3]) for name, args, _kwargs in calls if name == "prop_search"]
+    props = settings()[0]
+    check([prop for owner, prop, _text in props if owner == normal][-2:] == ["vector_kind", "paint_space"],
+          f"a vector channel adds Holds and Paint In ({props})")
+    check(uv_searches() == [(normal, "tangent_uv_map", "uv_layers")],
+          "and in tangent space a search of the mesh's UV maps")
+    normal.paint_space = 'OBJECT'
+    check(uv_searches() == [], "which other spaces do not use")
     tree.delete_active_channel()
 
     nested = bpy.data.node_groups.new("Nested Only", 'PaintSystemNodeTree')

@@ -4,8 +4,9 @@ from bpy.props import BoolProperty
 from bpy.utils import register_classes_factory
 from ..base_node import PaintSystemBaseNode
 from ...common import blender_icon, icon_kwargs
+from ...compiler.vector import space_settings, to_world
 from ...nodetree.stack_ops import channel_sockets
-from ...props.channel import PREVIEW_OUTPUT, interface_socket_specs
+from ...props.channel import PREVIEW_OUTPUT, channel_alpha_name, interface_socket_specs
 
 
 class PaintSystemGroupNode(PaintSystemBaseNode):
@@ -23,18 +24,21 @@ class PaintSystemGroupInputNode(PaintSystemGroupNode, Node):
 
     def hash_parts(self, ctx):
         # What this node gives depends on the channel options: Use Alpha
-        # decides between the alpha input and an opaque 1, and a cache
-        # bakes the inputs at their defaults, which Limit Range sets. So a
-        # cache above this node is stale when they change. Keyed by socket
-        # and without the names, so renaming or moving a channel, which
-        # changes no pixels, keeps the caches.
-        return {sock.identifier: [spec[1:] for spec in interface_socket_specs([channel])]
+        # decides between the alpha input and an opaque 1, a cache bakes
+        # the inputs at their defaults, which Limit Range sets, and a
+        # vector channel's settings pick the layer value its input becomes.
+        # So a cache above this node is stale when they change. Keyed by
+        # socket and without the names, so renaming or moving a channel,
+        # which changes no pixels, keeps the caches. Hiding a value field
+        # changes none either.
+        return {sock.identifier: [(socket_type, {key: value for key, value in props.items() if key != 'hide_value'})
+                                  for _name, socket_type, props in interface_socket_specs([channel])]
+                + [space_settings(channel)]
                 for channel, sock in channel_sockets(self.outputs, self.id_data.channels)}
 
     def emit(self, ctx):
-        nid = ctx.emit_node(self, 'in', 'NodeGroupInput')
         for channel, sock in channel_sockets(self.outputs, self.id_data.channels):
-            ctx.set_channel_output(sock, channel, nid)
+            ctx.set_output(sock, *ctx.channel_base(channel))
 
 
 class PaintSystemGroupOutputNode(PaintSystemGroupNode, Node):
@@ -57,18 +61,19 @@ class PaintSystemGroupOutputNode(PaintSystemGroupNode, Node):
         tree = self.id_data
         nid = ctx.emit_node(self, 'out', 'NodeGroupOutput')
         previewed = tree.active_channel if tree.preview_channel else None
-        base = None
         for channel, sock in channel_sockets(self.inputs, tree.channels):
             if channel.use_alpha:
                 # An unlinked channel is transparent, so it has no colour.
-                color, alpha = ctx.link_channel(sock, channel, nid) or (None, 0.0)
+                color, alpha = ctx.upstream(sock) or (None, 0.0)
             else:
                 # The stack of a channel without alpha is flattened onto the
-                # channel's input. A Group Input of its own reads that input
-                # even when the tree has no Group Input node.
-                if base is None:
-                    base = ctx.emit_node(self, 'base', 'NodeGroupInput')
-                color, alpha = ctx.link_flattened(sock, channel, nid, (base, channel.name)), None
+                # channel's input, even when the tree has no Group Input node.
+                color, alpha = ctx.flattened(sock, channel), None
+            if color is not None:
+                ctx.link(to_world(ctx, self, f"out:{sock.identifier}", channel, color), nid, channel.name)
+                if alpha is not None:
+                    ctx.link(alpha, nid, channel_alpha_name(channel.name))
+            # The preview shows the layer values, as the layers hold them.
             if channel == previewed:
                 with ctx.ir.adding_preview():
                     self._emit_preview(ctx, nid, channel, color, alpha)

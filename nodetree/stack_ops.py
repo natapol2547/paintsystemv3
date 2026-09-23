@@ -244,10 +244,49 @@ def consumer_input(node):
     Links into masks are skipped. A mask reads the layer's value without
     putting the layer in a stack.
     """
-    for link in socket_links(stack_output(node)):
+    return _consumer_slot(stack_output(node))
+
+
+def _consumer_slot(socket):
+    for link in socket_links(socket):
         if is_slot(link.to_socket):
             return link.to_socket
     return None
+
+
+def output_channel(tree, socket):
+    """The channel whose stack the output *socket* feeds, or None when it reaches none.
+
+    Follows the stack up the way the compiler reads it, through layers
+    and folders, and through a group layer from an input to its output of
+    the same name, to a socket of the active Group Output.
+    """
+    output = tree.get_output_node()
+    if output is None:
+        return None
+    visited = set()
+    with link_index(tree):
+        while True:
+            slot = _consumer_slot(socket)
+            if slot is None or slot.node.name in visited:
+                return None
+            node = slot.node
+            if node == output:
+                return next((channel for channel in tree.channels if channel.name == slot.name), None)
+            visited.add(node.name)
+            if is_layer(node):
+                socket = stack_output(node)
+            elif node.bl_idname == 'PaintSystemGroupLayerNode':
+                socket = socket_named(node.outputs, slot.name)
+            else:
+                return None  # a Group Output that is not the active one
+            if socket is None:
+                return None
+
+
+def channel_of(tree, node):
+    """The channel *node*'s stack feeds, or None when it reaches no output."""
+    return output_channel(tree, stack_output(node))
 
 
 def layers_down_from(socket, visited: set[str]):

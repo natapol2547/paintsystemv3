@@ -1,6 +1,8 @@
 """Shared shader node groups that compiled trees use.
 
-Entry points: ``layer_blend_group`` and ``filter_mix_group``.
+Entry points: ``layer_blend_group``, ``filter_mix_group``,
+``world_to_tangent_group``, ``tangent_to_world_group`` and
+``normal_map_inverse_group``.
 
 - Library groups are stateless building blocks, such as the layer blend
   group. Per-layer values never live in them. They come in through the
@@ -47,9 +49,12 @@ def get_library_group(key: str, build: Callable[[bpy.types.NodeTree], None]) -> 
 MIX_IN_FACTOR = 0
 MIX_IN_A_FLOAT = 2
 MIX_IN_B_FLOAT = 3
+MIX_IN_A_VECTOR = 4
+MIX_IN_B_VECTOR = 5
 MIX_IN_A_COLOR = 6
 MIX_IN_B_COLOR = 7
 MIX_OUT_FLOAT = 0
+MIX_OUT_VECTOR = 1
 MIX_OUT_COLOR = 2
 
 
@@ -253,4 +258,182 @@ def _build_filter_mix(tree: bpy.types.NodeTree) -> None:
     source_share = math('source_share', 'DIVIDE', source_weight, alpha)
 
     _composite(ir, source_share, ('in', 'Color'), alpha)
+    ir.apply(tree)
+
+
+# -- tangent frame ----------------------------------------------------
+
+
+def world_to_tangent_group() -> bpy.types.NodeTree:
+    """Group that gives a world-space vector in the tangent frame of a UV map.
+
+    Inputs: Vector, Tangent, Bitangent. Output: Vector.
+    """
+    return get_library_group("World To Tangent", _build_world_to_tangent)
+
+
+def tangent_to_world_group() -> bpy.types.NodeTree:
+    """Group that gives a vector in the tangent frame of a UV map in world space.
+
+    Inputs: Vector, Tangent, Bitangent. Output: Vector.
+    """
+    return get_library_group("Tangent To World", _build_tangent_to_world)
+
+
+def _vector_math(ir, identifier, operation, *vectors, scale=None):
+    """Add a Vector Math node on *vectors*, and return its output ref.
+
+    Each vector is a ``(node, socket)`` pair, and so is *scale*, the
+    factor of SCALE. The ref is the Value output of a dot product, and
+    the Vector output otherwise.
+    """
+    ir.add_node(identifier, 'ShaderNodeVectorMath', properties={'operation': operation})
+    for index, vector in enumerate(vectors):
+        ir.link(vector, identifier, index)
+    if scale is not None:
+        ir.link(scale, identifier, 'Scale')
+    return (identifier, 'Value' if operation == 'DOT_PRODUCT' else 'Vector')
+
+
+def _tangent_frame(ir):
+    """Declare the sockets of a tangent group, and return its frame as (T, B, N) refs.
+
+    The Tangent input is the Tangent node's output, and Bitangent is the
+    Normal Map node's reading of pure +Y. A group cannot pick a UV map, so
+    the compiled tree adds those two nodes, both on the same UV map.
+
+    T is Tangent made perpendicular to the shading normal, as EEVEE's
+    Tangent node does not do that. N is the surface's own normal: the
+    shading normal, turned back round on a back face, where it faces the
+    viewer. B is N x T, turned round where Bitangent points the other way.
+    That is where the UV map is mirrored, and the Normal Map node then
+    reads green the other way round too. So a vector means the same seen
+    from either side, and the frame is orthonormal, so the two tangent
+    groups undo each other.
+    """
+    ir.add_socket('INPUT', 'NodeSocketVector', 'Vector')
+    ir.add_socket('INPUT', 'NodeSocketVector', 'Tangent')
+    ir.add_socket('INPUT', 'NodeSocketVector', 'Bitangent')
+    ir.add_socket('OUTPUT', 'NodeSocketVector', 'Vector')
+    ir.add_node('in', 'NodeGroupInput')
+    ir.add_node('out', 'NodeGroupOutput')
+    ir.add_node('geometry', 'ShaderNodeNewGeometry')
+    vmath = functools.partial(_vector_math, ir)
+
+    shading = ('geometry', 'Normal')
+    along = vmath('tangent_along', 'DOT_PRODUCT', ('in', 'Tangent'), shading)
+    normal_part = vmath('tangent_normal_part', 'SCALE', shading, scale=along)
+    tangent = vmath('tangent', 'NORMALIZE', vmath('tangent_flat', 'SUBTRACT', ('in', 'Tangent'), normal_part))
+    # 1 on a front face and -1 on a back face.
+    facing = _math(ir, 'facing', 'ADD', _math(ir, 'back', 'MULTIPLY', ('geometry', 'Backfacing'), -2.0), 1.0)
+    normal = vmath('normal', 'SCALE', shading, scale=facing)
+    cross = vmath('cross', 'CROSS_PRODUCT', shading, tangent)
+    # 1 or -1. On a back face the Normal Map node turns Bitangent round,
+    # as the cross product with the shading normal turns. Where the mesh
+    # has no UV map of the name the nodes were given, Cycles' Tangent node
+    # gives 0 and the Normal Map node the plain normal, so the frame has
+    # neither T nor B.
+    handedness = _math(ir, 'handedness', 'SIGN',
+                       vmath('bitangent_along', 'DOT_PRODUCT', ('in', 'Bitangent'), cross), 0.0)
+    bitangent = vmath('bitangent', 'SCALE', cross, scale=_math(ir, 'bitangent_sign', 'MULTIPLY', handedness, facing))
+    return tangent, bitangent, normal
+
+
+def _build_world_to_tangent(tree: bpy.types.NodeTree) -> None:
+    """(V . T, V . B, V . N), with the frame of ``_tangent_frame``."""
+    ir = IR()
+    frame = _tangent_frame(ir)
+    ir.add_node('combine', 'ShaderNodeCombineXYZ')
+    for axis, (name, direction) in enumerate(zip("xyz", frame)):
+        ir.link(_vector_math(ir, name, 'DOT_PRODUCT', ('in', 'Vector'), direction), 'combine', axis)
+    ir.link(('combine', 'Vector'), 'out', 'Vector')
+    ir.apply(tree)
+
+
+def _build_tangent_to_world(tree: bpy.types.NodeTree) -> None:
+    """V.x * T + V.y * B + V.z * N, with the frame of ``_tangent_frame``."""
+    ir = IR()
+    frame = _tangent_frame(ir)
+    ir.add_node('separate', 'ShaderNodeSeparateXYZ')
+    ir.link(('in', 'Vector'), 'separate', 'Vector')
+    x, y, z = (_vector_math(ir, name, 'SCALE', direction, scale=('separate', axis))
+               for axis, (name, direction) in enumerate(zip("xyz", frame)))
+    total = _vector_math(ir, 'sum', 'ADD', _vector_math(ir, 'sum_xy', 'ADD', x, y), z)
+    ir.link(total, 'out', 'Vector')
+    ir.apply(tree)
+
+
+# -- normal maps ------------------------------------------------------
+
+# The colours whose readings ``normal_map_inverse_group`` takes, by input.
+NORMAL_MAP_PROBES = (
+    ('X', (1.0, 0.5, 0.5, 1.0)),
+    ('Y', (0.5, 1.0, 0.5, 1.0)),
+    ('Z', (0.5, 0.5, 1.0, 1.0)),
+    ('XYZ', (1.0, 1.0, 1.0, 1.0)),
+)
+
+# Below this, the readings span no volume, and the inverse gives flat.
+_SINGULAR = 1e-4
+
+
+def normal_map_inverse_group() -> bpy.types.NodeTree:
+    """Group that gives the colour a Normal Map node reads as a given normal.
+
+    Inputs: Normal, then one per ``NORMAL_MAP_PROBES`` colour, which is
+    what that same node reads it as. Output: Color, as a vector.
+    """
+    return get_library_group("Normal Map Inverse", _build_normal_map_inverse)
+
+
+def _build_normal_map_inverse(tree: bpy.types.NodeTree) -> None:
+    """The colour from the Normal Map node's readings of +X, +Y, +Z and (1, 1, 1).
+
+    In every space and in both engines, the node reads a colour c as
+    normalize(F (2c - 1)), where F is a matrix of the point being shaded:
+    the UV map's tangent frame, the object's matrix, or none, and turned
+    round on a back face where the engine does that. So the readings X, Y
+    and Z are F's columns, normalised, and XYZ is their sum, normalised.
+    Part i of the colour is N . R_i over XYZ . R_i, where R_i is the cross
+    product of the other two readings. That is part i of F^-1 N, up to a
+    scale that the normalising cancels, along with the lengths the
+    readings lost and the sign of F's determinant.
+
+    The node then reads the colour back as N exactly, even where F is not
+    a rotation, as on an unevenly scaled object. Where F has no inverse,
+    as with a UV map the mesh lacks, the colour is flat (0.5, 0.5, 1).
+    """
+    ir = IR()
+    ir.add_socket('INPUT', 'NodeSocketVector', 'Normal')
+    for name, _color in NORMAL_MAP_PROBES:
+        ir.add_socket('INPUT', 'NodeSocketVector', name)
+    ir.add_socket('OUTPUT', 'NodeSocketVector', 'Color')
+    ir.add_node('in', 'NodeGroupInput')
+    ir.add_node('out', 'NodeGroupOutput')
+    vmath = functools.partial(_vector_math, ir)
+
+    readings = [('in', name) for name in "XYZ"]
+    ir.add_node('parts', 'ShaderNodeCombineXYZ')
+    rows = []
+    for axis, name in enumerate("xyz"):
+        row = vmath(f"row_{name}", 'CROSS_PRODUCT', readings[(axis + 1) % 3], readings[(axis + 2) % 3])
+        rows.append(row)
+        part = _math(ir, f"part_{name}", 'DIVIDE',
+                     vmath(f"normal_{name}", 'DOT_PRODUCT', ('in', 'Normal'), row),
+                     vmath(f"sum_{name}", 'DOT_PRODUCT', ('in', 'XYZ'), row))
+        ir.link(part, 'parts', axis)
+    direction = vmath('direction', 'NORMALIZE', ('parts', 'Vector'))
+
+    # The determinant of the readings, Z . (X x Y).
+    volume = _math(ir, 'volume', 'ABSOLUTE', vmath('determinant', 'DOT_PRODUCT', readings[2], rows[2]), 0.0)
+    ir.add_node('invertible', 'ShaderNodeMix', properties={'data_type': 'VECTOR', 'clamp_factor': True},
+                inputs={MIX_IN_A_VECTOR: {'default_value': (0.0, 0.0, 1.0)}})
+    ir.link(_math(ir, 'has_inverse', 'GREATER_THAN', volume, _SINGULAR), 'invertible', MIX_IN_FACTOR)
+    ir.link(direction, 'invertible', MIX_IN_B_VECTOR)
+
+    # From -1..1 to the 0..1 of a colour.
+    ir.add_node('encode', 'ShaderNodeVectorMath', properties={'operation': 'MULTIPLY_ADD'},
+                inputs={1: {'default_value': (0.5, 0.5, 0.5)}, 2: {'default_value': (0.5, 0.5, 0.5)}})
+    ir.link(('invertible', MIX_OUT_VECTOR), 'encode', 0)
+    ir.link(('encode', 'Vector'), 'out', 'Color')
     ir.apply(tree)
