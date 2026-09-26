@@ -29,7 +29,7 @@ from dataclasses import dataclass
 
 import bpy
 
-from ..compiler.builder import same_value
+from ..compiler.values import same_value
 
 
 COLUMN_WIDTH = 260

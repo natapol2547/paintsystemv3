@@ -31,7 +31,8 @@ What landed, in merge order:
 - **Writes that change nothing are skipped** (`compiler/builder.py`). Every
   compile re-declared all 665 socket values and node properties of a
   100-layer artifact, and each no-op write cost about 320 us because it
-  tags the artifact and every material using it. `same_value` compares
+  tags the artifact and every material using it. `same_value`
+  (`compiler/values.py`) compares
   against the live RNA value, floats rounded through float32 and
   datablocks by identity, and the write is skipped when they match.
 - **Links are diffed by socket pointer**, in one pass over

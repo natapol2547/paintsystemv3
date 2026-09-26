@@ -20,7 +20,7 @@ import uuid
 
 import bpy
 
-from ...compiler.builder import same_value
+from ...compiler.values import same_value
 from ...compiler.core import ps_trees, suspend_compile
 
 # The type ``bpy.props.*Property(...)`` returns in a class body, before
