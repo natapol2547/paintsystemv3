@@ -7,7 +7,7 @@ from bpy.utils import register_classes_factory
 from .base_layer_node import (EMPTY_SOURCE, PaintSystemLayerNode, draw_uv_map, emit_image_texture,
                               update_tree_and_painting)
 from ...common import blender_icon
-from ...compiler.bake import create_managed_image
+from ...compiler.bake import create_managed_image, duplicate_image
 from ...props.channel import image_colorspace
 
 
@@ -39,6 +39,10 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
     @property
     def paint_image(self):
         return self.image
+
+    def own_content(self):
+        if self.image is not None:
+            self.image = duplicate_image(self.image)
 
     @classmethod
     def create(cls, tree, target=None, resolution='2048', **options):

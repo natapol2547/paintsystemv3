@@ -20,6 +20,7 @@ Entry points:
 from __future__ import annotations
 
 import contextlib
+import logging
 
 import bpy
 import numpy as np
@@ -29,6 +30,7 @@ from ..nodetree.stack_ops import channel_of
 from ..props.channel import image_colorspace
 from .core import build_ir, mark_dirty
 
+log = logging.getLogger(__name__)
 
 BAKE_TREE_NAME = ".PS Bake Target"
 BAKE_MATERIAL_NAME = ".PS Bake Material"
@@ -44,6 +46,28 @@ def create_managed_image(name: str, width: int, height: int, *,
     image.colorspace_settings.name = colorspace
     image[PS_IMAGE_KEY] = True
     return image
+
+
+def duplicate_image(image: bpy.types.Image) -> bpy.types.Image:
+    """A copy of *image* with its pixels as they are now, standing on its own.
+
+    ``Image.copy`` alone loses unsaved painting: a generated image is
+    generated again and an image read from a file reads the file again.
+    So unsaved pixels are copied over. The copy of an image read from a
+    file is packed, so saving painting on the copy cannot write over the
+    original's file.
+    """
+    copy = image.copy()
+    if image.is_dirty:
+        pixels = np.empty(len(image.pixels), dtype=np.float32)
+        image.pixels.foreach_get(pixels)
+        copy.pixels.foreach_set(pixels)
+    if image.is_dirty or (image.source == 'FILE' and image.packed_file is None):
+        try:
+            copy.pack()
+        except RuntimeError as error:
+            log.warning("Could not pack the copy %r of image %r: %s", copy.name, image.name, error)
+    return copy
 
 
 def build_bake_tree(tree, node) -> tuple[bpy.types.NodeTree, str]:

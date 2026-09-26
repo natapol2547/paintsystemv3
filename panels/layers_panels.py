@@ -5,8 +5,9 @@ from bpy.utils import register_classes_factory
 
 from ..common import icon_kwargs
 from ..context import get_active_tree, node_editor_tree, parse_context
+from ..nodes.layers import links
 from ..nodes.layers.registry import layer_types
-from ..nodetree.stack_ops import is_layer
+from ..nodetree.stack_ops import channel_of, is_layer
 
 
 @dataclass(frozen=True)
@@ -18,11 +19,14 @@ class LayerRow:
     visible: bool
     # Every folder around the layer is enabled.
     parent_enabled: bool
+    # The layer is linked with another (``links``).
+    linked: bool
 
 
 def layer_rows(tree) -> dict[str, LayerRow]:
     """Rows of the active channel's stack by node name, top first."""
     rows: dict[str, LayerRow] = {}
+    linked = links.linked_names(tree)
     for order, item in enumerate(tree.stack()):
         visible = parent_enabled = True
         if item.parent is not None:
@@ -31,7 +35,7 @@ def layer_rows(tree) -> dict[str, LayerRow]:
             visible = parent.visible and folder.is_expanded
             parent_enabled = parent.parent_enabled and folder.enabled
         rows[item.node.name] = LayerRow(
-            order, item.level, visible, parent_enabled)
+            order, item.level, visible, parent_enabled, item.node.name in linked)
     return rows
 
 
@@ -93,6 +97,8 @@ class PAINTSYSTEM_UL_layers(UIList):
         item.draw_row_state(row)
         if item.lock_layer:
             row.label(text="", **icon_kwargs('VIEW_LOCKED', 'LOCKED'))
+        if row_state.linked:
+            row.label(text="", **icon_kwargs('LINKED'))
         row.prop(item, "enabled", text="", emboss=False,
                  **icon_kwargs('HIDE_OFF' if item.enabled else 'HIDE_ON'))
 
@@ -123,6 +129,25 @@ class PAINTSYSTEM_MT_add_layer(Menu):
             op = layout.operator("paint_system.add_layer", text=node_class.ps_label,
                                  **icon_kwargs(*node_class.ps_icon))
             op.layer_type = node_class.ps_type
+
+
+class PAINTSYSTEM_MT_layer_menu(Menu):
+    """Copy and paste layers, and unlink a linked one. The items and labels are v2's."""
+    bl_idname = "PAINTSYSTEM_MT_layer_menu"
+    bl_label = "Layer"
+
+    def draw(self, context):
+        layout = self.layout
+        tree = get_active_tree(context)
+        node = tree.nodes.active if tree is not None else None
+        if is_layer(node) and links.linked_layers(node):
+            layout.operator("paint_system.unlink_layer", **icon_kwargs('UNLINKED'))
+            layout.separator()
+        layout.operator("paint_system.copy_layer", **icon_kwargs('COPYDOWN'))
+        layout.operator("paint_system.copy_all_layers", **icon_kwargs('COPYDOWN'))
+        layout.operator("paint_system.paste_layer", text="Paste Layer(s)", **icon_kwargs('PASTEDOWN'))
+        layout.operator("paint_system.paste_linked_layer", text="Paste Linked Layer(s)",
+                        **icon_kwargs('LINKED'))
 
 
 def draw_layer_properties(layout, context, node):
@@ -163,6 +188,7 @@ def draw_layer_sidebar(col):
     op = col.operator("paint_system.add_layer",
                       text="", **icon_kwargs('folder'))
     op.layer_type = 'FOLDER'
+    col.menu(PAINTSYSTEM_MT_layer_menu.bl_idname, text="", **icon_kwargs('DOWNARROW_HLT'))
     col.separator(type='LINE')
     col.operator("paint_system.remove_layer", text="", **icon_kwargs('trash'))
     col.separator(type='LINE')
@@ -223,11 +249,45 @@ class PAINTSYSTEM_PT_layers_node_editor(LayersPanel, Panel):
         return tree is not None and tree.active_channel is not None
 
 
+class PAINTSYSTEM_PT_node_links(Panel):
+    """The layers the active node is linked with, in the node editor's Node tab."""
+    bl_idname = "PAINTSYSTEM_PT_node_links"
+    bl_label = "Linked Layers"
+    bl_space_type = 'NODE_EDITOR'
+    bl_region_type = 'UI'
+    bl_category = "Node"
+
+    @classmethod
+    def poll(cls, context):
+        tree = node_editor_tree(context)
+        return tree is not None and is_layer(tree.nodes.active)
+
+    def draw(self, context):
+        layout = self.layout
+        tree = node_editor_tree(context)
+        node = tree.nodes.active
+        row = layout.row(align=True)
+        row.operator("paint_system.link_layer", text="Link With...", **icon_kwargs('LINKED'))
+        row.operator("paint_system.unlink_layer", text="Unlink", **icon_kwargs('UNLINKED'))
+        linked = links.linked_layers(node)
+        if not linked:
+            layout.label(text="Not linked with another layer")
+            return
+        col = layout.column(align=True)
+        for other in linked:
+            channel = channel_of(tree, other)
+            row = col.row()
+            row.label(text=other.name, **icon_kwargs(*other.ps_icon))
+            row.label(text=channel.name if channel is not None else "Not in a stack")
+
+
 classes = (
     PAINTSYSTEM_UL_layers,
     PAINTSYSTEM_MT_add_layer,
+    PAINTSYSTEM_MT_layer_menu,
     PAINTSYSTEM_PT_layers_3dview,
     PAINTSYSTEM_PT_layers_node_editor,
+    PAINTSYSTEM_PT_node_links,
 )
 
 

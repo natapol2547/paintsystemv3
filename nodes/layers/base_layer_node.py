@@ -1,6 +1,7 @@
 import bpy
 from bpy.props import BoolProperty, FloatProperty, EnumProperty, PointerProperty, StringProperty
 
+from .links import link_settings
 from ..base_node import PaintSystemBaseNode, mark_tree_dirty
 from ...common import icon_kwargs
 from ...compiler.library import layer_blend_group
@@ -136,6 +137,10 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     # Label for ``opacity``. A type that replaces what is below it uses
     # opacity to fade between the two, not to make itself see-through.
     ps_opacity_label = "Opacity"
+    # Properties this class declares that linked layers do not share (see
+    # ``links``). A cache is baked from the stack below its own node.
+    ps_unlinked_props: tuple[str, ...] = (
+        'cache_enabled', 'cache_image', 'cache_hash', 'cache_uv_map', 'cache_stale', 'link_id')
 
     opacity: FloatProperty(name="Opacity", default=1.0, min=0.0, max=1.0,
                            subtype='FACTOR', update=mark_tree_dirty)
@@ -165,13 +170,37 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     cache_stale: BoolProperty(name="Cache Stale", default=False,
                               options={'SKIP_SAVE'})
 
+    # Layers of the same type in the same tree with the same id are linked
+    # (``links``). Empty for a layer that is not linked.
+    link_id: StringProperty(name="Link ID")
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        link_settings(cls)
+
     @property
     def paint_image(self):
         """The image texture painting on this layer draws into, or None."""
         return None
 
+    def own_content(self):
+        """Give this layer its own copy of content it shares with other layers.
+
+        Unlink and Paste call it, so the layer they leave behind stands
+        alone. Nothing by default.
+        """
+
     def copy(self, node):
         super().copy(node)
+        # A copy in the same tree, such as Shift+D or Ctrl+V there, is a
+        # new layer and starts unlinked. A copy of a whole tree keeps the
+        # links among its own nodes. Blender passes no tree for *node*, so
+        # the source is found by name: a copy in the same tree gets a new
+        # name, while a copy in another tree keeps it.
+        if self.link_id:
+            source = self.id_data.nodes.get(node.name)
+            if source is not None and source != self and getattr(source, 'link_id', "") == self.link_id:
+                self.link_id = ""
         # Blender copies the pointer, so both layers would share one cache
         # image. ``bake_node_cache`` reuses whatever ``cache_image`` holds,
         # so baking either copy would silently overwrite the other's
@@ -303,3 +332,7 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         return emit_mix_group(ctx, self, 'blend', layer_blend_group(self.blend_mode),
                               'Opacity', self.opacity if self.enabled else 0.0,
                               color, alpha, clip=clip)
+
+
+# ``__init_subclass__`` covers the subclasses only.
+link_settings(PaintSystemLayerNode)

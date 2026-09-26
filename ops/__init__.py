@@ -4,6 +4,8 @@ submodules = (
     "channel_ops",
     "node_tree_ops",
     "layer_ops",
+    "clipboard_ops",
+    "link_ops",
     "paint_ops",
     "selection_ops",
     "pixel_ops",

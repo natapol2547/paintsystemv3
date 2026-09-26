@@ -57,6 +57,23 @@ def test_ctrl_d():
     check((km, kmi) in keymaps.addon_keymaps, "the item is recorded for unregister")
 
 
+def test_ctrl_l():
+    section("Ctrl+L links the selected layers in the node editor")
+    items = [(km, kmi) for km in addon_keyconfig().keymaps if km.name == "Node Editor"
+             for kmi in km.keymap_items if kmi.idname == "paint_system.link_selected_layers"]
+    check(len(items) == 1, f"exactly one link_selected_layers item in Node Editor ({len(items)})")
+    if not items:
+        return
+    km, kmi = items[0]
+    check((km.space_type, km.region_type) == ('NODE_EDITOR', 'WINDOW'),
+          f"the keymap is the node editor's main region ({km.space_type}, {km.region_type})")
+    modifiers = {name: getattr(kmi, name) for name in ("ctrl", "shift", "alt", "oskey", "hyper") if hasattr(kmi, name)}
+    check((kmi.map_type, kmi.type, kmi.value) == ('KEYBOARD', 'L', 'PRESS')
+          and modifiers.pop("ctrl") == 1 and all(value == 0 for value in modifiers.values()) and not kmi.any,
+          f"an L key press with Ctrl only ({kmi.type}, {kmi.value}, {kmi.ctrl=}, {modifiers})")
+    check((km, kmi) in keymaps.addon_keymaps, "the item is recorded for unregister")
+
+
 def test_reregister():
     section("disabling and enabling the add-on")
     before = sorted(our_items())
@@ -72,5 +89,6 @@ def test_reregister():
 
 
 guarded(test_ctrl_d)
+guarded(test_ctrl_l)
 guarded(test_reregister)
 finish("KEYMAPS TEST")

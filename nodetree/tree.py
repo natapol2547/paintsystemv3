@@ -301,17 +301,27 @@ class PaintSystemNodeTree(NodeTree):
         channel_name = self._channel_name(channel_name)
         with suspend_compile(self):
             node = self.nodes.new(bl_idname)
-            if target is not None and target.is_folder:
-                stack_ops.insert_into(self, target, node)
-            elif target is not None:
-                stack_ops.insert_above(self, node, target)
-            elif channel_name is not None:
-                stack_ops.insert_on_top(self, node, channel_name)
+            self.place_layer_node(node, channel_name, target)
             if channel_name is not None:
                 stack_ops.arrange_stack(self, channel_name)
             self.activate_layer_node(node)
             self.reveal_layer_node(node, channel_name)
         return node
+
+    def place_layer_node(self, node: bpy.types.Node, channel_name: str | None = None,
+                         target: bpy.types.Node | None = None) -> None:
+        """Put the detached layer *node* into the channel's stack, as ``insert_layer_node`` does.
+
+        The stack is not laid out again, so a caller placing several
+        layers does that once at the end.
+        """
+        channel_name = self._channel_name(channel_name)
+        if target is not None and target.is_folder:
+            stack_ops.insert_into(self, target, node)
+        elif target is not None:
+            stack_ops.insert_above(self, node, target)
+        elif channel_name is not None:
+            stack_ops.insert_on_top(self, node, channel_name)
 
     def remove_layer_node(self, node: bpy.types.Node, channel_name: str | None = None) -> None:
         """Remove a layer (a folder with its content) and close the gap."""

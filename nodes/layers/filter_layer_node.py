@@ -130,6 +130,9 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         # about it.
         'surface_name',
     )
+    # Each linked filter layer builds its own result from the stack below
+    # it.
+    ps_unlinked_props = ('derived_image', 'derived_stale_reason', 'derived_stale_pixels', 'derived_error')
 
     filter_type: EnumProperty(
         name="Filter", items=layer_filter_items(), update=mark_tree_dirty,

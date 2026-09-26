@@ -125,6 +125,23 @@ def register() -> None:
         key='TAB',
     )
 
+    # Node editor: Ctrl+L links the selected layers with the active one,
+    # like Link/Transfer Data in the 3D view. No keymap of the node
+    # editor's main region binds Ctrl+L: Node Editor, Node Generic,
+    # View2D, Frames, Screen Editing, Window and Screen. This was checked
+    # in the Blender and Industry Compatible keymap data of 4.2.23,
+    # 4.5.13, 5.0.1, 5.1.2, 5.2.1 and 5.3 alpha, with both select mouse
+    # settings. The operator's poll fails outside a Paint System tree, and
+    # then the key goes on to the keymaps after this one.
+    add_keymap_entry(
+        kc,
+        name='Node Editor',
+        space_type='NODE_EDITOR',
+        idname='paint_system.link_selected_layers',
+        key='L',
+        ctrl=True,
+    )
+
 
 def unregister() -> None:
     for km, kmi in addon_keymaps:

@@ -26,6 +26,9 @@ class PaintSystemFolderLayerNode(PaintSystemLayerNode, Node):
     ps_menu_section = 'STRUCTURE'
 
     is_folder = True
+    # Whether the layer list shows the content is a view setting of each
+    # folder.
+    ps_unlinked_props = ('is_expanded',)
 
     is_expanded: BoolProperty(name="Expanded", default=True,
                               description="Show the layers inside this folder")

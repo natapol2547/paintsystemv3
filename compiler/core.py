@@ -48,7 +48,7 @@ last_build_stats: BuildStats | None = None
 
 _BASE_NODE_PROPS = {p.identifier for p in bpy.types.Node.bl_rna.properties}
 # Identity and editing state that never reaches the shader.
-_HASH_EXCLUDED_PROPS = {'uuid', 'is_expanded', 'lock_layer', 'lock_alpha'}
+_HASH_EXCLUDED_PROPS = {'uuid', 'is_expanded', 'lock_layer', 'lock_alpha', 'link_id'}
 # Node class -> the property names node_state reads. See _hashed_props.
 _hashed_prop_names: dict[type, tuple[str, ...]] = {}
 

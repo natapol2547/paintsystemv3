@@ -198,9 +198,12 @@ def setup_scene(window):
         bpy.ops.paint_system.add_layer(layer_type='IMAGE')
         bpy.ops.paint_system.add_layer(layer_type='SOLID_COLOR')
         # A layer clipped to the image layer, then a disabled folder with a
-        # locked layer inside draw the clipped, nested, greyed and locked rows.
+        # locked layer inside, draw the clipped, nested, greyed and locked rows.
         tree = cube.active_material.paint_system.tree
         tree.nodes.active.is_clip = True
+        # A linked copy of it draws the linked rows and the node tabs.
+        bpy.ops.paint_system.copy_layer()
+        bpy.ops.paint_system.paste_linked_layer()
         bpy.ops.paint_system.add_layer(layer_type='FOLDER')
         folder = tree.nodes.active
         bpy.ops.paint_system.add_layer(layer_type='SOLID_COLOR')
