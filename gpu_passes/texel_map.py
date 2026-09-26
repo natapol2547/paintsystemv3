@@ -37,6 +37,7 @@ import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
+from ..lru import LRUCache
 from . import core, surface
 
 log = logging.getLogger(__name__)
@@ -277,8 +278,7 @@ class _PositionBatch:
 
 # ('map', session_uid, uv_map, width, height, tile, margin, matrix, surface key) -> TexelMap
 # ('batch', session_uid, uv_map, matrix, surface key) -> _PositionBatch
-# Kept in use order, least recently used first.
-_cache: dict[tuple, TexelMap | _PositionBatch] = {}
+_cache: LRUCache[tuple, TexelMap | _PositionBatch] = LRUCache()
 # The last triangle arrays extracted, as ((session_uid, uv_map, matrix,
 # surface key), arrays). A map miss and a batch miss for the same surface
 # share one extraction this way. Dropped on the next timer tick.
@@ -313,17 +313,14 @@ def _forget_pending_arrays() -> None:
     _pending_arrays = None
 
 
-def _lookup(key: tuple):
-    # Re-inserting moves the entry to the end, the most recently used.
-    cached = _cache.pop(key, None)
-    if cached is not None:
-        _cache[key] = cached
-    return cached
-
-
 def _store(key: tuple, item) -> None:
+    """Cache *item*, then drop the least recently used maps and batches until the cache fits the budget.
+
+    *item* itself is never dropped, so a single map larger than the whole
+    budget is still usable.
+    """
     _cache[key] = item
-    _evict()
+    _cache.trim(CACHE_BUDGET, lambda cached: cached.video_memory, keep={key})
 
 
 def get_texel_map(obj: bpy.types.Object, uv_map: str, size: tuple[int, int],
@@ -342,7 +339,7 @@ def get_texel_map(obj: bpy.types.Object, uv_map: str, size: tuple[int, int],
     width, height = size
     surface_key = surface.resolve_key(obj, name)
     key = ('map', obj.session_uid, name, width, height, tile, margin, _matrix_key(obj), surface_key)
-    cached = _lookup(key) if surface_key is not None else None
+    cached = _cache.touch(key) if surface_key is not None else None
     if cached is not None:
         return cached
     arrays = _arrays(obj, name, surface_key)
@@ -369,7 +366,7 @@ def get_position_batch(obj: bpy.types.Object, uv_map: str) -> gpu.types.GPUBatch
         return None
     surface_key = surface.resolve_key(obj, name)
     key = ('batch', obj.session_uid, name, _matrix_key(obj), surface_key)
-    cached = _lookup(key) if surface_key is not None else None
+    cached = _cache.touch(key) if surface_key is not None else None
     if cached is not None:
         return cached.batch
     arrays = _arrays(obj, name, surface_key)
@@ -384,17 +381,6 @@ def get_position_batch(obj: bpy.types.Object, uv_map: str) -> gpu.types.GPUBatch
     if surface_key is not None:
         _store(key, built)
     return built.batch
-
-
-def _evict() -> None:
-    """Drop the least recently used maps and batches until the cache fits the budget.
-
-    The newest entry is never dropped, so a single map larger than the
-    whole budget is still usable.
-    """
-    total = sum(item.video_memory for item in _cache.values())
-    while total > CACHE_BUDGET and len(_cache) > 1:
-        total -= _cache.pop(next(iter(_cache))).video_memory
 
 
 def invalidate(session_uid: int | None = None) -> None:

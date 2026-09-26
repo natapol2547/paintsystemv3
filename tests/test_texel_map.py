@@ -380,6 +380,13 @@ def test_cache_budget():
               "the map looked up last survives the eviction")
         check(texel_map.get_texel_map(obj, "", (64, 64), tile=1002) is not second,
               "the least recently used map is the one evicted")
+
+        # A budget smaller than one map still keeps the newest.
+        texel_map.invalidate()
+        texel_map.CACHE_BUDGET = 1
+        first = texel_map.get_texel_map(obj, "", (64, 64))
+        check(cached() == 1 and texel_map.get_texel_map(obj, "", (64, 64)) is first,
+              f"a map larger than the whole budget stays cached ({cached()} cached)")
     finally:
         texel_map.CACHE_BUDGET = budget
         texel_map.invalidate()

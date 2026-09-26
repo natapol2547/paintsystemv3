@@ -70,6 +70,7 @@ import numpy as np
 from gpu_extras.batch import batch_for_shader
 
 from ..gpu_passes import core, surface
+from ..lru import LRUCache
 from ..props.selection import FEATHER_MAX, OUTLINELESS_KINDS, POINTS_KEY, SPACELESS_KINDS, points_view
 from . import outline, view_raster
 from .raster_glsl import (LASSO_FRAGMENT_SOURCE, QUANTISE_FRAGMENT_SOURCE, QUANTISE_VERTEX_SOURCE,
@@ -529,7 +530,7 @@ def render(specs, width: int, height: int, tile: int = 1001) -> np.ndarray:
 
 # ── Cache ────────────────────────────────────────────────────────────
 
-_masks: dict[bytes, SelectionMask] = {}  # insertion order is recency, oldest first
+_masks: LRUCache[bytes, SelectionMask] = LRUCache()
 _pool: list[tuple[tuple[int, int], gpu.types.GPUTexture]] = []
 _warned: set = set()
 # Counters that tests read through `stats` to check how much GPU work a
@@ -695,12 +696,6 @@ def availability(selection, size: tuple[int, int], tile: int = 1001, surface_key
     return problem[1] if problem is not None else ""
 
 
-def _touch(key: bytes) -> SelectionMask:
-    mask = _masks.pop(key)
-    _masks[key] = mask
-    return mask
-
-
 def _cached_bytes() -> int:
     return sum(mask.video_memory for mask in _masks.values())
 
@@ -711,14 +706,7 @@ def _evict(reserve: int, keep: set, width: int, height: int) -> None:
     Masks in *keep* stay. Evicted textures of the size being built go to
     the pool for the build to reuse.
     """
-    total = _cached_bytes()
-    for key in list(_masks):
-        if total + reserve <= CACHE_BUDGET:
-            break
-        if key in keep:
-            continue
-        mask = _masks.pop(key)
-        total -= mask.video_memory
+    for mask in _masks.trim(CACHE_BUDGET - reserve, lambda mask: mask.video_memory, keep):
         mask.alive = False
         _stats["evictions"] += 1
         if mask.size == (width, height) and len(_pool) < POOL_LIMIT:
@@ -769,7 +757,7 @@ def peek_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=vi
         op = ops[index]
         if op.space == 'VIEW' and op.kind not in SPACELESS_KINDS and _view_problem(op, surface_key) is not None:
             return None
-    return _touch(key)
+    return _masks.touch(key)
 
 
 def get_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=view_key) -> SelectionMask | None:
@@ -798,7 +786,7 @@ def get_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=vie
     last = len(ops) - 1
     if digests[last] in _masks:
         _stats["hits"] += 1
-        return _touch(digests[last])
+        return _masks.touch(digests[last])
     passed = self_test()
     if passed is None:
         _raise(('GPU_ERROR', MESSAGES['GPU_ERROR'], -1), digests[last])
@@ -822,7 +810,7 @@ def get_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=vie
     passes = len(specs)
     keep = set() if source_index is None else {digests[source_index]}
     _evict(min(passes, 2) * width * height * 4, keep, width, height)
-    source = None if source_index is None else _touch(digests[source_index]).texture
+    source = None if source_index is None else _masks.touch(digests[source_index]).texture
     targets = []
     failure = None
     _stats["builds"] += 1

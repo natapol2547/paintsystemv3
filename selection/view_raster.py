@@ -38,6 +38,7 @@ import numpy as np
 from gpu_extras.batch import batch_for_shader
 
 from ..gpu_passes import core, texel_map
+from ..lru import LRUCache
 from . import raster
 from .raster_glsl import COMMON_SOURCE
 
@@ -262,9 +263,8 @@ void main()
 """.replace("MARGIN_ALPHA", repr(MARGIN_ALPHA))
 
 _gpu: dict = {}
-# The textures for stages A and B, by region size. Insertion order is
-# recency, oldest first.
-_targets: dict[tuple[int, int], dict] = {}
+# The textures for stages A and B, by region size.
+_targets: LRUCache[tuple[int, int], dict] = LRUCache()
 
 
 def _shaders() -> dict:
@@ -413,16 +413,15 @@ def _region_targets(region: tuple[int, int]) -> dict:
     Only textures are kept. A framebuffer works only in the context that
     created it, so each build makes its own.
     """
-    targets = _targets.pop(region, None)
+    targets = _targets.touch(region)
     if targets is None:
-        while len(_targets) >= TARGET_SETS:
-            del _targets[next(iter(_targets))]
+        _targets.trim(TARGET_SETS - 1)
         targets = dict(
             distance=gpu.types.GPUTexture(region, format='R32F'),
             colour=gpu.types.GPUTexture(region, format='RG32F'),
             depth=gpu.types.GPUTexture(region, format='DEPTH_COMPONENT32F'),
         )
-    _targets[region] = targets
+        _targets[region] = targets
     return targets
 
 

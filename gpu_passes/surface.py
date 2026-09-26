@@ -46,6 +46,7 @@ import bpy
 import numpy as np
 
 from ..common import redraw_paint_views
+from ..lru import LRUCache
 
 log = logging.getLogger(__name__)
 
@@ -77,8 +78,8 @@ class _Entry:
 
 
 # (object session_uid, UV map, view layer) -> entry, with the view layer
-# as `_layer` gives it. Insertion order is least recently resolved first.
-_entries: dict[tuple[int, str, tuple[int, str]], _Entry] = {}
+# as `_layer` gives it. Least recently resolved first.
+_entries: LRUCache[tuple[int, str, tuple[int, str]], _Entry] = LRUCache()
 _requests: set[tuple[int, str, tuple[int, str]]] = set()
 
 _CUSTOM_NORMAL_FORMATS = {
@@ -255,12 +256,11 @@ def resolve_key(obj: bpy.types.Object, uv_map: str, depsgraph=None) -> bytes | N
     """
     depsgraph = depsgraph or bpy.context.evaluated_depsgraph_get()
     ident = (obj.session_uid, uv_map, _layer(depsgraph))
-    entry = _entries.pop(ident, None)
+    entry = _entries.touch(ident)
     if entry is None:
         entry = _Entry()
-        while len(_entries) >= KEY_LIMIT:
-            del _entries[next(iter(_entries))]
-    _entries[ident] = entry
+        _entries.trim(KEY_LIMIT - 1)
+        _entries[ident] = entry
     entry.resolved = True
     mesh = _evaluated_mesh(obj, depsgraph)
     if mesh is None:
