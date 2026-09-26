@@ -44,8 +44,8 @@ def copy_layers(nodes) -> None:
 
 def copied_layers() -> list:
     """The copied layers that still exist, top first."""
-    # ``compiler.core.normalize_tree`` keeps tree uuids unique, and node
-    # uuids unique in their tree.
+    # ``compiler.core.normalize_all_trees`` keeps tree uuids unique, and
+    # ``normalize_tree`` keeps node uuids unique in their tree.
     trees = {tree.uuid: tree for tree in ps_trees()}
     found = []
     for tree_uuid, node_uuid in _copied:

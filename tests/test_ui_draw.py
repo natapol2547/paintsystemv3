@@ -201,7 +201,9 @@ def setup_scene(window):
         # locked layer inside, draw the clipped, nested, greyed and locked rows.
         tree = cube.active_material.paint_system.tree
         tree.nodes.active.is_clip = True
-        # A linked copy of it draws the linked rows and the node tabs.
+        # A linked copy of it draws the linked rows. The node tabs are drawn
+        # too, but by a draw handler, whose errors Blender prints and this
+        # test does not see. tests/test_links.py checks the tabs.
         bpy.ops.paint_system.copy_layer()
         bpy.ops.paint_system.paste_linked_layer()
         bpy.ops.paint_system.add_layer(layer_type='FOLDER')

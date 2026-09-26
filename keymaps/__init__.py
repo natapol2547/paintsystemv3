@@ -40,8 +40,9 @@ def register() -> None:
     # that handles it. So an addon item takes its key combination away
     # from every keymap Blender checks after it in the same region.
     # Background Blender reports an empty default keyconfig and cannot
-    # show such clashes, so tests/test_keymaps_ui.py checks the default
-    # keyconfig of the running build in a window.
+    # show such clashes. tests/test_keymaps_ui.py checks Ctrl+D against
+    # the default keyconfig of the running build in a window. Ctrl+L was
+    # checked by hand, as its comment says.
     kc = getattr(getattr(bpy.context, 'window_manager', None),
                  'keyconfigs', None)
     kc = getattr(kc, 'addon', None)
