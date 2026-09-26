@@ -90,7 +90,8 @@ class FilterLayerAction:
 class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
     bl_idname = "paint_system.rebuild_filter_layer"
     bl_label = "Update Filter"
-    bl_description = "Rebuild this layer's filtered image from the layers below it"
+    bl_description = ("Rebuild this layer's filtered image from the layers below it. A linked layer "
+                      "rebuilds its image for the active channel")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -217,7 +218,7 @@ class PAINTSYSTEM_OT_clear_filter_result(FilterLayerAction, Operator):
     bl_label = "Clear Result"
     bl_description = ("Drop this layer's filtered image and turn Auto Refresh off. The layer "
                       "stays where it is and passes the layers below through until it is "
-                      "built again")
+                      "built again. A linked layer drops only its image for the active channel")
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):

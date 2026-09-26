@@ -10,7 +10,8 @@ from ..compiler.core import suspend_compile
 from ..filters.layer_specs import layer_filter_items
 from ..nodes.layers.base_layer_node import RESOLUTION_ITEMS
 from ..nodes.layers.registry import layer_type, layer_type_items
-from ..nodetree.stack_ops import is_layer, movement_options, pair_count, removal
+from ..nodetree.stack_ops import (Position, arrange_stack, channel_of, is_layer, movement_options,
+                                  pair_count, remove, removal)
 from ..undo import undo_restores_data
 
 
@@ -139,6 +140,57 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
         return {'FINISHED'}
 
 
+class PAINTSYSTEM_OT_add_pair(Operator):
+    bl_idname = "paint_system.add_pair"
+    bl_label = "Add Pair"
+    bl_description = ("Give the layer another pair of sockets. Link its output into another stack "
+                      "to show the layer there too")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return button_layer(context, get_active_tree(context)) is not None
+
+    def execute(self, context):
+        node = button_layer(context, get_active_tree(context))
+        node.add_pair()
+        node.active_pair_index = pair_count(node) - 1
+        return {'FINISHED'}
+
+
+class PAINTSYSTEM_OT_remove_pair(Operator):
+    bl_idname = "paint_system.remove_pair"
+    bl_label = "Remove Pair"
+    bl_description = ("Take the layer out of the selected pair's stack, close the gap, and remove "
+                      "the pair. A filter layer's image for that stack goes with it")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        node = button_layer(context, get_active_tree(context))
+        if node is None:
+            return False
+        if pair_count(node) == 1:
+            cls.poll_message_set("A layer keeps at least one pair. Remove the layer instead")
+            return False
+        return True
+
+    def execute(self, context):
+        tree = get_active_tree(context)
+        node = button_layer(context, tree)
+        pair = min(node.active_pair_index, pair_count(node) - 1)
+        channel = channel_of(tree, node, pair)
+        # As in Remove Layer, before the pair is gone (``_filter_results``).
+        for image in _filter_results([Position(node, pair)]):
+            bpy.data.images.remove(image)
+        with suspend_compile(tree):
+            remove(tree, node, pair)
+            if channel is not None:
+                arrange_stack(tree, channel.name)
+        node.active_pair_index = min(pair, pair_count(node) - 1)
+        return {'FINISHED'}
+
+
 MOVE_ACTION_ITEMS = [
     ('AUTO', "Auto", "The only move on offer"),
     ('SKIP', "Skip", "Move past the neighbouring layer"),
@@ -228,7 +280,8 @@ class PAINTSYSTEM_OT_move_layer_down(LayerMoveOperator, Operator):
 class PAINTSYSTEM_OT_bake_cache(Operator):
     bl_idname = "paint_system.bake_cache"
     bl_label = "Bake Layer Cache"
-    bl_description = "Bake this layer's output (including everything below it) into its cache image"
+    bl_description = ("Bake this layer's output (including everything below it) into its cache "
+                      "image. A linked layer bakes its cache for the active channel")
     bl_options = {'REGISTER', 'UNDO'}
 
     resolution: EnumProperty(name="Resolution", items=RESOLUTION_ITEMS, default='2048')
@@ -277,6 +330,8 @@ class PAINTSYSTEM_OT_bake_cache(Operator):
 classes = (
     PAINTSYSTEM_OT_add_layer,
     PAINTSYSTEM_OT_remove_layer,
+    PAINTSYSTEM_OT_add_pair,
+    PAINTSYSTEM_OT_remove_pair,
     PAINTSYSTEM_OT_move_layer_up,
     PAINTSYSTEM_OT_move_layer_down,
     PAINTSYSTEM_OT_bake_cache,

@@ -154,21 +154,28 @@ def retab_panels(area, classes):
     and ``draw`` code on the normal sidebar path. The region only reports
     its category after it has been laid out once, so this runs one timer
     tick after ``show_sidebar``.
+
+    A subpanel is attached to its parent when it registers, and
+    unregistering the parent detaches it. So subpanels come off first
+    and go back on last.
     """
     region = next((r for r in area.regions if r.type == 'UI'), None)
     active = getattr(region, "active_panel_category", "") if region else ""
     if not active or active == 'UNSUPPORTED':
         print(f"  (no active tab reported for {area.type}; panels stay on their own tab)")
         return
-    for cls in classes:
-        if (issubclass(cls, bpy.types.Panel)
-                and getattr(cls, "bl_space_type", "") == area.type
-                and getattr(cls, "bl_region_type", "") == 'UI'
-                and getattr(cls, "bl_category", "") != active
-                and getattr(cls, "is_registered", False)):
-            bpy.utils.unregister_class(cls)
-            cls.bl_category = active
-            bpy.utils.register_class(cls)
+    moving = [cls for cls in classes
+              if issubclass(cls, bpy.types.Panel)
+              and getattr(cls, "bl_space_type", "") == area.type
+              and getattr(cls, "bl_region_type", "") == 'UI'
+              and getattr(cls, "bl_category", "") != active
+              and getattr(cls, "is_registered", False)]
+    moving.sort(key=lambda cls: bool(getattr(cls, "bl_parent_id", "")))
+    for cls in reversed(moving):
+        bpy.utils.unregister_class(cls)
+    for cls in moving:
+        cls.bl_category = active
+        bpy.utils.register_class(cls)
 
 
 def tag_redraw(window):
@@ -196,6 +203,9 @@ def setup_scene(window):
     with bpy.context.temp_override(window=window, area=view3d, region=region, object=cube):
         bpy.ops.paint_system.setup_material()
         bpy.ops.paint_system.add_layer(layer_type='IMAGE')
+        # A second pair in no stack draws the linked badge and both kinds
+        # of row in the pair list.
+        bpy.ops.paint_system.add_pair()
         bpy.ops.paint_system.add_layer(layer_type='SOLID_COLOR')
         # A layer clipped to the image layer, then a disabled folder with a
         # locked layer inside draw the clipped, nested, greyed and locked rows.
@@ -444,6 +454,8 @@ class Steps:
         check("PAINTSYSTEM_PT_layers_3dview" in calls, "layers panel was drawn")
         check("PAINTSYSTEM_UL_layers" in calls, "layer list rows were drawn")
         check("PAINTSYSTEM_MT_add_layer" in calls, "add layer menu was drawn")
+        if len(self.areas) > 1:
+            check("PAINTSYSTEM_UL_pairs" in calls, "the node editor's pair list rows were drawn")
         if "paint" in PARTS:
             check(paint_sections_drawn, f"brush and color sections were drawn {sorted(set(paint_sections_drawn))}")
         check(len(drawn) > 0, f"callbacks reached: {', '.join(drawn)}")

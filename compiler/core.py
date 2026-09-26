@@ -53,7 +53,8 @@ _BASE_NODE_PROPS = {p.identifier for p in bpy.types.Node.bl_rna.properties}
 # Identity and editing state that never reaches the shader. A layer's
 # ``pairs`` hold what its pairs built, which ``hash_parts`` covers where
 # it matters.
-_HASH_EXCLUDED_PROPS = {'uuid', 'is_expanded', 'lock_layer', 'lock_alpha', 'pairs'}
+_HASH_EXCLUDED_PROPS = {'uuid', 'is_expanded', 'lock_layer', 'lock_alpha', 'pairs',
+                        'active_pair_index'}
 # Node class -> the property names node_state reads. See _hashed_props.
 _hashed_prop_names: dict[type, tuple[str, ...]] = {}
 

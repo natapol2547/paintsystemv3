@@ -242,13 +242,26 @@ try:
     check(f"{node.uuid}:result@Color 2" in ids and f"{node.uuid}:result" not in ids,
           "which only the built pair compiles")
 
+    section("the pair list's buttons")
+    bpy.context.scene.paint_system.active_node_tree = tree
+    tree.nodes.active = node
+    node.active_pair_index = 1
     key = stack_ops.pair_key(node, 1)
     layer_job._builds[key] = 2
     layer_job._restarts[key] = 1
-    tree.remove_layer_node(node, "Second")
+    check(bpy.ops.paint_system.remove_pair() == {'FINISHED'}, "Remove Pair runs")
+    check(stack_ops.pair_count(node) == 1 and rows(tree, "Second") == [("Ground", 0, 0)]
+          and rows(tree, "Color")[0] == (node.name, 0, 0),
+          "the selected pair leaves its stack, and the other stays")
+    check("Pair Result" not in bpy.data.images, "its filtered image goes with it")
     check(key not in layer_job._builds and key not in layer_job._restarts,
-          "a removed pair takes its refresh counts with it, so a new pair cannot inherit them")
-    bpy.data.images.remove(result)
+          "and so do its refresh counts, so a new pair cannot inherit them")
+    check(node.active_pair_index == 0, "the pair left is selected")
+    check(not bpy.ops.paint_system.remove_pair.poll(), "the last pair cannot be removed")
+    check(bpy.ops.paint_system.add_pair() == {'FINISHED'} and stack_ops.pair_count(node) == 2
+          and node.active_pair_index == 1 and not node.outputs[1].is_linked,
+          "Add Pair adds a pair in no stack, and selects it")
+    bpy.context.scene.paint_system.active_node_tree = None
 
 except Exception:
     traceback.print_exc()

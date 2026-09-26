@@ -1,6 +1,6 @@
 import bpy
 from bpy.props import (BoolProperty, CollectionProperty, FloatProperty, EnumProperty,
-                       PointerProperty, StringProperty)
+                       IntProperty, PointerProperty, StringProperty)
 from bpy.types import PropertyGroup
 from bpy.utils import register_classes_factory
 
@@ -228,6 +228,9 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     # What each pair builds for its stack, at the pair's position. A type
     # with more to keep per pair redeclares it with its own type.
     pairs: CollectionProperty(type=PaintSystemLayerPair)
+    # The row selected in the node editor's pair list. Editing state only,
+    # which the compiler ignores (``core._HASH_EXCLUDED_PROPS``).
+    active_pair_index: IntProperty(name="Active Pair", min=0)
 
     @property
     def paint_image(self):
