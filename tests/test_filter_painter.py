@@ -265,34 +265,34 @@ if available():
         source.update()
         first = pixels(layer_build.build_layer(bpy.context, tree, node)).copy()
         uploaded = {key: entry[0]
-                    for key, entry in painter_build._atlases[node.painter_brush].items()}
+                    for key, entry in painter_build._atlases[node.painter.brush].items()}
         second = pixels(layer_build.build_layer(bpy.context, tree, node))
         check(bool(np.array_equal(first, second)), "the same settings paint the same pixels twice")
-        kept = painter_build._atlases[node.painter_brush]
+        kept = painter_build._atlases[node.painter.brush]
         check(uploaded and all(kept[key][0] is texture for key, texture in uploaded.items()),
               f"the second time with the {len(uploaded)} atlases the first one uploaded")
         moved = np.abs(first - detailed).max(axis=2) > BYTE_TOL
         check(float(moved.mean()) > 0.05,
               f"and they are painted: {moved.mean():.0%} of the texels moved off the picture")
 
-        node.painter_seed = 7
+        node.painter.seed = 7
         core.flush_now()
         reseeded = pixels(layer_build.build_layer(bpy.context, tree, node))
         check(not np.array_equal(reseeded, first), "another seed paints other strokes")
-        node.painter_seed = 42
+        node.painter.seed = 42
 
         # The ramp's gradient is a small fraction of the discs' edges, so a
         # threshold between the two keeps only the strokes on the discs.
         # Nothing kept at all would pass a peak read as infinite, which is
         # why the lower bound is there.
-        node.painter_edge_threshold = 30.0
+        node.painter.edge_threshold = 30.0
         core.flush_now()
         edged = pixels(layer_build.build_layer(bpy.context, tree, node))
         few = np.abs(edged - detailed).max(axis=2) > BYTE_TOL
         check(0.0 < float(few.mean()) < float(moved.mean()) / 2,
               f"a threshold leaves out the strokes off the strong edges "
               f"({few.mean():.1%} moved, {moved.mean():.1%} without it)")
-        node.painter_edge_threshold = 0.0
+        node.painter.edge_threshold = 0.0
 
         section("a GPU out of memory")
         # Failing one format at a time reaches the painter's own textures:

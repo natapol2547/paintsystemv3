@@ -273,7 +273,7 @@ if available():
             node = tree.insert_layer_node(FILTER)
             node.filter_type = 'BLUR'
             node.resolution = str(SIZE)
-            node.blur_sigma = 0.0
+            node.blur.sigma = 0.0
         core.flush_now()
 
         unblurred = layer_build.build_layer(bpy.context, tree, node)
@@ -284,7 +284,7 @@ if available():
               and float(np.abs(stored[:, SIZE // 2:, :3] - 1.0).max()) < 1.0 / 255.0,
               "at sigma zero the layer builds the stack below unchanged")
 
-        node.blur_sigma = 4.0
+        node.blur.sigma = 4.0
         core.flush_now()
         built = layer_build.build_layer(bpy.context, tree, node)
         got = np.empty(SIZE * SIZE * 4, dtype=np.float32)
@@ -309,8 +309,8 @@ if available():
         # `layer_build` has to hold the composite out of the pool for the
         # whole chain, or the combine reads a texture the blur overwrote.
         node.filter_type = 'SHARPEN'
-        node.sharpen_radius = 2.0
-        node.sharpen_strength = 1.5
+        node.sharpen.radius = 2.0
+        node.sharpen.strength = 1.5
         core.flush_now()
         built = layer_build.build_layer(bpy.context, tree, node)
         got = np.empty(SIZE * SIZE * 4, dtype=np.float32)

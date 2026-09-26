@@ -146,10 +146,10 @@ if available():
         image = layer_build.build_layer(bpy.context, tree, node)
         agrees(texel(image)[3:], [0.6], "Invert leaves transparency alone by default")
 
-        node.invert_alpha = True
+        node.invert.alpha = True
         image = layer_build.build_layer(bpy.context, tree, node)
         agrees(texel(image)[3:], [0.4], "and inverts it when asked")
-        node.invert_alpha = False
+        node.invert.alpha = False
         bottom.fill_color = (0.2, 0.6, 0.4, 1.0)
         core.flush_now()
 

@@ -2,17 +2,14 @@
 """The kinds of filter a filter layer can run (PS-057).
 
 Each kind is a `LayerFilterSpec`, listed in `LAYER_FILTERS`. Adding a
-kind means a spec here plus its properties on
-`PaintSystemFilterLayerNode`. Nothing else in the filter layer code
-changes.
+kind means a spec here, a settings group in
+`nodes.layers.filter_settings` and a pointer to it on
+`PaintSystemFilterLayerNode`, listed in its ``ps_unhashed_props``.
+Nothing else in the filter layer code changes.
 
-- A filter layer has one flat property per parameter of every kind, so
-  the compiler's hashes can see them. `compiler.ir._serialize` falls
-  back to ``repr()`` for a PropertyGroup, which gives a data path, not
-  the contents. So a parameter group would be invisible to every hash
-  in the addon. A spec says which flat properties belong to its kind,
-  so the node draws the right ones and a build fingerprint hashes the
-  right ones.
+- Each kind owns a group of settings on the layer, such as
+  ``node.blur``, and a spec names it. The node draws the kind's group,
+  and a build fingerprint records what the kind reads from it.
 - A kind says which `filters.core.FilterSpec` passes it runs, and with
   what push constants. Node properties and push constants are kept
   separate on purpose. A node property is what the user sets. A push
@@ -52,11 +49,13 @@ class LayerFilterSpec:
     name: str
     label: str
     description: str
+    # The node property holding this kind's settings group.
+    settings: str
     # The passes this kind runs over the stack below, in order, as
     # ``(spec, push constants)`` read off the node.
     passes_of: Callable[[Any], list[tuple[FilterSpec, dict]]] = _no_passes
-    # Names of the node properties this kind reads, in draw order. An
-    # entry may also be ``(heading, names)``, drawn as a group of its own.
+    # Names of the settings in the group, in draw order. An entry may
+    # also be ``(heading, names)``, drawn as a column of its own.
     params: tuple = ()
     # ``build(settings, texture, pool)``: a generator that yields
     # ``(label, fraction)``, takes the composited stack below, and
@@ -93,7 +92,7 @@ def _invert_passes(node) -> list[tuple[FilterSpec, dict]]:
         # encoding instead, which is what a paint program means by
         # Invert.
         "encode": 1,
-        "channels": (1.0, 1.0, 1.0, 1.0 if node.invert_alpha else 0.0),
+        "channels": (1.0, 1.0, 1.0, 1.0 if node.invert.alpha else 0.0),
     })]
 
 
@@ -101,21 +100,23 @@ INVERT = LayerFilterSpec(
     name='INVERT',
     label="Invert",
     description="Invert the colours of everything below this layer",
+    settings='invert',
     passes_of=_invert_passes,
-    params=('invert_alpha',),
+    params=('alpha',),
 )
 
 
 def _blur_passes(node) -> list[tuple[FilterSpec, dict]]:
-    return [(registry.BLUR, params) for params in registry.blur_passes(node.blur_sigma)]
+    return [(registry.BLUR, params) for params in registry.blur_passes(node.blur.sigma)]
 
 
 BLUR = LayerFilterSpec(
     name='BLUR',
     label="Blur",
     description="Blur everything below this layer",
+    settings='blur',
     passes_of=_blur_passes,
-    params=('blur_sigma',),
+    params=('sigma',),
 )
 
 def _sharpen_passes(node) -> list[tuple[FilterSpec, dict]]:
@@ -126,10 +127,10 @@ def _sharpen_passes(node) -> list[tuple[FilterSpec, dict]]:
     own texture holds the blur.
     """
     passes = [(registry.BLUR, params)
-              for params in registry.blur_passes(node.sharpen_radius)]
+              for params in registry.blur_passes(node.sharpen.radius)]
     # The stack below is scene linear, so the difference is taken on its
     # sRGB encoding, like Invert and for the same reason.
-    passes.append((registry.SHARPEN, {"strength": node.sharpen_strength, "encode": 1}))
+    passes.append((registry.SHARPEN, {"strength": node.sharpen.strength, "encode": 1}))
     return passes
 
 
@@ -137,8 +138,9 @@ SHARPEN = LayerFilterSpec(
     name='SHARPEN',
     label="Sharpen",
     description="Bring out the detail of everything below this layer",
+    settings='sharpen',
     passes_of=_sharpen_passes,
-    params=('sharpen_radius', 'sharpen_strength'),
+    params=('radius', 'strength'),
 )
 
 def _painterly_fingerprint(node) -> list:
@@ -153,14 +155,14 @@ PAINTERLY = LayerFilterSpec(
     name='PAINTERLY',
     label="Painterly",
     description="Repaint everything below this layer in brush strokes that follow its edges",
+    settings='painter',
     params=(
-        'painter_brush',
-        ("Strokes", ('painter_largest_stroke', 'painter_smallest_stroke', 'painter_passes',
-                     'painter_first_opacity', 'painter_last_opacity')),
-        ("Placement", ('painter_coverage', 'painter_edge_threshold')),
-        ("Direction", ('painter_smoothing', 'painter_rotation', 'painter_random_rotation')),
-        ("Colour Variation", ('painter_hue', 'painter_saturation', 'painter_value')),
-        'painter_seed',
+        'brush',
+        ("Strokes", ('largest_stroke', 'smallest_stroke', 'passes', 'first_opacity', 'last_opacity')),
+        ("Placement", ('coverage', 'edge_threshold')),
+        ("Direction", ('smoothing', 'rotation', 'random_rotation')),
+        ("Colour Variation", ('hue', 'saturation', 'value')),
+        'seed',
     ),
     build=painter_build.build,
     settings_of=Settings.of,
@@ -173,12 +175,6 @@ LAYER_FILTERS = {spec.name: spec for spec in (INVERT, BLUR, SHARPEN, PAINTERLY)}
 def layer_filter_items() -> list[tuple[str, str, str]]:
     """``EnumProperty`` items for choosing what a filter layer does."""
     return [(spec.name, spec.label, spec.description) for spec in LAYER_FILTERS.values()]
-
-
-def layer_filter_params(filter_type: str) -> tuple:
-    """What a filter layer of *filter_type* draws, as `LayerFilterSpec.params` holds it."""
-    spec = LAYER_FILTERS.get(filter_type)
-    return spec.params if spec is not None else ()
 
 
 def layer_filter_kind(node) -> LayerFilterSpec:

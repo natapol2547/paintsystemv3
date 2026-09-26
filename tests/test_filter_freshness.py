@@ -114,10 +114,10 @@ try:
     stack_ops.detach(tree, extra)
     restamp(tree, node)
 
-    node.invert_alpha = True
+    node.invert.alpha = True
     check(reason(tree, node) == "the filter settings changed",
           f"a filter parameter: {reason(tree, node)!r}")
-    node.invert_alpha = False
+    node.invert.alpha = False
     restamp(tree, node)
 
     # Switching the kind changes its settings as well; the reason names
@@ -128,13 +128,12 @@ try:
     restamp(tree, node)
     # The painter has no passes to read its settings from, so it says
     # what its pixels depend on for itself.
-    for name, value in (("painter_seed", 7), ("painter_brush", 'CIRCLE'),
-                        ("painter_coverage", 30.0), ("painter_hue", 0.2)):
-        previous = getattr(node, name)
-        setattr(node, name, value)
+    for name, value in (("seed", 7), ("brush", 'CIRCLE'), ("coverage", 30.0), ("hue", 0.2)):
+        previous = getattr(node.painter, name)
+        setattr(node.painter, name, value)
         check(reason(tree, node) == "the filter settings changed",
               f"a Painterly setting, {name}: {reason(tree, node)!r}")
-        setattr(node, name, previous)
+        setattr(node.painter, name, previous)
         check(reason(tree, node) == "", f"and putting {name} back settles it")
     # Its Smoothing scales with the resolution, so its settings change
     # with it; the reason is still the one the user changed.

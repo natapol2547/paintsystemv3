@@ -279,10 +279,10 @@ if available():
         check(node.stale_reason == "", f"and leaves the layer up to date: {node.stale_reason!r}")
         check(as_built_now(), "with the pixels of the second stroke")
 
-        node.invert_alpha = True
+        node.invert.alpha = True
         core.flush_now()
         check(begin(), "a setting starts a refresh")
-        node.invert_alpha = False
+        node.invert.alpha = False
         core.flush_now()
         layer_job._tick()
         check(not layer_job.running(), "turning it back part way drops it")
@@ -297,7 +297,7 @@ if available():
         moved = layer_job._Job.moved
         layer_job._Job.moved = lambda job: looks.append(job.uuid) or moved(job)
         try:
-            node.invert_alpha = True
+            node.invert.alpha = True
             core.flush_now()
             check(begin(), "a setting starts a refresh")
             layer_job.notify()
@@ -309,7 +309,7 @@ if available():
             layer_job._Job.moved = moved
         check(ticks == 3 and len(looks) == 1,
               f"one poke is one look at what moved ({len(looks)} in {ticks} ticks)")
-        node.invert_alpha = False
+        node.invert.alpha = False
         core.flush_now()
         check(pump() and node.stale_reason == "",
               f"and the layer settles afterwards: {node.stale_reason!r}")
@@ -320,7 +320,7 @@ if available():
         undo_pixels.write_pixels(picture.image, [0.7, 0.7, 0.2, 1.0] * 64)
         core.flush_now()
         check(begin(), "a build past the restart limit starts")
-        node.invert_alpha = True
+        node.invert.alpha = True
         undo_pixels.write_pixels(picture.image, [0.1, 0.3, 0.8, 1.0] * 64)
         core.flush_now()
         while layer_job.running():
@@ -340,7 +340,7 @@ if available():
         run = layer_build.steps(bpy.context, tree, node)
         next(run)
         undo_pixels.write_pixels(picture.image, [0.3, 0.1, 0.5, 1.0] * 64)
-        node.invert_alpha = False
+        node.invert.alpha = False
         for _ in run:
             pass
         core.flush_now()
@@ -350,7 +350,7 @@ if available():
         # to them a unit later: the pixels are those of the setting the
         # stamp names, which a build at that setting reproduces exactly.
         got = stamp(node)
-        node.invert_alpha = True
+        node.invert.alpha = True
         core.flush_now()
         layer_build.build_layer(bpy.context, tree, node)
         core.flush_now()

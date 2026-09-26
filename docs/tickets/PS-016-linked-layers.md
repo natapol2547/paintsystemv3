@@ -274,6 +274,12 @@ Decisions made with the user on 2026-09-26:
   Refresh. Those belong to one place in one stack. The refresh job turns
   Auto Refresh off on the one layer whose build failed, and says why
   there. `is_clip`, `enabled` and `lock_layer` are linked.
+- A settings group, such as a filter's `blur` or `painter`, is linked as
+  a whole: a change to one of its settings copies the group, writing
+  only the values that differ. The update callback runs on the group,
+  and Blender cannot make a path from a group inside a node back to the
+  node, so `links._group_holder` searches the tree for the layer that
+  holds it.
 - A change and the copies it makes compile the tree once, inside
   `suspend_compile`, and so does linking.
 - A folder links its own settings only. Each folder keeps its own

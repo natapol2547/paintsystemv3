@@ -464,19 +464,19 @@ try:
           "a new Painterly layer starts at the planner's defaults")
     kind = layer_specs.LAYER_FILTERS['PAINTERLY']
     stamp = kind.fingerprint(node)
-    node.painter_seed = 7
+    node.painter.seed = 7
     check(kind.fingerprint(node) != stamp, "a build records the seed it painted with")
-    node.painter_seed = 42
-    node.painter_brush = 'CIRCLE'
+    node.painter.seed = 42
+    node.painter.brush = 'CIRCLE'
     check(kind.fingerprint(node) != stamp, "and the brush")
-    node.painter_brush = 'GOUACHE_SHORT_1'
+    node.painter.brush = 'GOUACHE_SHORT_1'
     check(kind.fingerprint(node) == stamp, "and nothing else when both are put back")
 
-    node.painter_coverage, node.painter_edge_threshold = 35.0, 12.5
+    node.painter.coverage, node.painter.edge_threshold = 35.0, 12.5
     got = plan.Settings.of(node)
     check(got.density == float(np.float32(0.35)) and got.threshold == 0.125,
           "a percentage reaches the planner as v2's single-precision fraction")
-    node.painter_coverage, node.painter_edge_threshold = 70.0, 0.0
+    node.painter.coverage, node.painter.edge_threshold = 70.0, 0.0
     check(node.resolution == '2048' and plan.Settings.of(node).sigma == 3.0,
           "Smoothing is in texels of a 2048 image, a new layer's resolution")
     sigmas = []
@@ -487,7 +487,7 @@ try:
               f"at {resolution} a build records the blur it ran")
     node.resolution = '2048'
     check(sigmas == [1.5, 6.0], f"and it scales with the resolution ({sigmas})")
-    node.painter_random_rotation = pi / 2
+    node.painter.random_rotation = pi / 2
     check(plan.Settings.of(node).rotation_range == float(np.float32(pi / 2)),
           "Random Rotation is the whole spread of the turn")
     bpy.data.node_groups.remove(tree)

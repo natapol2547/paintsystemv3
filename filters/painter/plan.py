@@ -99,22 +99,23 @@ class Settings:
     def of(cls, node) -> "Settings":
         # A filter layer's image is square, *resolution* on a side.
         side = int(node.resolution)
+        painter = node.painter
         return cls(
-            brush=node.painter_brush,
-            density=_fraction(node.painter_coverage),
-            min_scale=_fraction(node.painter_smallest_stroke),
-            max_scale=_fraction(node.painter_largest_stroke),
-            start_opacity=node.painter_first_opacity,
-            end_opacity=node.painter_last_opacity,
-            steps=node.painter_passes,
-            threshold=_fraction(node.painter_edge_threshold),
-            sigma=node.painter_smoothing * side / SMOOTHING_SIDE,
-            seed=node.painter_seed,
-            rotation=node.painter_rotation,
-            rotation_range=node.painter_random_rotation,
-            hue=node.painter_hue,
-            saturation=node.painter_saturation,
-            value=node.painter_value,
+            brush=painter.brush,
+            density=_fraction(painter.coverage),
+            min_scale=_fraction(painter.smallest_stroke),
+            max_scale=_fraction(painter.largest_stroke),
+            start_opacity=painter.first_opacity,
+            end_opacity=painter.last_opacity,
+            steps=painter.passes,
+            threshold=_fraction(painter.edge_threshold),
+            sigma=painter.smoothing * side / SMOOTHING_SIDE,
+            seed=painter.seed,
+            rotation=painter.rotation,
+            rotation_range=painter.random_rotation,
+            hue=painter.hue,
+            saturation=painter.saturation,
+            value=painter.value,
         )
 
     def as_dict(self) -> dict:

@@ -1,21 +1,19 @@
-from math import pi, tau
-
 import bpy
 from bpy.types import Node
-from bpy.props import (BoolProperty, EnumProperty, FloatProperty, IntProperty,
-                       PointerProperty, StringProperty)
+from bpy.props import BoolProperty, EnumProperty, PointerProperty, StringProperty
 from bpy.utils import register_classes_factory
 
+from . import filter_settings
 from .base_layer_node import (EMPTY_SOURCE, RESOLUTION_ITEMS, PaintSystemLayerNode, draw_uv_map,
                               emit_image_texture, emit_mix_group, update_painting)
+from .filter_settings import (PaintSystemBlurSettings, PaintSystemInvertSettings,
+                              PaintSystemPainterSettings, PaintSystemSharpenSettings)
 from ..base_node import mark_tree_dirty
 from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
 from ...filters.derived import FINGERPRINT_KEY, build_stamp, is_built, stamped_uv_map
 from ...filters.freshness import PIXEL_REASON, built_on_surface, fingerprint_parts, structure_reason
-from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items, layer_filter_params
-from ...filters.painter.brushes import brush_items
-from ...filters.registry import BLUR_MAX_EFFECTIVE_SIGMA
+from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items
 from ...filters import layer_job, layer_plan
 from ...nodetree.stack_ops import below_input, feeding_link
 
@@ -112,16 +110,14 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # The compiler's fingerprints leave out the filter settings, the build
     # settings and the build results. None of them changes the compiled
     # artifact until a build runs, and a build shows up through
-    # ``hash_parts`` instead. Without this, dragging a blur slider would
-    # invalidate every node cache and channel bake above the layer before
-    # any pixel changed.
+    # ``hash_parts`` instead. Without this, changing the filter type or the
+    # resolution would invalidate every node cache and channel bake above
+    # the layer before any pixel changed. A settings group would not even
+    # count its values: the hash reads a group as its path, which names
+    # only the tree, so a hashed group would invalidate those caches on a
+    # tree rename instead.
     ps_unhashed_props = (
-        'filter_type', 'invert_alpha', 'blur_sigma', 'sharpen_radius', 'sharpen_strength',
-        'painter_brush', 'painter_largest_stroke', 'painter_smallest_stroke', 'painter_passes',
-        'painter_first_opacity', 'painter_last_opacity', 'painter_coverage',
-        'painter_edge_threshold', 'painter_smoothing', 'painter_rotation',
-        'painter_random_rotation', 'painter_hue', 'painter_saturation', 'painter_value',
-        'painter_seed',
+        'filter_type', 'invert', 'blur', 'sharpen', 'painter',
         'resolution', 'uv_map', 'auto_refresh',
         'derived_image', 'derived_stale_reason', 'derived_stale_pixels', 'derived_error',
         # Which mesh answers changes no compiled node, and hashing its
@@ -139,100 +135,12 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     filter_type: EnumProperty(
         name="Filter", items=layer_filter_items(), update=mark_tree_dirty,
         description="What this layer does to the layers below it")
-    invert_alpha: BoolProperty(
-        name="Invert Alpha", default=False, update=mark_tree_dirty,
-        description="Invert transparency as well as colour")
-
-    blur_sigma: FloatProperty(
-        name="Blur", default=4.0, min=0.0, max=BLUR_MAX_EFFECTIVE_SIGMA,
-        subtype='PIXEL', update=mark_tree_dirty,
-        description="Width of the blur, in pixels of the image this layer builds. "
-                    "A layer set to a higher resolution therefore blurs less of "
-                    "the picture for the same number")
-
-    sharpen_radius: FloatProperty(
-        name="Radius", default=1.0, min=0.0, max=16.0,
-        subtype='PIXEL', update=mark_tree_dirty,
-        description="How far from an edge the detail to bring out is, in pixels "
-                    "of the image this layer builds")
-    sharpen_strength: FloatProperty(
-        name="Strength", default=1.0, min=0.0, soft_max=3.0, max=10.0,
-        update=mark_tree_dirty,
-        description="How much of that detail to add back")
-
-    # Painterly settings. The defaults match v2's brush painter, except the
-    # seed, which is always used (see ``filters.painter.plan``). Sizes,
-    # coverage and the threshold are percentages here and fractions in
-    # ``plan.Settings``, as in v2.
-    painter_brush: EnumProperty(
-        name="Brush", items=brush_items(), update=mark_tree_dirty,
-        description="The brushes the strokes are stamped with")
-    painter_largest_stroke: FloatProperty(
-        name="Largest Stroke", default=10.0, min=0.1, max=100.0, soft_max=30.0,
-        subtype='PERCENTAGE', precision=1, step=10, update=mark_tree_dirty,
-        description="Size of the strokes in the first pass, the broadest, as a percentage "
-                    "of the image. The strokes are the same at any resolution")
-    painter_smallest_stroke: FloatProperty(
-        name="Smallest Stroke", default=3.0, min=0.1, max=100.0, soft_max=10.0,
-        subtype='PERCENTAGE', precision=1, step=10, update=mark_tree_dirty,
-        description="Size of the strokes in the last pass, the finest, as a percentage "
-                    "of the image")
-    painter_passes: IntProperty(
-        name="Passes", default=4, min=1, max=20, update=mark_tree_dirty,
-        description="How many passes of strokes to paint, stepping from the largest "
-                    "strokes down to the smallest. A single pass paints only the smallest")
-    painter_first_opacity: FloatProperty(
-        name="First Pass Opacity", default=0.4, min=0.0, max=1.0, subtype='FACTOR',
-        update=mark_tree_dirty,
-        description="Opacity of the strokes in the first pass. The passes between step "
-                    "evenly from this to Last Pass Opacity")
-    painter_last_opacity: FloatProperty(
-        name="Last Pass Opacity", default=1.0, min=0.0, max=1.0, subtype='FACTOR',
-        update=mark_tree_dirty,
-        description="Opacity of the strokes in the last pass, and in the only pass when "
-                    "there is one")
-    painter_coverage: FloatProperty(
-        name="Coverage", default=70.0, min=1.0, max=200.0, soft_min=10.0, soft_max=100.0,
-        subtype='PERCENTAGE', precision=0, step=100, update=mark_tree_dirty,
-        description="How much of the picture each pass covers with strokes. Lower values "
-                    "leave more of the picture below showing between them")
-    painter_edge_threshold: FloatProperty(
-        name="Edge Threshold", default=0.0, min=0.0, max=100.0, soft_max=50.0,
-        subtype='PERCENTAGE', precision=0, step=100, update=mark_tree_dirty,
-        description="Place strokes only where the edge under them is at least this strong, "
-                    "as a percentage of the picture's strongest edge. Away from the strong "
-                    "edges the picture shows through, and 0 places strokes everywhere")
-    painter_smoothing: FloatProperty(
-        name="Smoothing", default=3.0, min=0.0, max=10.0, precision=1, step=10,
-        update=mark_tree_dirty,
-        description="How much fine detail the strokes ignore when they take their colour "
-                    "and direction from the picture. Measured in pixels of a 2048 image "
-                    "and scaled with the resolution, so the painting looks the same at "
-                    "any resolution")
-    painter_rotation: FloatProperty(
-        name="Rotation", default=0.0, min=-pi, max=pi, subtype='ANGLE',
-        update=mark_tree_dirty,
-        description="Turn every stroke by this much from the direction of the edge under it")
-    painter_random_rotation: FloatProperty(
-        name="Random Rotation", default=0.0, min=0.0, max=tau, subtype='ANGLE',
-        update=mark_tree_dirty,
-        description="Turn each stroke by a random amount within a fan this wide, centred "
-                    "on its direction. 0 turns no stroke at random, and a full turn points "
-                    "strokes anywhere")
-    painter_hue: FloatProperty(
-        name="Hue", default=0.0, min=0.0, max=1.0, subtype='FACTOR', update=mark_tree_dirty,
-        description="How far each stroke's hue can wander from the picture's")
-    painter_saturation: FloatProperty(
-        name="Saturation", default=0.0, min=0.0, max=1.0, subtype='FACTOR',
-        update=mark_tree_dirty,
-        description="How far each stroke's saturation can wander from the picture's")
-    painter_value: FloatProperty(
-        name="Value", default=0.0, min=0.0, max=1.0, subtype='FACTOR', update=mark_tree_dirty,
-        description="How far each stroke's brightness can wander from the picture's")
-    painter_seed: IntProperty(
-        name="Seed", default=42, min=0, max=1000000, update=mark_tree_dirty,
-        description="Which arrangement of strokes to paint. The same seed paints "
-                    "the same strokes, so a refresh after painting below moves none")
+    # One group of settings per kind (`filter_settings`). A layer keeps
+    # them all, so switching the kind and back keeps what was set.
+    invert: PointerProperty(type=PaintSystemInvertSettings)
+    blur: PointerProperty(type=PaintSystemBlurSettings)
+    sharpen: PointerProperty(type=PaintSystemSharpenSettings)
+    painter: PointerProperty(type=PaintSystemPainterSettings)
 
     resolution: EnumProperty(
         name="Resolution", items=RESOLUTION_ITEMS, default='2048',
@@ -362,15 +270,18 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
 
     def draw_source_settings(self, context, layout):
         layout.prop(self, "filter_type", text="")
-        for entry in layer_filter_params(self.filter_type):
-            if isinstance(entry, str):
-                layout.prop(self, entry)
-                continue
-            heading, names = entry
-            column = layout.column(align=True)
-            column.label(text=heading)
-            for name in names:
-                column.prop(self, name)
+        spec = LAYER_FILTERS.get(self.filter_type)
+        if spec is not None:
+            settings = getattr(self, spec.settings)
+            for entry in spec.params:
+                if isinstance(entry, str):
+                    layout.prop(settings, entry)
+                    continue
+                heading, names = entry
+                column = layout.column(align=True)
+                column.label(text=heading)
+                for name in names:
+                    column.prop(settings, name)
         layout.prop(self, "resolution")
         layout.prop(self, "surface_name", **icon_kwargs('OBJECT_DATA'))
         draw_uv_map(context, layout, self, self.surface_object)
@@ -491,6 +402,7 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
 
 
 classes = (
+    *filter_settings.classes,
     PaintSystemFilterLayerNode,
 )
 

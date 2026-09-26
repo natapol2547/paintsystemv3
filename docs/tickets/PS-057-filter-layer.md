@@ -204,14 +204,23 @@ Authored:
 - `filter_type: EnumProperty`, items from `filters/layer_specs.py`:
   Invert, Blur, Sharpen and Painterly. A new kind is a new entry there,
   with no change to the mechanism.
-- One flat `FloatProperty`/`IntProperty`/`EnumProperty` per parameter of
-  every registered kind (`invert_alpha`, `blur_sigma`, `sharpen_radius`,
-  `sharpen_strength`, the `painter_*` set), drawn conditionally on
-  `filter_type` from the list each kind declares. Flat, not a
-  `PointerProperty` to a `PropertyGroup`: `IR._serialize` falls through
-  to `repr()` for a PropertyGroup, and `repr()` of one is a data path,
-  not its contents — a parameter group would be invisible to every hash
-  in the addon and would additionally churn `node_state` on a rename.
+- One settings group per kind, from `nodes/layers/filter_settings.py`:
+  `invert` (`alpha`), `blur` (`sigma`), `sharpen` (`radius`,
+  `strength`) and `painter` (brush, strokes, placement, direction,
+  colour variation and seed), so a setting reads as `node.blur.sigma`
+  or `node.painter.seed`. Each kind in `filters/layer_specs.py` names
+  its group (`LayerFilterSpec.settings`) and the settings in it to draw
+  for its `filter_type`. A layer keeps every group, so switching the
+  kind and back keeps what was set. The groups are unhashed like every
+  filter setting. They could not be hashed anyway: `IR._serialize`
+  falls through to `repr()` for a PropertyGroup, which is the same for
+  every group of a type. Blender cannot make a path to a group inside a
+  node, so these settings cannot be keyframed or driven from the UI,
+  and linking finds a group's layer by searching the tree
+  (`nodes/layers/links.py`). The settings were flat properties
+  (`blur_sigma`, `painter_seed` and so on) until they were grouped.
+  There was no migration, so a file saved before that opens with every
+  filter setting at its default.
 - `resolution` (`RESOLUTION_ITEMS`), `uv_map`,
   `auto_refresh: BoolProperty(default=True)`. An empty `uv_map` follows
   the layers below: the one map they name, else the active render map.

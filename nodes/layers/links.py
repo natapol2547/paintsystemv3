@@ -9,7 +9,9 @@ others.
 Every property a layer class declares is linked, except the ones its
 ``ps_unlinked_props`` names. Those hold state that belongs to one place
 in one stack, such as a bake cache or a filter result, which are built
-from the layers below.
+from the layers below. A linked settings group, such as a filter
+layer's ``node.blur``, is linked as a whole: changing one of its
+settings copies the group.
 
 Values are copied from the properties' ``update`` callbacks. Drivers and
 keyframes set values without calling them, so animated values stay per
@@ -35,37 +37,82 @@ _copying = False
 _image_prop_names: dict[type, tuple[str, ...]] = {}
 
 
-def _copies_on_change(name: str, update):
-    """An ``update`` callback that runs *update*, then copies *name* to the linked layers."""
+def _copies_on_change(update, holder):
+    """An ``update`` callback that runs *update*, then copies the changed setting to the linked layers.
+
+    *holder* takes what the property belongs to and returns the layer and
+    the name of its setting to copy, or ``(None, "")``.
+    """
     def callback(self, context):
-        if not self.link_id or _copying:
+        layer, name = (None, "") if _copying else holder(self)
+        if layer is None or not layer.link_id:
             if update is not None:
                 update(self, context)
             return
         # Each write compiles the tree on its own. Suspended, the change
         # and its copies compile once.
-        with suspend_compile(self.id_data):
+        with suspend_compile(layer.id_data):
             if update is not None:
                 update(self, context)
-            copy_settings(self, linked_layers(self), (name,))
+            copy_settings(layer, linked_layers(layer), (name,))
     callback.ps_linked = True
     return callback
+
+
+def _own_setting(name: str):
+    """A *holder* for `_copies_on_change`: the layer's own property *name*."""
+    return lambda layer: (layer, name)
+
+
+def _group_holder(group):
+    """A *holder* for `_copies_on_change`: the layer holding the settings group *group*.
+
+    Blender cannot make a path to a group inside a node, so the tree is
+    searched for it. A tree holds few enough nodes for that to be cheap.
+    """
+    for node in group.id_data.nodes:
+        for name in getattr(type(node), 'ps_linked_groups', ()):
+            if getattr(node, name) == group:
+                return node, name
+    return None, ""
+
+
+def _is_group(prop) -> bool:
+    """Whether the deferred property *prop* points at a settings group."""
+    return (prop.function is bpy.props.PointerProperty
+            and issubclass(prop.keywords['type'], bpy.types.PropertyGroup))
+
+
+def _link_group(group) -> None:
+    """Make each property of the settings group class *group* copy the group on change."""
+    if group.__dict__.get('ps_linked_group'):
+        return
+    annotations = group.__dict__.get('__annotations__', {})
+    for name, prop in list(annotations.items()):
+        if isinstance(prop, _DEFERRED):
+            update = _copies_on_change(prop.keywords.get('update'), _group_holder)
+            annotations[name] = prop.function(**{**prop.keywords, 'update': update})
+    group.ps_linked_group = True
 
 
 def link_settings(cls) -> None:
     """Make the properties *cls* declares copy on change, and record what is linked.
 
-    Runs on the class body before Blender registers the class. A class
+    Runs on the class body before Blender registers the class, and on
+    the settings groups it points at before they are registered. A class
     lists in ``ps_unlinked_props`` only properties it declares itself.
     ``cls.ps_linked_props`` then names every linked property *cls* has,
-    inherited ones included.
+    inherited ones included, and ``cls.ps_linked_groups`` the linked
+    settings groups among them.
     """
     annotations = cls.__dict__.get('__annotations__', {})
     unlinked = set(cls.__dict__.get('ps_unlinked_props', ()))
     for name, prop in list(annotations.items()):
         if (isinstance(prop, _DEFERRED) and name not in unlinked
                 and prop.function is not bpy.props.CollectionProperty):
-            update = _copies_on_change(name, prop.keywords.get('update'))
+            if _is_group(prop):
+                _link_group(prop.keywords['type'])
+            update = _copies_on_change(prop.keywords.get('update'), _own_setting(name))
             annotations[name] = prop.function(**{**prop.keywords, 'update': update})
     # Blender registers the declaration nearest in the MRO, so a subclass
     # that declares a property again decides whether it is linked.
@@ -76,6 +123,7 @@ def link_settings(cls) -> None:
                 declared[name] = prop
     cls.ps_linked_props = tuple(name for name, prop in declared.items()
                                 if getattr(prop.keywords.get('update'), 'ps_linked', False))
+    cls.ps_linked_groups = tuple(name for name in cls.ps_linked_props if _is_group(declared[name]))
 
 
 def copy_settings(source, targets, names=None) -> None:
@@ -90,12 +138,26 @@ def copy_settings(source, targets, names=None) -> None:
     _copying = True
     try:
         for name in names:
-            value = getattr(source, name)
             for target in targets:
-                if not same_value(getattr(target, name), value):
-                    setattr(target, name, value)
+                copy_setting(source, target, name)
     finally:
         _copying = previous
+
+
+def copy_setting(source, target, name: str) -> None:
+    """Give *target* *source*'s value of the property *name*, when it differs.
+
+    A settings group cannot be assigned, so its settings are copied one
+    at a time.
+    """
+    value = getattr(source, name)
+    if isinstance(value, bpy.types.PropertyGroup):
+        into = getattr(target, name)
+        for prop in value.bl_rna.properties:
+            if not prop.is_readonly:
+                copy_setting(value, into, prop.identifier)
+    elif not same_value(getattr(target, name), value):
+        setattr(target, name, value)
 
 
 def linked_layers(node) -> list:

@@ -132,8 +132,8 @@ def test_what_is_linked():
           "a cache and the link id are never linked")
     check('is_expanded' not in registry.layer_type('FOLDER').ps_linked_props, "a folder's expanded state is not linked")
     check('derived_image' not in registry.layer_type('FILTER').ps_linked_props
-          and 'blur_sigma' in registry.layer_type('FILTER').ps_linked_props,
-          "a filter's result is not linked, its settings are")
+          and set(registry.layer_type('FILTER').ps_linked_groups) == {'invert', 'blur', 'sharpen', 'painter'},
+          "a filter's result is not linked, its settings groups are")
 
 
 def test_link_and_sync():
@@ -219,10 +219,16 @@ def test_link_and_sync():
     x = add(tree, FILTER, "X")
     y = add(tree, FILTER, "Y")
     links.link([y], x)
-    x.blur_sigma = 7.0
+    x.blur.sigma = 7.0
     x.derived_stale_reason = "changed below"
-    check(abs(y.blur_sigma - 7.0) < 1e-6 and y.derived_stale_reason == "",
+    check(abs(y.blur.sigma - 7.0) < 1e-6 and y.derived_stale_reason == "",
           "a filter shares its settings, not its build state")
+    y.painter.seed = 11
+    check(x.painter.seed == 11 and abs(x.blur.sigma - 7.0) < 1e-6,
+          "a setting in a group copies the other way too")
+    z = add(tree, FILTER, "Z")
+    links.link([z], x)
+    check(z.painter.seed == 11 and abs(z.blur.sigma - 7.0) < 1e-6, "and linking gives the groups' settings")
     x.auto_refresh = False
     check(y.auto_refresh, "nor Auto Refresh, which the refresh job turns off on the one layer that failed")
     check(links.link_candidates(x) == [] and x not in links.link_candidates(a),
@@ -498,6 +504,17 @@ def test_clipboard():
     tree.remove_layer_node(lone)
     check(clipboard.copied_layers() == [], "a removed layer is gone from the clipboard")
     check(clipboard.paste_layers(tree) == [], "and a paste adds nothing")
+
+    section("a pasted filter keeps its settings groups")
+    blurry = add(tree, FILTER, "Blurry")
+    blurry.filter_type = 'BLUR'
+    blurry.blur.sigma = 9.0
+    blurry.painter.seed = 13
+    clipboard.copy_layers([blurry])
+    (pasted_filter,) = clipboard.paste_layers(new_tree("Clip Filter"))
+    check(pasted_filter.filter_type == 'BLUR' and abs(pasted_filter.blur.sigma - 9.0) < 1e-6
+          and pasted_filter.painter.seed == 13,
+          "the settings of its own kind and of the others come with it")
 
 
 def test_operators():

@@ -108,7 +108,7 @@ try:
 
     section("what the compiler's fingerprints see")
     before = core.subtree_hash(tree, node)
-    node.invert_alpha = True
+    node.invert.alpha = True
     node.resolution = '4096'
     node.uv_map = "SomeOtherMap"
     node.surface_name = "Filter Holder"
@@ -127,25 +127,26 @@ try:
           "a rebuild of the same image invalidates it too")
     image[derived.BUILD_KEY] = "build-of-Filter Result"
 
-    # Every kind's settings, not only the ones changed above: a property
-    # added for a new kind and left out of the list would make its
-    # sliders invalidate every cache above the layer.
+    # Every settings group, not only the ones changed above. A hashed group
+    # does not count its values: the hash reads it as its path, which names
+    # only the tree. So a group added for a new kind and left out of the
+    # list would invalidate every cache above the layer on a tree rename.
     unhashed = set(type(node).ps_unhashed_props)
-    properties = set(node.bl_rna.properties.keys())
+    groups = {prop.identifier for prop in node.bl_rna.properties
+              if isinstance(getattr(node, prop.identifier), bpy.types.PropertyGroup)}
+    check(groups and groups <= unhashed,
+          f"every settings group is outside the hash (hashed {sorted(groups - unhashed)})")
     for kind in layer_specs.LAYER_FILTERS.values():
         # An entry is a name or a (heading, names) group.
         names = {name for entry in kind.params
                  for name in ((entry,) if isinstance(entry, str) else entry[1])}
-        check(names <= properties and names <= unhashed,
-              f"{kind.label}'s settings exist and are outside the hash "
-              f"(missing {sorted(names - unhashed)})")
-    node.filter_type = 'PAINTERLY'
-    node.painter_seed = 7
-    node.painter_coverage = 30.0
-    check(core.subtree_hash(tree, node) == before,
-          "so changing Painterly's changes no hash before the rebuild either")
-    node.painter_seed, node.painter_coverage = 42, 70.0
-    node.filter_type = 'INVERT'
+        settings = set(getattr(node, kind.settings).bl_rna.properties.keys()) if kind.settings in groups else set()
+        check(kind.settings in groups and names <= settings,
+              f"{kind.label}'s settings are in its group {kind.settings!r} "
+              f"(missing {sorted(names - settings)})")
+    tree.name = "Filters Renamed"
+    check(core.subtree_hash(tree, node) == before, "so renaming the tree changes no hash")
+    tree.name = "Filters"
     node.surface_name = ""
 
     section("the blend mode is not offered")

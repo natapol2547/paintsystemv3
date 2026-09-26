@@ -66,11 +66,14 @@ def can_paste_linked(tree) -> bool:
 def _copy_node(source, tree):
     """A new node in *tree* with *source*'s settings, outside any stack."""
     node = tree.nodes.new(source.bl_idname)
+    # A settings group reads as read-only, since it cannot be assigned,
+    # but its settings are copied like the rest.
     names = [prop.identifier for prop in source.bl_rna.properties
              if prop.identifier not in _BASE_PROPS and prop.identifier not in _NOT_COPIED
-             and not prop.is_readonly and prop.type != 'COLLECTION']
+             and prop.type != 'COLLECTION'
+             and (not prop.is_readonly or isinstance(getattr(source, prop.identifier), bpy.types.PropertyGroup))]
     for name in (*_NODE_PROPS, *names):
-        setattr(node, name, getattr(source, name))
+        links.copy_setting(source, node, name)
     # The hook Blender runs on a node it copies. It gives the layer a new
     # uuid and drops the cache, as it does for Shift+D.
     node.copy(source)
