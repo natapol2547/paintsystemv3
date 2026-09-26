@@ -131,15 +131,15 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
         ps = parse_context(context)
         tree, node, pair = ps.tree, ps.layer, ps.stack_item.pair
         # The row that moves up into the removed row's place becomes
-        # active. That is the first row after the layer's content. If the
-        # removed row was at the bottom, the new last row becomes active.
+        # active. That is the first row after the layer's content whose
+        # layer is still there. If there is none, the nearest row above
+        # becomes active.
         items = tree.stack()
         position = next((index for index, item in enumerate(items) if item.node == node), len(items))
         end = position + 1
         while end < len(items) and items[end].level > items[position].level:
             end += 1
-        rows = [item.node.name for item in items[:position] + items[end:]]
-        next_active = rows[position] if position < len(rows) else (rows[-1] if rows else None)
+        rows = [item.node.name for item in items[end:] + items[:position][::-1]]
 
         # Remove the filter results before the pairs. Once a pair is
         # gone, nothing points at its image, and only the next file read
@@ -151,8 +151,9 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
             bpy.data.images.remove(image)
 
         tree.remove_layer_node(node)
+        next_active = next((tree.nodes[name] for name in rows if name in tree.nodes), None)
         if next_active is not None:
-            tree.activate_layer_node(tree.nodes[next_active])
+            tree.activate_layer_node(next_active)
             update_active_image(context)
         return {'FINISHED'}
 

@@ -390,7 +390,60 @@ try:
           and rows(tree, "Second") == [("Low", 0, 0), ("High", 0, 0), ("Keeper", 0, 0), ("Ground", 0, 0)],
           f"layers in another stack stay, each kept by the one above it {plan.deleted} "
           f"{rows(tree, 'Second')}")
+    beneath = add(tree, SOLID, "Beneath", "Color")
+    box = add(tree, FOLDER, "Box", "Color")
+    inside = add(tree, SOLID, "Inside", "Color", target=box)
+    # Wire Beneath's second pair on top of the folder's content by hand.
+    link_into_virtual(tree, inside.outputs[0], beneath)
+    tree.links.new(beneath.outputs[1], stack_ops.content_input(box))
+    tree.nodes.active = box
+    plan = stack_ops.removal(box, 0)
+    check(bpy.ops.paint_system.remove_layer('EXEC_DEFAULT') == {'FINISHED'} and plan.deleted == {"Box", "Inside"}
+          and rows(tree, "Color") == [("Beneath", 0, 0), ("Under", 0, 0)],
+          f"a layer right under a removed folder stays, since closing the gap hands it the folder's place "
+          f"{plan.deleted} {rows(tree, 'Color')}")
+    loop = add(tree, FOLDER, "Loop", "Color")
+    loop.add_pair()
+    tree.links.new(loop.outputs[1], stack_ops.content_input(loop))
+    outer = add(tree, FOLDER, "Outer", "Color")
+    other = add(tree, FOLDER, "Other", "Second")
+    outer.add_pair()
+    tree.links.new(outer.outputs[1], stack_ops.content_input(other))
+    other.add_pair()
+    tree.links.new(other.outputs[1], stack_ops.content_input(outer))
+    plans = [stack_ops.removal(outer, 0), stack_ops.removal(loop, 0)]
+    tree.remove_layer_node(outer, "Color")
+    tree.remove_layer_node(loop, "Color")
+    check([plan.deleted for plan in plans] == [set(), {"Loop"}] and "Loop" not in tree.nodes
+          and rows(tree, "Color") == [("Beneath", 0, 0), ("Under", 0, 0)]
+          and stack_ops.pair_count(outer) == 1 and stack_ops.pair_count(other) == 2,
+          f"a folder wired into its own content, directly or through another folder, is removed without "
+          f"looping {[plan.deleted for plan in plans]}")
+    hide = add(tree, FOLDER, "Hide", "Color")
+    hidden = add(tree, FOLDER, "Hidden", "Color", target=hide)
+    muted = add(tree, SOLID, "Muted", "Color", target=hidden)
+    muter = add(tree, SOLID, "Muter", "Color", target=hide)
+    link_into_virtual(tree, muted.outputs[0], muter)
+    tree.links.new(muter.outputs[1], stack_ops.content_input(hidden)).is_muted = True
+    plan = stack_ops.removal(hide, 0)
+    tree.remove_layer_node(hide, "Color")
+    check(plan.deleted == {"Hide", "Hidden", "Muter"} and not plan.deleted & set(tree.nodes.keys())
+          and stack_ops.pair_count(muted) == 1,
+          f"a layer behind a muted link keeps its pair, since the removal never reaches it {plan.deleted}")
     bpy.context.scene.paint_system.active_node_tree = None
+    tree = new_tree("Muted Below")
+    add(tree, SOLID, "Under", "Color", RED)
+    beneath = add(tree, SOLID, "Beneath", "Color")
+    box = add(tree, FOLDER, "Box", "Color")
+    inside = add(tree, SOLID, "Inside", "Color", target=box)
+    link_into_virtual(tree, inside.outputs[0], beneath)
+    tree.links.new(beneath.outputs[1], stack_ops.content_input(box))
+    stack_ops.feeding_link(stack_ops.below_input(box)).is_muted = True
+    plan = stack_ops.removal(box, 0)
+    tree.remove_layer_node(box, "Color")
+    check(plan.deleted == {"Box", "Inside", "Beneath"} and not plan.deleted & set(tree.nodes.keys()),
+          f"but a muted link under the folder does not keep that layer, since closing the gap drops it "
+          f"{plan.deleted}")
 
     section("removing a pair of a tree Blender evaluates")
     # A muted node passes its unlinked pair outputs through one pair

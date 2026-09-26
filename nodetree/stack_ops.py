@@ -655,16 +655,45 @@ class Removal(NamedTuple):
     deleted: set[str]
 
 
-def _kept(node, taken: set[int], deleted: set[str] = frozenset()) -> bool:
-    """Whether *node* stays once its pairs in *taken* are gone.
+def _taken(positions) -> dict[str, set[int]]:
+    """The pairs at *positions*, by node name."""
+    taken: dict[str, set[int]] = {}
+    for node, pair in positions:
+        taken.setdefault(node.name, set()).add(pair)
+    return taken
 
-    It stays while another of its pairs feeds something: another stack,
-    a mask or any other node. A pair in no stack, such as a new one from
-    Add Pair, does not keep it. Links into the nodes named in *deleted*
-    do not count, since they go with those nodes.
+
+def _reaches_staying(link, deleted: set[str], taken: dict[str, set[int]]) -> bool:
+    """Whether the value on *link* still reaches a node that stays after a removal.
+
+    A link into a pair the removal takes out is closed up by ``detach``,
+    which moves the value on to the slot that pair fed, so the value is
+    followed there. A muted link is not moved on. Any other link into a
+    node named in *deleted* goes with that node.
     """
-    return any(link.to_node.name not in deleted
-               for pair in range(pair_count(node)) if pair not in taken
+    socket, muted, seen = link.to_socket, link.is_muted, set()
+    while True:
+        node = socket.node
+        pair = pair_of_input(socket) if is_layer(node) else None
+        if pair is None or pair not in taken.get(node.name, ()):
+            return node.name not in deleted
+        if muted or (node.name, pair) in seen:
+            return False
+        seen.add((node.name, pair))
+        socket, muted = consumer_input(node, pair), False
+        if socket is None:
+            return False
+
+
+def _kept(node, deleted: set[str], taken: dict[str, set[int]]) -> bool:
+    """Whether *node* stays once the removal takes out its pairs in *taken*.
+
+    It stays while another of its pairs feeds something that stays:
+    another stack, a mask or any other node. A pair in no stack, such as
+    a new one from Add Pair, does not keep it.
+    """
+    return any(_reaches_staying(link, deleted, taken)
+               for pair in range(pair_count(node)) if pair not in taken[node.name]
                for link in socket_links(stack_output(node, pair)))
 
 
@@ -682,14 +711,18 @@ def removal(node, pair: int = 0) -> Removal:
     then keeps each layer that still feeds something staying, and repeats
     until nothing changes. Starting from "everything goes" means layers
     that only feed each other, or only their own folder, go together.
+
+    One visited set is shared by the whole walk, as in ``stack``, so a
+    folder wired by hand into its own content, directly or through
+    another folder, is opened once.
     """
     def walk(expanded):
-        positions = []
+        positions, visited = [], {(node.name, pair)}
 
         def take(node, pair):
             positions.append(Position(node, pair))
             if is_folder(node) and (expanded is None or node.name in expanded):
-                for child, child_pair in list(layers_down_from(content_input(node), set())):
+                for child, child_pair in list(layers_down_from(content_input(node), visited)):
                     take(child, child_pair)
 
         take(node, pair)
@@ -700,10 +733,10 @@ def removal(node, pair: int = 0) -> Removal:
         deleted = {position.node.name for position in positions}
         while True:
             nodes = {position.node.name: position.node for position in positions}
-            taken: dict[str, set[int]] = {}
-            for position in positions:
-                taken.setdefault(position.node.name, set()).add(position.pair)
-            going = {name for name, pairs in taken.items() if not _kept(nodes[name], pairs, deleted)}
+            taken = _taken(positions)
+            # Only a layer still assumed to go can be found to go, so each
+            # round deletes fewer and the loop ends.
+            going = {name for name in taken if name in deleted and not _kept(nodes[name], deleted, taken)}
             if going == deleted:
                 return Removal(positions, deleted)
             deleted = going
@@ -722,28 +755,32 @@ def remove_pair(tree, node, pair: int) -> None:
 
 def remove(tree, node, pair: int = 0) -> None:
     """Take *node*'s *pair* out of its stack and close the gap, deleting what ``removal`` describes."""
-    _take_out(tree, node, pair, removal(node, pair).deleted)
+    plan = removal(node, pair)
+    _take_out(tree, node, pair, plan.deleted, _taken(plan.positions))
 
 
-def _take_out(tree, node, pair: int, deleted: set[str]) -> None:
+def _take_out(tree, node, pair: int, deleted: set[str], taken: dict[str, set[int]]) -> None:
     """Remove *node*'s *pair*, or the whole node when it is named in *deleted*.
 
-    The content of a folder that goes is taken top first and read again
-    after each step, because removing a pair renumbers the pairs after
-    it. A deleted node has every pair detached first, so no stack it was
-    still wired into is left with a gap.
+    A deleted node first has the pairs the plan takes out detached, which
+    closes the gaps they leave, as ``_reaches_staying`` expects. Its other
+    pairs only feed nodes that go too, so their links go with it. This
+    also takes a folder wired by hand into its own content out of it
+    before the content is emptied, so emptying it never comes back to the
+    folder. The content is taken top first and read again after each
+    step, because removing a pair renumbers the pairs after it.
     """
     if node.name not in deleted:
         remove_pair(tree, node, pair)
         return
+    for each in sorted(taken[node.name]):
+        detach(tree, node, each)
     if is_folder(node):
         while True:
             link = feeding_link(content_input(node))
             if link is None or not is_layer(link.from_node):
                 break
-            _take_out(tree, link.from_node, pair_of_output(link.from_socket), deleted)
-    for each in range(pair_count(node)):
-        detach(tree, node, each)
+            _take_out(tree, link.from_node, pair_of_output(link.from_socket), deleted, taken)
     tree.nodes.remove(node)
 
 
