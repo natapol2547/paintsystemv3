@@ -6,7 +6,8 @@ Epic B. Size L. Milestone M2. The layer socket model that linked layers
 ## Status
 
 - Slice 1, RGBA-only sockets: done. See "Slice 1" below.
-- Slice 2, socket pairs and the virtual input: not started.
+- Slice 2, socket pairs and the virtual input: done, apart from the
+  user's GUI check. See "Slice 2" below.
 - Slice 3, Paste and Paste Linked: not started. Rewrites PS-016 and
   PS-017 around slice 2.
 - Slice 4, a Separate Color node in the Paint System tree: not started.
@@ -38,6 +39,16 @@ Made with the user on 2026-09-23.
   per pair.
 - No migration. v3 is unreleased, so a tree saved before slice 1 keeps
   its stale Alpha sockets and links; make a fresh tree instead.
+
+During slice 2 the user also chose:
+
+- Everything a pair builds is per pair: its cache, its filter result, the
+  result's freshness and the automatic refresh's error.
+- Remove Layer removes only the pair in the active channel's stack. The
+  layer is deleted with its last pair, and the dialog says how many other
+  stacks it stays in.
+- The editing operators never put a layer in one channel twice. A repeat
+  wired by hand still compiles, and the layer list shows its first row.
 
 ## Slice 1: RGBA-only sockets
 
@@ -110,25 +121,83 @@ Made with the user on 2026-09-23.
 
 ## Slice 2: socket pairs
 
-- Input order on a layer is `[pair inputs..., virtual, Mask]`; on a
-  folder `[Color, Content Color, pair inputs..., virtual, Mask]`. The
-  first pair is the existing `Color` input and output, so a one-pair
-  layer looks exactly like slice 1.
-- A new pair is made with `inputs.new` and moved above the virtual
-  socket. The handler lives in `Node.update` and must be idempotent:
-  `insert_link` is not called for links made from Python, `links.new`
-  fires `update` twice, and on 5.x `update` can fire during `init`.
-- `NodeSocketVirtual` has no `default_value`, so `is_slot`,
-  `channel_sockets` and `rgba_input` must never see it.
+`nodetree/stack_ops.py`, "Pairs", describes the model in the code.
+
+### Socket layout
+
+- A layer's inputs are its pair inputs, then the virtual input, then the
+  inputs every pair shares: `[Color, Color 2, ..., virtual, Mask]`, and on
+  a folder `[Color, Color 2, ..., virtual, Content Color, Mask]`. The plan
+  put `Content Color` first on a folder. It moved below the virtual input
+  so that the first pair input is always the first input, and the virtual
+  input sits right below the pairs, as the design asks.
+- Pairs are numbered by position: the n-th pair input goes with the n-th
+  output. Both sockets of a pair are named by `pair_name`: `Color`,
+  `Color 2` and so on. Removing a pair names the pairs after it again but
+  keeps their identifiers.
+- The virtual input is a `NodeSocketVirtual` with the identifier
+  `__extend__`, as on Blender's own nodes. It has no `default_value`, so
+  `is_slot`, `channel_sockets` and `rgba_input` never see it.
 - Each pair compiles as its own blend, from its input to its output, with
-  the node's shared settings.
-- Prerequisite for linked layers: `detach`, `attach` and `move` must take
-  the slot of the stack being edited and touch only that link. Today
-  `detach` removes every slot link on the output and relinks one, so a
-  layer that feeds two stacks empties the other when it moves.
-  `layer_above` likewise needs to know which stack it is asked about.
-- Blender's cycle check is per node, so one node twice on one stack path
-  gets an invalid link. Paste Linked refuses that case.
+  the node's shared settings. `pair_role` adds `@<output identifier>` to
+  the roles of every pair but the one with the `Color` identifier. So a
+  layer with one pair compiles as in slice 1, and removing a pair keeps
+  the other pairs' compiled nodes.
+
+### Adding and removing pairs
+
+- `PaintSystemLayerNode.update` turns a link into the virtual input into
+  a new pair: it removes the link and links the same source into the
+  input `add_pair` returns. Found while probing: `Node.update` runs once
+  per node for a `links.new` from Python, with the new link already in
+  place, and links made there are kept. Links made in `NodeTree.update`
+  are dropped. The handler is idempotent anyway, because nothing is left
+  linked into the virtual input.
+- Unlinking a pair's input keeps the pair and its output.
+- The node editor sidebar has a Pairs subpanel under Layers
+  (`PAINTSYSTEM_PT_layer_pairs`). It lists the active layer's pairs, each
+  with the channel its stack reaches, or "In no stack". Add Pair adds a
+  pair in no stack. Remove Pair takes the selected pair out of its stack,
+  closes the gap and removes the pair with its filter result. The last
+  pair cannot be removed. The list's selection, `active_pair_index`, is
+  left out of the compile hash.
+- Remove Layer removes only the pair in the active channel's stack. A
+  folder's content goes only when the folder itself is deleted.
+- The layer list shows a placeholder `LINKED` badge on a layer with more
+  than one pair.
+
+### Per-pair state
+
+- Each pair has a state in the layer's `pairs` collection, at the pair's
+  position: its cache (`PairCache`) and, on a filter layer, its result,
+  freshness and refresh error (`PaintSystemFilterPair`). Settings stay on
+  the layer and are shared, Auto Refresh and the cache's UV map included.
+- Bake Cache, Update Filter and Clear Result act on the pair in the
+  active channel's stack (`pair_in_stack`).
+- In-memory tables, such as the refresh job and its counts, key a pair
+  by `pair_key`: the node's uuid and the output's identifier. Blender
+  gives a new socket the identifier of one removed earlier, so
+  `layer_job.forget` drops a removed pair's job and counts before its
+  sockets go.
+- `path_from_id` cannot make a path to a property group stored on a node,
+  so `PaintSystemFilterPair.node` finds its node by searching the tree.
+
+### Stack model
+
+- Every stack operation takes the pair of the stack it edits, as a
+  `Position(node, pair)`, and touches only that pair's link. `detach`,
+  `attach`, `move`, `layer_above` and `layer_below` all take a pair.
+- Blender's cycle check is per node, so a layer can sit in one channel
+  twice without a cycle, for example inside a linked folder and again
+  below it. `move` refuses to make that (`stack_ops.repeats`). Paste
+  Linked must refuse it too.
+
+### File compatibility
+
+- No migration. `complete_pairs` runs when a file is read, and gives
+  every layer in the editable trees a virtual input and a state per pair.
+  A layer saved before pairs existed bakes its cache and builds its
+  filter result again.
 
 ## Acceptance
 
@@ -147,11 +216,22 @@ Made with the user on 2026-09-23.
   - A float child channel, which has no alpha since PS-005, feeds the
     parent's channel, and a constant feeds the parent's alpha. Retyping
     the child keeps the parent's compiled links (`tests/test_compile.py`).
-- Slice 2:
+- Slice 2, done apart from the GUI check:
   - Linking into the virtual input adds a pair above it; the link lands
-    on the new pair and `Mask` stays last.
-  - Removing a pair in the sidebar list keeps the other pairs' links; the
-    last pair cannot be removed.
-  - Unlinking a pair's input keeps the pair and its output.
-  - Dragging a link onto the virtual socket in the node editor (a GUI
-    check by the user).
+    on the new pair, the virtual input is free again and `Mask` stays
+    last (`tests/test_pairs.py`).
+  - Each pair blends its own stack with the shared settings, and is
+    cached and filtered on its own (`tests/test_pairs.py`).
+  - Unlinking a pair's input keeps the pair and its output
+    (`tests/test_pairs.py`).
+  - Removing a pair, from the sidebar list or with Remove Layer, keeps
+    the other pairs' links and compiled nodes; the last pair cannot be
+    removed from the list (`tests/test_pairs.py`).
+  - A folder's pairs share its content (`tests/test_pairs.py`).
+  - Moves never put a layer in one channel twice (`tests/test_pairs.py`).
+  - A layer saved before pairs gets its virtual input and pair states
+    when the file is read (`tests/test_layers.py`).
+  - The pair list draws in the node editor sidebar
+    (`tests/test_ui_draw.py`, CI only).
+  - Dragging a link onto the virtual socket in the node editor, and the
+    Pairs list (a GUI check by the user).
