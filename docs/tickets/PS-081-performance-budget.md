@@ -157,7 +157,7 @@ Keep the compile step invisible during painting and layer editing.
   opacity edit from 273 ms to 187 ms and a 100-layer one from 1135 ms to
   645 ms (measured on 2026-09-17 during the PS-001 shared blend group
   experiment, whose layout has more links, under heavy machine load).
-- `NodeTreeBuilder._resolve_overlaps_for_group` is quadratic in the
+- `NodeLayout._resolve_overlaps_for_group` (`compiler/layout.py`) is quadratic in the
   positioned nodes. The first build of that experiment's 50-layer
   MULTIPLY stack, 152 nodes, spent 4.4 s of 5.4 s there, which a first
   setup or a v2 migration of a large stack would feel.
