@@ -249,10 +249,12 @@ class PAINTSYSTEM_OT_bake_cache(Operator):
     def invoke(self, context, event):
         tree = get_active_tree(context)
         node = button_layer(context, tree)
-        if node is not None and node.cache_image is not None:
-            self.resolution = str(node.cache_image.size[0]) if str(node.cache_image.size[0]) in {
-                i[0] for i in RESOLUTION_ITEMS} else self.resolution
+        if node is not None:
+            # A bake always sets the layer's UV map, so start from it.
             self.uv_map = node.cache_uv_map
+            image = node.cache_image
+            if image is not None and str(image.size[0]) in {item[0] for item in RESOLUTION_ITEMS}:
+                self.resolution = str(image.size[0])
         return context.window_manager.invoke_props_dialog(self)
 
     def draw(self, context):

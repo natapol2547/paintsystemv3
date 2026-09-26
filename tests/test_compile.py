@@ -320,6 +320,38 @@ try:
     bpy.data.meshes.remove(bare_mesh)
     bpy.data.images.remove(scratch)
 
+    section("bake through the UV map the cache is read with")
+    uv_layers = cube.data.uv_layers
+    first_uv = uv_layers.active.name
+    # Longer than the 63 bytes the bake operator's uv_layer string holds.
+    second_uv = "Second UV map, with a name longer than any operator string holds"
+    uv_layers.new(name=second_uv)
+    # Squeeze the second UV map into the bottom-left quarter, so a bake
+    # through any other map paints outside it.
+    for corner in uv_layers[second_uv].data:
+        corner.uv = corner.uv * 0.5
+    uv_layers.active = uv_layers[first_uv]
+    uv_layers[second_uv].active_render = True
+    for uv_map in (second_uv, ""):
+        baked = bake_node_cache(bpy.context, tree, img_layer, cube, width=16, height=16, margin=0,
+                                uv_map=uv_map)
+        alpha = list(baked.pixels)[3::4]
+        painted = [(index % 16, index // 16) for index, value in enumerate(alpha) if value > 0.5]
+        outside = [(x, y) for x, y in painted if x >= 8 or y >= 8]
+        which = "the named one" if uv_map else "the active render one"
+        check(painted and not outside,
+              f"the bake writes through {which}, not the active one {len(painted)} {outside}")
+        check(img_layer.cache_uv_map == uv_map, f"and the cache is read through it ({uv_map!r})")
+    check(uv_layers.active.name == first_uv, "the active UV map is the user's again")
+    try:
+        bake_node_cache(bpy.context, tree, img_layer, cube, uv_map="No Such Map")
+        refused = False
+    except RuntimeError:
+        refused = True
+    check(refused, "a UV map the mesh does not have is refused")
+    uv_layers[first_uv].active_render = True
+    uv_layers.remove(uv_layers[second_uv])
+
     solid.fill_color = (0.2, 0.2, 0.2, 1.0)
     compile_tree(tree)
     check(img_layer.cache_stale, "upstream edit invalidates cache")
