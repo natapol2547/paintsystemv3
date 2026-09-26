@@ -6,9 +6,9 @@ A brush is the alpha channel of its image, centred on a square. This
 matches how v2 read a brush (see `mask_of`).
 
 Each preset is read from disk once per session and kept, together with
-the `plan.Areas` its stamp counts come from. A filter layer rebuilds by
-itself after every change below it, and loading twenty-one PNGs each
-time would cost more than the painting itself.
+the `resizing.Areas` its stamp counts come from. A filter layer
+rebuilds by itself after every change below it, and loading twenty-one
+PNGs each time would cost more than the painting itself.
 """
 from __future__ import annotations
 
@@ -19,11 +19,14 @@ import bpy
 import numpy as np
 
 from ..core import Refused
-from . import plan
+from . import resizing
 
 log = logging.getLogger(__name__)
 
 CIRCLE = 'CIRCLE'
+# Side of the default circle brush in texels, before it is resized to
+# each step. v2 used this size too, and resized it like any other brush.
+CIRCLE_SIDE = 50
 
 # Identifier, label, and the folder under ``presets`` holding the images.
 PRESETS = (
@@ -35,7 +38,7 @@ _FOLDER = os.path.join(os.path.dirname(__file__), "presets")
 _EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
 
 _cache: dict[str, list[np.ndarray]] = {}
-_areas: dict[str, plan.Areas] = {}
+_areas: dict[str, resizing.Areas] = {}
 
 
 def brush_items() -> list[tuple[str, str, str]]:
@@ -50,7 +53,7 @@ def masks(name: str) -> list[np.ndarray]:
     """The brush masks of *name*: square float32 arrays, row 0 at the bottom."""
     if name not in _cache:
         if name == CIRCLE:
-            _cache[name] = [plan.circle()]
+            _cache[name] = [circle()]
         else:
             folder = next((folder for preset, _label, folder in PRESETS if preset == name),
                           None)
@@ -60,10 +63,10 @@ def masks(name: str) -> list[np.ndarray]:
     return _cache[name]
 
 
-def areas(name: str) -> plan.Areas:
-    """The `plan.Areas` of the brushes of *name*, made once per session."""
+def areas(name: str) -> resizing.Areas:
+    """The `resizing.Areas` of the brushes of *name*, made once per session."""
     if name not in _areas:
-        _areas[name] = plan.Areas(masks(name))
+        _areas[name] = resizing.Areas(masks(name))
     return _areas[name]
 
 
@@ -113,7 +116,31 @@ def mask_of(image: bpy.types.Image) -> np.ndarray:
         mask = values @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
     else:
         mask = values[..., 0]
-    return plan.square(np.clip(mask, 0.0, 1.0).astype(np.float32))
+    return square(np.clip(mask, 0.0, 1.0).astype(np.float32))
+
+
+def circle(side: int = CIRCLE_SIDE) -> np.ndarray:
+    """v2's default brush: a cone of alpha falling to zero at the rim."""
+    centre = side / 2
+    y, x = np.ogrid[-centre:side - centre, -centre:side - centre]
+    return np.clip(1.0 - np.sqrt(x * x + y * y) / centre, 0.0, 1.0).astype(np.float32)
+
+
+def square(mask: np.ndarray) -> np.ndarray:
+    """*mask* centred on a transparent square, padded the way v2 padded a brush.
+
+    v2 stored rows top-down and put the odd row of padding at the bottom.
+    Rows here run bottom-up, so that extra row comes first.
+    """
+    height, width = mask.shape
+    if height == width:
+        return mask
+    side = max(height, width)
+    padded = np.zeros((side, side), dtype=np.float32)
+    bottom = side - height - (side - height) // 2
+    left = (side - width) // 2
+    padded[bottom:bottom + height, left:left + width] = mask
+    return padded
 
 
 def release() -> None:

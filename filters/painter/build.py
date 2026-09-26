@@ -13,8 +13,8 @@ instead of a list of passes. The steps are:
 3. Read both at every stamp centre `plan.draws` picked, in one small
    pass. This is the only readback before the result.
 4. `plan.stamps` decides which stamps land and how. Each step's stamps
-   are drawn as rotated quads into a premultiplied copy of the picture,
-   from one atlas of that step's brushes.
+   are drawn as rotated quads (`drawing.quads`) into a premultiplied
+   copy of the picture, from one atlas of that step's brushes.
 5. Un-premultiply the canvas and decode it back to scene linear, because
    the layer build encodes whatever a kind returns.
 
@@ -36,7 +36,7 @@ from gpu_extras.batch import batch_for_shader
 from ...gpu_passes.core import offscreen_state, read_color
 from .. import registry
 from ..core import FilterSpec, new_texture, run_pass
-from . import brushes, plan
+from . import brushes, drawing, plan
 
 log = logging.getLogger(__name__)
 
@@ -240,20 +240,20 @@ def build(settings, texture, pool):
         offset += step.count
         stamps = plan.stamps(settings, step, numbers, sampled[rows], gradients[rows], peak)
         if len(stamps):
-            columns, atlas_rows, cell = plan.atlas_layout(
+            columns, atlas_rows, cell = drawing.atlas_layout(
                 len(masks), min(step.size, largest), limit)
             key = (cell, columns, atlas_rows)
             entry = used.get(key) or previous.get(key)
             if entry is None:
-                image, origins = plan.atlas(masks, cell, columns, atlas_rows)
+                image, origins = drawing.atlas(masks, cell, columns, atlas_rows)
                 entry = (_upload(image), origins)
             used[key] = entry
             atlas, origins = entry
             for start in range(0, len(stamps), DRAW_CHUNK):
                 yield (f"painting, step {step.index + 1} of {len(steps)}",
                        0.2 + 0.75 * (done + start) / total)
-                geometry = plan.quads(stamps.part(start, start + DRAW_CHUNK),
-                                      step.size, origins, cell)
+                geometry = drawing.quads(stamps.part(start, start + DRAW_CHUNK),
+                                         step.size, origins, cell)
                 _draw_stamps(framebuffer, (width, height), atlas, geometry)
         done += step.count
     # Replace rather than merge, so only the atlases of one build are kept.

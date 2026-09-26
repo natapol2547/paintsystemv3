@@ -1,9 +1,10 @@
 """Where the painter's stamps go, checked without a GPU (PS-053).
 
-`filters.painter.plan` is plain numpy, so it is held to v2's arithmetic
-directly: the schedule and the stamp count are compared with v2's own
-code, written out below as it stands in v2's `brush_painter_core`, on
-brushes read the way v2 read them. The rest is what v3 changed on
+`filters.painter.plan`, `resizing`, `color_jitter` and `drawing` are
+plain numpy, so they are held to v2's arithmetic directly: the schedule
+and the stamp count are compared with v2's own code, written out below
+as it stands in v2's `brush_painter_core`, on brushes read the way v2
+read them. The rest is what v3 changed on
 purpose, and what a later change could quietly undo:
 
 - the random numbers come from the seed alone, per step and per stream,
@@ -31,6 +32,9 @@ from harness import check, finish, import_from, register_addon, section  # noqa:
 
 register_addon()
 plan = import_from("filters.painter.plan")
+resizing = import_from("filters.painter.resizing")
+color_jitter = import_from("filters.painter.color_jitter")
+drawing = import_from("filters.painter.drawing")
 brushes = import_from("filters.painter.brushes")
 layer_specs = import_from("filters.layer_specs")
 filters_core = import_from("filters.core")
@@ -171,7 +175,7 @@ try:
     check(same(short_1[0], np.flipud(v2_brush(os.path.join(folder, first)))),
           "a preset brush is v2's brush, with its rows bottom-up")
     odd = np.ones((3, 6), dtype=np.float32)
-    padded = plan.square(odd)
+    padded = brushes.square(odd)
     check(same(np.flipud(padded)[1:4], odd) and float(np.flipud(padded)[0].sum()) == 0.0,
           "an odd row of padding lands where v2's did once the rows are flipped back")
 
@@ -180,27 +184,27 @@ try:
     worst = 0.0
     for side, target in ((50, 17), (107, 64), (212, 3), (30, 90), (1024, 204)):
         mask = rng.random((side, side)).astype(np.float32)
-        worst = max(worst, float(np.abs(plan.resize_bilinear(mask, target)
+        worst = max(worst, float(np.abs(resizing.resize_bilinear(mask, target)
                                         - v2_resize(mask, target, target)).max()))
     check(worst < 1e-6, f"the resize the count is taken on is v2's (worst {worst:.2e})")
-    check(plan.resize_bilinear(np.eye(4, dtype=np.float32), 1).shape == (1, 1),
+    check(resizing.resize_bilinear(np.eye(4, dtype=np.float32), 1).shape == (1, 1),
           "and a brush resized to one texel is its mean, as in v2")
 
     mask = rng.random((64, 64)).astype(np.float32)
     boxed = mask.reshape(16, 4, 16, 4).mean(axis=(1, 3))
-    check(np.abs(plan.resize(mask, 16) - boxed).max() < 1e-6,
+    check(np.abs(resizing.resize(mask, 16) - boxed).max() < 1e-6,
           "shrinking by a whole factor averages every texel rather than skipping most")
     # v2's circle is half a texel off centre itself, so the brush for
     # this one is symmetric by construction.
     fifty = rng.random((50, 50)).astype(np.float32)
     fifty = fifty + fifty[::-1]
     fifty = fifty + fifty[:, ::-1]
-    small = plan.resize(fifty, 12)
+    small = resizing.resize(fifty, 12)
     check(np.abs(small - small[::-1]).max() < 1e-6 and np.abs(small - small[:, ::-1]).max() < 1e-6,
           "and the rows that do not divide are trimmed evenly, so the brush stays centred")
     # Within single precision: `resize` runs the bilinear step one axis at
     # a time, which rounds differently.
-    check(np.abs(plan.resize(fifty, 40) - plan.resize_bilinear(fifty, 40)).max() < 1e-6,
+    check(np.abs(resizing.resize(fifty, 40) - resizing.resize_bilinear(fifty, 40)).max() < 1e-6,
           "shrinking by less than two is the plain bilinear resize")
     worst = 0.0
     for side, target in ((50, 17), (107, 64), (30, 90), (1024, 409), (312, 311)):
@@ -214,8 +218,8 @@ try:
                 cells, factor, cells, factor).mean(axis=(1, 3))
         else:
             reference = mask
-        worst = max(worst, float(np.abs(plan.resize(mask, target)
-                                        - plan.resize_bilinear(reference, target)).max()))
+        worst = max(worst, float(np.abs(resizing.resize(mask, target)
+                                        - resizing.resize_bilinear(reference, target)).max()))
     check(worst < 1e-6, f"at any factor (worst {worst:.2e}), well inside a half float's step")
 
     section("the covered area, counted without resizing")
@@ -224,32 +228,32 @@ try:
     sides = list(range(1, 65)) + [int(side) for side in rng.integers(65, 1100, 24)]
     misses = []
     for mask in presets:
-        inside = plan.covered(mask)
+        inside = resizing.covered(mask)
         for side in sides:
-            want = int(np.count_nonzero(plan.resize_bilinear(mask, side) > 0))
-            got = plan.covered_area(mask, side, inside)
+            want = int(np.count_nonzero(resizing.resize_bilinear(mask, side) > 0))
+            got = resizing.covered_area(mask, side, inside)
             if got != want:
                 misses.append((mask.shape[0], side, got, want))
-    check(all(plan.covered(mask) is not None for mask in presets) and not misses,
+    check(all(resizing.covered(mask) is not None for mask in presets) and not misses,
           f"every shipped brush at {len(sides)} sides counts what the resize leaves "
           f"({len(presets) * len(sides)} pairs; first miss {misses[:1]})")
     sparse = np.zeros((40, 40), dtype=np.float32)
     sparse[::7, ::5] = 1.0
     sparse[13, 21] = 1e-3
-    check(all(plan.covered_area(sparse, side, plan.covered(sparse))
-              == np.count_nonzero(plan.resize_bilinear(sparse, side) > 0) for side in range(1, 90)),
+    check(all(resizing.covered_area(sparse, side, resizing.covered(sparse))
+              == np.count_nonzero(resizing.resize_bilinear(sparse, side) > 0) for side in range(1, 90)),
           "and so does a brush of isolated texels, where every tap it skips shows")
     faint = sparse.copy()
     faint[0, 0] = 1e-30
-    check(plan.covered(faint) is None and plan.covered(-sparse) is None
-          and plan.covered(np.full((4, 4), np.nan, dtype=np.float32)) is None,
+    check(resizing.covered(faint) is None and resizing.covered(-sparse) is None
+          and resizing.covered(np.full((4, 4), np.nan, dtype=np.float32)) is None,
           "a value the resize could round away, a negative one or NaN falls back to resizing")
-    check(plan.covered_area(faint, 9, None)
-          == np.count_nonzero(plan.resize_bilinear(faint, 9) > 0),
+    check(resizing.covered_area(faint, 9, None)
+          == np.count_nonzero(resizing.resize_bilinear(faint, 9) > 0),
           "which counts the resize itself")
-    areas = plan.Areas(brushes.masks('CIRCLE'))
-    check(areas.mean(12) == areas.mean(12) == plan.covered_area(
-              brushes.masks('CIRCLE')[0], 12, plan.covered(brushes.masks('CIRCLE')[0])),
+    areas = resizing.Areas(brushes.masks('CIRCLE'))
+    check(areas.mean(12) == areas.mean(12) == resizing.covered_area(
+              brushes.masks('CIRCLE')[0], 12, resizing.covered(brushes.masks('CIRCLE')[0])),
           "Areas averages the brushes' counts and keeps each side's")
 
     section("the schedule, against v2")
@@ -257,7 +261,7 @@ try:
     matched = 0
     for preset, folder in (('GOUACHE_SHORT_1', "gouache_short_1"),
                            ('GOUACHE_SHORT_2', "gouache_short_2"), ('CIRCLE', None)):
-        v2_masks = v2_brushes(folder) if folder else [plan.circle()]
+        v2_masks = v2_brushes(folder) if folder else [brushes.circle()]
         ours = brushes.areas(preset)
         for settings in (plan.Settings(), plan.Settings(steps=1), plan.Settings(steps=7),
                          plan.Settings(density=0.25, min_scale=0.01, max_scale=0.4, steps=5)):
@@ -280,7 +284,7 @@ try:
     tiny = plan.schedule(plan.Settings(min_scale=0.001, max_scale=0.001), 64, 64, circle_areas)
     check(all(step.size == 1 and step.count == 64 * 64 // 8 for step in tiny),
           "a brush smaller than a texel is one texel, at most one stamp per eight texels")
-    empty = plan.Areas([np.zeros((8, 8), dtype=np.float32)])
+    empty = resizing.Areas([np.zeros((8, 8), dtype=np.float32)])
     check(plan.stamp_count(0.7, 512, 512, empty.mean(8)) == 512 * 512 // 8,
           "and a brush that covers nothing counts as one texel instead of dividing by zero")
 
@@ -348,29 +352,29 @@ try:
     got = planned(settings, faded, few_drawn, half, few_gradients)
     check(np.abs(got.color[0] - (0.05, 0.1, 0.2, 0.25)).max() < 1e-6,
           f"premultiplied by its own alpha and the step's opacity ({got.color[0]})")
-    check(plan.jitter_hsv(half, (0.0, 0.0, 0.0), few_drawn.jitter) is half,
+    check(color_jitter.jitter_hsv(half, (0.0, 0.0, 0.0), few_drawn.jitter) is half,
           "with no colour variation the colour is left exactly as sampled")
 
     samples = np.concatenate([rng.random((200, 3)), np.eye(3), 1.0 - np.eye(3),
                               [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [1.0, 1.0, 1.0]]])
-    h, s, v = plan.rgb_to_hsv(samples)
+    h, s, v = color_jitter.rgb_to_hsv(samples)
     want = np.array([colorsys.rgb_to_hsv(*rgb) for rgb in samples])
     check(np.abs(np.stack([h, s, v], axis=1) - want).max() < 1e-9,
           "hue, saturation and value are the standard ones, primaries and greys included")
-    back = plan.hsv_to_rgb(*want.T)
+    back = color_jitter.hsv_to_rgb(*want.T)
     check(np.abs(back - samples).max() < 1e-9, "and convert back to the colour they came from")
 
     rgba = np.concatenate([samples, np.full((len(samples), 1), 0.7)], axis=1)
     jitter = rng.random((len(samples), 3)) - 0.5
-    shifted = plan.jitter_hsv(rgba, (1.0, 0.0, 0.0), jitter)
-    h2, _s, _v = plan.rgb_to_hsv(shifted[:, :3])
+    shifted = color_jitter.jitter_hsv(rgba, (1.0, 0.0, 0.0), jitter)
+    h2, _s, _v = color_jitter.rgb_to_hsv(shifted[:, :3])
     coloured = (s > 1e-3) & (v > 1e-3)
     miss = np.abs(((h2 - (h + jitter[:, 0])) + 0.5) % 1.0 - 0.5)
     check(float(miss[coloured].max()) < 1e-6 and bool(np.all(shifted[:, 3] == 0.7)),
           "a hue shift of one turns each hue by its own draw, up to half a turn either way, "
           "and leaves alpha alone")
-    shifted = plan.jitter_hsv(rgba, (0.0, 0.4, 0.4), jitter)
-    _h, s2, v2 = plan.rgb_to_hsv(shifted[:, :3])
+    shifted = color_jitter.jitter_hsv(rgba, (0.0, 0.4, 0.4), jitter)
+    _h, s2, v2 = color_jitter.rgb_to_hsv(shifted[:, :3])
     want_v = np.clip(v + jitter[:, 2] * 0.4, 0.0, 1.0)
     want_s = np.clip(s + jitter[:, 1] * 0.4, 0.0, 1.0)
     lit = want_v > 1e-3
@@ -402,14 +406,14 @@ try:
           "and Random Rotation by up to half the range either way, from the seeded stream")
 
     section("the atlas")
-    check(plan.atlas_layout(1, 50, 16384) == (1, 1, 50), "one brush is one cell")
-    check(plan.atlas_layout(16, 300, 16384) == (4, 4, 300), "sixteen are four by four")
-    check(plan.atlas_layout(5, 600, 16384) == (3, 2, 600), "five are three by two")
-    columns, rows, cell = plan.atlas_layout(16, 1000, 2048)
+    check(drawing.atlas_layout(1, 50, 16384) == (1, 1, 50), "one brush is one cell")
+    check(drawing.atlas_layout(16, 300, 16384) == (4, 4, 300), "sixteen are four by four")
+    check(drawing.atlas_layout(5, 600, 16384) == (3, 2, 600), "five are three by two")
+    columns, rows, cell = drawing.atlas_layout(16, 1000, 2048)
     check(cell == 510 and columns * (cell + 2) <= 2048,
           f"too large for the texture, the cells shrink to fit, gutters included ({cell})")
     constants = [np.full((8, 8), value, dtype=np.float32) for value in (0.25, 0.5, 0.75)]
-    image, origins = plan.atlas(constants, 4, 2, 2)
+    image, origins = drawing.atlas(constants, 4, 2, 2)
     check(image.shape == (12, 12) and same(origins, np.array([[1, 1], [7, 1], [1, 7]],
                                                              dtype=np.float32)),
           f"cells of four with a texel of gutter all round ({origins.tolist()})")
@@ -425,7 +429,7 @@ try:
         single = plan.Stamps(x=np.array([10]), y=np.array([20]), brush=np.array([0]),
                              angle=np.array([0.0]),
                              color=np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32))
-        positions, coords, colours, indices = plan.quads(single, size, np.array([[1.0, 1.0]]), 5)
+        positions, coords, colours, indices = drawing.quads(single, size, np.array([[1.0, 1.0]]), 5)
         low = (10 - size // 2, 20 - size // 2)
         check(same(positions, np.array([low, (low[0] + size, low[1]),
                                         (low[0] + size, low[1] + size),
@@ -436,13 +440,13 @@ try:
     check(same(indices, np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32))
           and colours.shape == (4, 4), "two triangles and a colour per corner")
     quarter = replace(single, angle=np.array([pi / 2]))
-    positions = plan.quads(quarter, 8, np.array([[1.0, 1.0]]), 5)[0]
+    positions = drawing.quads(quarter, 8, np.array([[1.0, 1.0]]), 5)[0]
     check(np.abs(positions[0] - (14.0, 16.0)).max() < 1e-5,
           f"a quarter turn is counter-clockwise: the lower-left corner goes to the lower right "
           f"({positions[0].tolist()})")
     pair = plan.Stamps(x=np.array([0, 5]), y=np.array([0, 5]), brush=np.array([1, 0]),
                        angle=np.zeros(2), color=np.ones((2, 4), dtype=np.float32))
-    positions, coords, colours, indices = plan.quads(pair, 4, np.array([[1.0, 1.0], [7.0, 1.0]]), 4)
+    positions, coords, colours, indices = drawing.quads(pair, 4, np.array([[1.0, 1.0], [7.0, 1.0]]), 4)
     check(same(indices[2:], np.array([[4, 5, 6], [4, 6, 7]], dtype=np.int32))
           and same(coords[0], np.array([7.0, 1.0], dtype=np.float32)),
           "each stamp gets its own four corners and its own brush's cell")

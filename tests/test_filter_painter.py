@@ -38,6 +38,7 @@ filters_core = import_from("filters.core")
 layer_build = import_from("filters.layer_build")
 painter_build = import_from("filters.painter.build")
 plan = import_from("filters.painter.plan")
+drawing = import_from("filters.painter.drawing")
 create_managed_image = import_from("compiler.bake").create_managed_image
 
 IMAGE = 'PaintSystemImageLayerNode'
@@ -105,10 +106,10 @@ def canvas(side):
 
 
 def draw(framebuffer, side, masks, stamps, size, cell):
-    image, origins = plan.atlas(masks, cell, *plan.atlas_layout(len(masks), cell, 16384)[:2])
+    image, origins = drawing.atlas(masks, cell, *drawing.atlas_layout(len(masks), cell, 16384)[:2])
     atlas = painter_build._upload(image)
     painter_build._draw_stamps(framebuffer, (side, side), atlas,
-                               plan.quads(stamps, size, origins, cell))
+                               drawing.quads(stamps, size, origins, cell))
     return gpu_core.read_color(framebuffer, side, side)
 
 

@@ -5,7 +5,9 @@ Everything here is numpy and works per stamp, so it runs without a GPU
 and tests can check it against v2's arithmetic directly. `painter.build`
 does the per-texel work around it. It blurs the picture, takes its
 gradient, reads both at the centres `draws` picked, passes them to
-`stamps`, and draws what `quads` returns.
+`stamps`, and draws what `drawing.quads` returns. How a brush is
+resized and what it covers is in `resizing`, and the colour shift is in
+`color_jitter`.
 
 A build follows v2's order:
 
@@ -31,13 +33,11 @@ angle turns counter-clockwise on screen. v2 stored its arrays top-down.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import ceil, sqrt
 
 import numpy as np
 
-# Side of the default circle brush in texels, before it is resized to
-# each step. v2 used this size too, and resized it like any other brush.
-CIRCLE_SIDE = 50
+from .color_jitter import jitter_hsv
+from .resizing import Areas
 
 # v2's stamp count: enough stamps to cover *density* of the image once,
 # assuming each stamp overlaps the others by `OVERLAP`, and never fewer
@@ -46,11 +46,6 @@ OVERLAP = 0.7
 MIN_STAMPS = 50
 # At most one stamp per this many texels of the image.
 TEXELS_PER_STAMP = 8
-
-# Smallest non-zero brush value that `covered_area` can count without
-# running the resize. A smaller value could round to zero inside the
-# resize, and the count would no longer match v2's.
-SAFE_MIN = 1e-20
 
 # A layer's Smoothing is in texels of an image this wide, which is v2's
 # usual size and a new filter layer's. It scales with the layer's
@@ -182,177 +177,6 @@ class Stamps:
                       color=self.color[start:stop])
 
 
-# -- brushes ------------------------------------------------------------------
-
-
-def circle(side: int = CIRCLE_SIDE) -> np.ndarray:
-    """v2's default brush: a cone of alpha falling to zero at the rim."""
-    centre = side / 2
-    y, x = np.ogrid[-centre:side - centre, -centre:side - centre]
-    return np.clip(1.0 - np.sqrt(x * x + y * y) / centre, 0.0, 1.0).astype(np.float32)
-
-
-def square(mask: np.ndarray) -> np.ndarray:
-    """*mask* centred on a transparent square, padded the way v2 padded a brush.
-
-    v2 stored rows top-down and put the odd row of padding at the bottom.
-    Rows here run bottom-up, so that extra row comes first.
-    """
-    height, width = mask.shape
-    if height == width:
-        return mask
-    side = max(height, width)
-    padded = np.zeros((side, side), dtype=np.float32)
-    bottom = side - height - (side - height) // 2
-    left = (side - width) // 2
-    padded[bottom:bottom + height, left:left + width] = mask
-    return padded
-
-
-def _sample_axes(src_h: int, src_w: int, side: int):
-    """The sample positions of a bilinear resize from *src_h* by *src_w* to *side*.
-
-    Returns ``(y, x, y0, x0, y1, x1)``: the float32 sample positions on
-    each axis, and the int32 texels on either side of them, clamped to
-    the edge. `resize_bilinear`, `covered_area` and `resize` all use
-    these, so the stamp count and the drawn stamp sample the same texels.
-    """
-    y = np.linspace(0, src_h - 1, side, dtype=np.float32)
-    x = np.linspace(0, src_w - 1, side, dtype=np.float32)
-    y0 = np.floor(y).astype(np.int32)
-    x0 = np.floor(x).astype(np.int32)
-    y1 = np.minimum(y0 + 1, src_h - 1)
-    x1 = np.minimum(x0 + 1, src_w - 1)
-    return y, x, y0, x0, y1, x1
-
-
-def resize_bilinear(mask: np.ndarray, side: int) -> np.ndarray:
-    """*mask* resized to *side* by *side* with v2's `_resize_mask_bilinear`.
-
-    Each output texel reads only the two by two input texels nearest it.
-    So shrinking a brush a lot skips most of its texels, which is why
-    `resize` box-filters first for drawing. The stamp count still uses
-    this resize, because v2's count was taken on it. `covered_area` gets
-    the same count without running it.
-    """
-    src_h, src_w = mask.shape
-    if (src_h, src_w) == (side, side):
-        return mask.astype(np.float32, copy=True)
-    if side <= 1:
-        return np.full((1, 1), float(mask.mean()), dtype=np.float32)
-    y, x, y0, x0, y1, x1 = _sample_axes(src_h, src_w, side)
-    wy = (y - y0)[:, None]
-    wx = (x - x0)[None, :]
-    top = mask[y0[:, None], x0[None, :]] * (1.0 - wx) + mask[y0[:, None], x1[None, :]] * wx
-    bottom = mask[y1[:, None], x0[None, :]] * (1.0 - wx) + mask[y1[:, None], x1[None, :]] * wx
-    return (top * (1.0 - wy) + bottom * wy).astype(np.float32)
-
-
-def covered(mask: np.ndarray) -> np.ndarray | None:
-    """``mask > 0`` for `covered_area`, or None when it cannot stand in for the resize.
-
-    It cannot when *mask* has a value that is negative, not finite, or so
-    close to zero that the resize could round it away (`SAFE_MIN`). No
-    shipped brush has such a value, but a brush made from any image could.
-    """
-    if not np.isfinite(mask).all() or float(mask.min()) < 0.0:
-        return None
-    inside = mask > 0
-    if inside.any() and float(mask[inside].min()) < SAFE_MIN:
-        return None
-    return inside
-
-
-def covered_area(mask: np.ndarray, side: int, inside: np.ndarray | None) -> int:
-    """How many texels `resize_bilinear(mask, side)` leaves above zero, without resizing.
-
-    Each term of that resize is a texel of *mask* (never negative) times
-    a weight. A weight is zero only where a sample lands exactly on a
-    whole texel. So an output texel is above zero exactly when a texel it
-    reads with a non-zero weight is above zero. The count is therefore a
-    lookup of *inside* (what `covered` returned for *mask*) at the same
-    sample positions. That costs a tenth of the float resize at 4K. When
-    *inside* is None, the real resize is counted instead.
-    """
-    src_h, src_w = mask.shape
-    if inside is None:
-        return int(np.count_nonzero(resize_bilinear(mask, side) > 0))
-    if (src_h, src_w) == (side, side):
-        return int(np.count_nonzero(inside))
-    if side <= 1:
-        return int(np.float32(mask.mean()) > 0)
-    y, x, y0, x0, y1, x1 = _sample_axes(src_h, src_w, side)
-    rows = inside.take(y0, axis=0)
-    rows |= inside.take(y1, axis=0) & (y != y0)[:, None]
-    hit = rows.take(x0, axis=1)
-    hit |= rows.take(x1, axis=1) & (x != x0)[None, :]
-    return int(np.count_nonzero(hit))
-
-
-class Areas:
-    """The mean covered area of a set of brushes at each side, for `stamp_count`.
-
-    `painter.brushes` keeps one per preset. So each mask goes through
-    `covered` once per session, and a rebuild at a side already seen just
-    looks its area up. The table holds one number per side asked for.
-    """
-
-    def __init__(self, masks):
-        self._masks = list(masks)
-        self._inside = [covered(mask) for mask in self._masks]
-        self._means: dict[int, float] = {}
-
-    def mean(self, side: int) -> float:
-        """The covered area at *side*, averaged over the brushes. At least one texel."""
-        area = self._means.get(side)
-        if area is None:
-            counts = [covered_area(mask, side, inside)
-                      for mask, inside in zip(self._masks, self._inside)]
-            area = self._means[side] = max(1.0, sum(counts) / len(counts))
-        return area
-
-
-def resize(mask: np.ndarray, side: int) -> np.ndarray:
-    """*mask* resized to *side* for drawing, box-filtered first when it shrinks.
-
-    A brush shrunk by a factor of two or more is first box-filtered by
-    the whole part of that factor, so every input texel counts towards
-    the stamp. Rows and columns left over by that division are trimmed
-    evenly from both edges, which keeps the brush centred.
-
-    The bilinear step matches `resize_bilinear`, but runs one axis at a
-    time in single precision. That is four times as fast, and the
-    difference is smaller than the half float the atlas is uploaded as
-    can show.
-    """
-    src = mask.shape[0]
-    factor = src // side
-    if factor >= 2:
-        kept = src // factor * factor
-        start = (src - kept) // 2
-        block = mask[start:start + kept, start:start + kept]
-        # Strided sums instead of a reshaped mean, because the reshape
-        # would copy the block first.
-        rows = block[0::factor].copy()
-        for offset in range(1, factor):
-            rows += block[offset::factor]
-        boxed = rows[:, 0::factor].copy()
-        for offset in range(1, factor):
-            boxed += rows[:, offset::factor]
-        boxed *= np.float32(1.0 / (factor * factor))
-        mask = boxed
-    if mask.shape == (side, side):
-        return mask.astype(np.float32, copy=True)
-    if side <= 1:
-        return np.full((1, 1), float(mask.mean()), dtype=np.float32)
-    src_h, src_w = mask.shape
-    y, x, y0, x0, y1, x1 = _sample_axes(src_h, src_w, side)
-    wy = (y - y0.astype(np.float32))[:, None]
-    wx = (x - x0.astype(np.float32))[None, :]
-    rows = mask[y0] * (np.float32(1.0) - wy) + mask[y1] * wy
-    return (rows[:, x0] * (np.float32(1.0) - wx) + rows[:, x1] * wx).astype(np.float32)
-
-
 # -- the schedule -------------------------------------------------------------
 
 
@@ -447,112 +271,3 @@ def stamps(settings: Settings, step: Step, drawn: Draws, colors: np.ndarray,
     color = np.concatenate([colors[:, :3] * weight, weight], axis=1)
     return Stamps(x=drawn.x[keep], y=drawn.y[keep], brush=drawn.brush[keep],
                   angle=angle[keep], color=color[keep].astype(np.float32))
-
-
-def jitter_hsv(colors: np.ndarray, shifts, jitter: np.ndarray) -> np.ndarray:
-    """v2's `apply_color_shift`, applied per stamp with the seeded numbers.
-
-    A shift of *s* moves hue by up to half of *s* turns either way. It
-    moves saturation and value by up to half of *s*, clamped to 0..1.
-    Alpha is unchanged. With no shift at all, *colors* is returned as is.
-    """
-    hue, saturation, value = shifts
-    if not (hue or saturation or value):
-        return colors
-    h, s, v = rgb_to_hsv(colors[:, :3])
-    h = (h + jitter[:, 0] * hue) % 1.0
-    s = np.clip(s + jitter[:, 1] * saturation, 0.0, 1.0)
-    v = np.clip(v + jitter[:, 2] * value, 0.0, 1.0)
-    return np.concatenate([np.clip(hsv_to_rgb(h, s, v), 0.0, 1.0), colors[:, 3:4]], axis=1)
-
-
-def rgb_to_hsv(rgb: np.ndarray):
-    """``(n, 3)`` RGB to three arrays of hue in turns, saturation and value."""
-    r, g, b = rgb[:, 0], rgb[:, 1], rgb[:, 2]
-    high = rgb.max(axis=1)
-    low = rgb.min(axis=1)
-    delta = high - low
-    safe = np.where(delta > 0.0, delta, 1.0)
-    hue = np.where(high == r, (g - b) / safe,
-                   np.where(high == g, 2.0 + (b - r) / safe, 4.0 + (r - g) / safe))
-    hue = np.where(delta > 0.0, (hue / 6.0) % 1.0, 0.0)
-    saturation = np.where(high > 0.0, delta / np.where(high > 0.0, high, 1.0), 0.0)
-    return hue, saturation, high
-
-
-def hsv_to_rgb(h, s, v) -> np.ndarray:
-    """Three arrays of hue in turns, saturation and value to ``(n, 3)`` RGB."""
-    sector = h * 6.0
-    index = np.floor(sector).astype(np.int64) % 6
-    f = sector - np.floor(sector)
-    p = v * (1.0 - s)
-    q = v * (1.0 - s * f)
-    t = v * (1.0 - s * (1.0 - f))
-    choices = (
-        (v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q),
-    )
-    channels = [np.choose(index, [choice[channel] for choice in choices])
-                for channel in range(3)]
-    return np.stack(channels, axis=1)
-
-
-# -- geometry -----------------------------------------------------------------
-
-
-def atlas_layout(brushes: int, side: int, limit: int) -> tuple[int, int, int]:
-    """``(columns, rows, cell side)`` for *brushes* cells of up to *side* texels.
-
-    Each cell has a one-texel transparent gutter, so a bilinear read at a
-    cell's edge fades to nothing instead of reaching into the next brush.
-    When a step's brushes would not fit in a texture of *limit* texels
-    on a side, the cells are made smaller, and the stamp magnifies them.
-    """
-    columns = ceil(sqrt(brushes))
-    rows = ceil(brushes / columns)
-    fits = min(limit // columns, limit // rows) - 2
-    return columns, rows, max(1, min(side, fits))
-
-
-def atlas(masks, cell: int, columns: int, rows: int) -> tuple[np.ndarray, np.ndarray]:
-    """The brushes resized to *cell* and laid out in one single-channel image.
-
-    Returns the image, row 0 at the bottom, and the lower-left texel of
-    each brush in it as an ``(n, 2)`` array of ``(x, y)``.
-    """
-    pitch = cell + 2
-    image = np.zeros((rows * pitch, columns * pitch), dtype=np.float32)
-    origins = np.zeros((len(masks), 2), dtype=np.float32)
-    for index, mask in enumerate(masks):
-        column, row = index % columns, index // columns
-        x, y = column * pitch + 1, row * pitch + 1
-        image[y:y + cell, x:x + cell] = resize(mask, cell)
-        origins[index] = (x, y)
-    return image, origins
-
-
-def quads(stamps: Stamps, size: int, origins: np.ndarray, cell: int):
-    """Vertex positions, atlas coordinates, colours and indices for *stamps*.
-
-    A stamp of *size* covers the same square v2 wrote it into, starting
-    at ``x - size // 2`` and *size* texels wide, rotated about its centre.
-    At angle zero its corners sit on texel edges and the atlas cell maps
-    onto it texel for texel, so the stamp reproduces its brush.
-    """
-    count = len(stamps)
-    half = size / 2.0
-    centre_x = stamps.x - size // 2 + half
-    centre_y = stamps.y - size // 2 + half
-    corners = np.array([(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]) * half
-    cos, sin = np.cos(stamps.angle)[:, None], np.sin(stamps.angle)[:, None]
-    positions = np.empty((count, 4, 2), dtype=np.float32)
-    positions[..., 0] = centre_x[:, None] + corners[:, 0] * cos - corners[:, 1] * sin
-    positions[..., 1] = centre_y[:, None] + corners[:, 0] * sin + corners[:, 1] * cos
-
-    unit = np.array([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]) * cell
-    coords = (origins[stamps.brush][:, None, :] + unit[None, :, :]).astype(np.float32)
-
-    colors = np.repeat(stamps.color[:, None, :], 4, axis=1)
-    base = (np.arange(count, dtype=np.int32) * 4)[:, None]
-    indices = np.concatenate([base + (0, 1, 2), base + (0, 2, 3)], axis=1)
-    return (positions.reshape(-1, 2), coords.reshape(-1, 2), colors.reshape(-1, 4),
-            indices.reshape(-1, 3).astype(np.int32))
