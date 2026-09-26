@@ -158,7 +158,14 @@ try:
     check(child.compiled is not None, "child compiled on demand")
     ginst = next(n for n in art.nodes if n.get("ps_identifier") == f"{group.uuid}:group")
     check(ginst.node_tree == child.compiled, "parent instances child's artifact")
+    # The tree's name is not in its fingerprint. The artifact is still
+    # renamed to follow it, and the parent keeps instancing it.
     child_fp = artifact_fingerprint(child)
+    child.name = "Detail Renamed"
+    compile_tree(tree)
+    check(artifact_fingerprint(child) == child_fp, "renaming the child leaves its fingerprint as it was")
+    check(child.compiled.name == _core.artifact_name(child), "the child's artifact follows the rename")
+    check(ginst.node_tree == child.compiled, "the parent still instances the renamed artifact")
     child_solid.fill_color = (1.0, 1.0, 0.0, 1.0)
     check(artifact_fingerprint(child) != child_fp, "child edit compiles the child immediately")
     with suspend_compile(child):

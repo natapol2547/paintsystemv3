@@ -55,7 +55,6 @@ class IR:
         self.sockets: list[IRSocket] = []
         self.nodes: dict[str, IRNode] = {}
         self.links: list[IRLink] = []
-        self.meta: dict[str, Any] = {}
         # The nodes of the channel preview (PS-061). Only the tree's own
         # material reads them, so a parent tree's hash leaves them out.
         self.preview_nodes: set[str] = set()
@@ -124,7 +123,6 @@ class IR:
         """
         skipped = set() if preview else self.preview_nodes
         return {
-            "meta": dict(self.meta),
             "sockets": [
                 [s.in_out, s.socket_type, s.name, _serialize(s.properties)]
                 for s in self.sockets if preview or not s.preview

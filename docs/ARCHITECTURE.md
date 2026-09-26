@@ -43,9 +43,9 @@ PaintSystemNodeTree  --compile-->  IR  --NodeTreeBuilder-->  ShaderNodeTree (tre
    (identifiers are `"<node uuid>:<role>"`). The fingerprint lives on the
    artifact so it always describes the nodes next to it. A reused node
    keeps the value of any input the IR does not set, so an emitter sets
-   an input on every compile or never. `IR.meta` holds facts the artifact
-   depends on that no node or link records; it is hashed with the rest
-   and never applied. The builder retypes an interface socket in place
+   an input on every compile or never. The tree's own name is not
+   hashed, since `ensure_artifact` renames the artifact on every compile.
+   The builder retypes an interface socket in place
    when its type changes. It keeps its identifier, so the links to it in
    materials and in parent trees survive. For the same reason it renames
    sockets in place when one side of the interface still lines up with

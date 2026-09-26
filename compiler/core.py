@@ -441,7 +441,6 @@ def build_ir(tree, *, bake_target=None) -> IR:
 
 def _build_ir(tree, *, bake_target=None) -> IR:
     ir = IR()
-    ir.meta['tree'] = tree.name
     ctx = CompileContext(ir, bake_target=bake_target)
 
     # The inputs are always the channel sockets, so a Group Input node
