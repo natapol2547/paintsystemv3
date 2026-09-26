@@ -79,6 +79,13 @@ def channel_pixel(tree, channel):
     return pixel_at(rgba, 0.5, 0.5, SIZE)
 
 
+def painted_texels(image):
+    """The (x, y) of every texel of *image* a bake has painted, from the bottom-left."""
+    alpha = list(image.pixels)[3::4]
+    width = image.size[0]
+    return [(index % width, index // width) for index, value in enumerate(alpha) if value > 0.5]
+
+
 def share_top(tree, node, channel):
     """Put a new pair of *node* on top of *channel*, through its virtual input."""
     link_into_virtual(tree, top_of(tree, channel), node)
@@ -149,10 +156,23 @@ try:
     check(shared.pairs[1].cache_stale is False and f"{shared.uuid}:cache@Color 2" not in compiled_ids(tree),
           "and has no cache node")
     cube = bpy.data.objects["Cube"]
+    first_uv = cube.data.uv_layers.active
     second_uv = cube.data.uv_layers.new(name="Second UV")
-    bake.bake_node_cache(bpy.context, tree, shared, cube, pair=0, width=SIZE, height=SIZE, margin=0)
-    bake.bake_node_cache(bpy.context, tree, shared, cube, pair=1, width=SIZE, height=SIZE, margin=0,
-                         uv_map="Second UV")
+    # Squeeze the second UV map into the bottom-left quarter, so a bake
+    # through any other map paints outside it.
+    for corner in second_uv.data:
+        corner.uv = corner.uv * 0.5
+    cube.data.uv_layers.active = first_uv
+    second_uv.active_render = True
+    for pair, uv_map in ((0, ""), (1, "Second UV")):
+        baked = bake.bake_node_cache(bpy.context, tree, shared, cube, pair=pair, width=16, height=16,
+                                     margin=0, uv_map=uv_map)
+        painted = painted_texels(baked)
+        outside = [(x, y) for x, y in painted if x >= 8 or y >= 8]
+        check(painted and not outside,
+              f"pair {pair} bakes through the UV map its cache is read with, "
+              f"{uv_map or 'the active render one'}, not the active one {len(painted)} {outside}")
+    first_uv.active_render = True
     channel_pixel(tree, "Color")
     check(shared.cache_uv_map == "Second UV" and shared.pairs[1].cache_hash != ""
           and shared.pairs[0].cache_hash == "" and shared.pairs[0].cache_stale,

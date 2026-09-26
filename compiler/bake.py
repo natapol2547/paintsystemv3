@@ -8,8 +8,8 @@ the tree stays live.
 The compiler builds a temporary shader group whose Color and Alpha outputs
 are the two halves of the target pair's live output, ignoring the pair's
 own cache. A throwaway material sends that through an Emission shader.
-Cycles bakes it twice, once for colour and once for alpha, and numpy
-merges the two images.
+Cycles bakes it twice, once for colour and once for alpha, through the UV
+map the cache is read with, and numpy merges the two images.
 
 Entry points:
 
@@ -25,6 +25,7 @@ import contextlib
 import bpy
 import numpy as np
 
+from ..gpu_passes.texel_map import resolve_uv_map
 from ..nodetree.stack_ops import Position, channel_of
 from ..props.channel import image_colorspace
 from .core import build_ir, mark_dirty
@@ -171,12 +172,14 @@ def _merge_alpha(color_image, alpha_image) -> None:
     color_image.update()
 
 
-def check_bake_object(obj) -> None:
-    """Raise if *obj* cannot be baked onto."""
+def check_bake_object(obj, uv_map: str = "") -> None:
+    """Raise if *obj* cannot be baked onto through *uv_map* ('' is the active render UV map)."""
     if obj is None or obj.type != 'MESH':
         raise RuntimeError("Bake needs an active mesh object")
     if len(obj.data.uv_layers) == 0:
         raise RuntimeError(f"'{obj.name}' has no UV map")
+    if resolve_uv_map(obj, uv_map) is None:
+        raise RuntimeError(f"'{obj.name}' has no UV map named '{uv_map}'")
 
 
 def bake_subtree(context, tree, node, obj, image, *, pair: int = 0, margin: int = 8,
@@ -188,7 +191,12 @@ def bake_subtree(context, tree, node, obj, image, *, pair: int = 0, margin: int 
     object's material slots and the selection are all restored before this
     returns.
     """
-    check_bake_object(obj)
+    check_bake_object(obj, uv_map)
+    # The bake writes through the UV map it is given, or through the
+    # active UV map when given none, whatever the target Image Texture's
+    # Vector input reads. The cache is read through *uv_map*, or the
+    # active render UV map for '', so the bake is given that same map.
+    uv_layer = resolve_uv_map(obj, uv_map)
 
     bake_tree, subtree_hash = build_bake_tree(tree, node, pair)
     alpha_image = create_managed_image(BAKE_ALPHA_IMAGE_NAME, image.size[0], image.size[1],
@@ -204,10 +212,6 @@ def bake_subtree(context, tree, node, obj, image, *, pair: int = 0, margin: int 
     output = nt.nodes.new('ShaderNodeOutputMaterial')
     nt.links.new(emission.outputs['Emission'], output.inputs['Surface'])
     target = nt.nodes.new('ShaderNodeTexImage')
-    if uv_map:
-        uv_node = nt.nodes.new('ShaderNodeUVMap')
-        uv_node.uv_map = uv_map
-        nt.links.new(uv_node.outputs['UV'], target.inputs['Vector'])
     nt.nodes.active = target
 
     try:
@@ -218,13 +222,13 @@ def bake_subtree(context, tree, node, obj, image, *, pair: int = 0, margin: int 
                 # Pass 1: colour
                 nt.links.new(group.outputs['Color'], emission.inputs['Color'])
                 target.image = image
-                bpy.ops.object.bake(type='EMIT')
+                bpy.ops.object.bake(type='EMIT', uv_layer=uv_layer)
                 # Pass 2: alpha
                 for link in list(emission.inputs['Color'].links):
                     nt.links.remove(link)
                 nt.links.new(group.outputs['Alpha'], emission.inputs['Color'])
                 target.image = alpha_image
-                bpy.ops.object.bake(type='EMIT')
+                bpy.ops.object.bake(type='EMIT', uv_layer=uv_layer)
         _merge_alpha(image, alpha_image)
     finally:
         bpy.data.materials.remove(mat)
@@ -236,7 +240,7 @@ def bake_node_cache(context, tree, node, obj, *, pair: int = 0, width: int = 204
                     height: int = 2048, margin: int = 8, uv_map: str = "") -> bpy.types.Image:
     # Check before creating the image, so an object that cannot be baked
     # does not leave an unused image datablock behind.
-    check_bake_object(obj)
+    check_bake_object(obj, uv_map)
 
     channel = channel_of(tree, node, pair)
     # A vector channel's values can be negative, which a byte image would
