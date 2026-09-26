@@ -391,7 +391,11 @@ def test_clipboard():
     stack_ops.detach(source, nested)
     stack_ops.insert_below(source, nested, inner)
     add(source, SOLID, "Deep", target=nested)
+    # A mask reads a layer below the one it masks. One above would read
+    # the masked layer's result as well, which is a loop.
     masker = add(source, SOLID, "Masker")
+    stack_ops.detach(source, masker)
+    stack_ops.insert_below(source, masker, folder)
     outsider = add(source, SOLID, "Outsider")
     stack_ops.detach(source, outsider)
     stack_ops.insert_below(source, outsider, under)
@@ -399,14 +403,14 @@ def test_clipboard():
     source.links.new(stack_ops.stack_output(outsider), under.inputs['Mask'])
     masker.fill_color = RED
     before = layout(source)
-    clipboard.copy_layers([masker, folder, under])
-    check(clipboard.copied_layers() == [masker, folder, under], "the clipboard finds the copied layers")
+    clipboard.copy_layers([folder, masker, under])
+    check(clipboard.copied_layers() == [folder, masker, under], "the clipboard finds the copied layers")
 
     target = new_tree("Clip Target")
     existing = add(target, SOLID, "Existing")
     pasted = clipboard.paste_layers(target, existing)
-    check([node.name for node in pasted] == ["Masker", "Folder", "Under"], "names are kept in another tree")
-    check(layout(target) == [("Masker", 0), ("Folder", 0), ("Inner", 1), ("Nested", 1), ("Deep", 2),
+    check([node.name for node in pasted] == ["Folder", "Masker", "Under"], "names are kept in another tree")
+    check(layout(target) == [("Folder", 0), ("Inner", 1), ("Nested", 1), ("Deep", 2), ("Masker", 0),
                              ("Under", 0), ("Existing", 0)],
           f"the layers keep their order and folders their content, above the active layer {layout(target)}")
     check(layout(source) == before, "the source tree is unchanged")
@@ -416,14 +420,14 @@ def test_clipboard():
     check(mask is not None and mask.from_node == target.nodes["Masker"], "a mask among the copied layers is kept")
     check(stack_ops.feeding_link(target.nodes["Under"].inputs['Mask']) is None,
           "a mask from a layer that was not copied is left out")
-    check(target.nodes.active == target.nodes["Masker"], "the first pasted layer is active")
+    check(target.nodes.active == target.nodes["Folder"], "the first pasted layer is active")
     check(clipboard.can_paste_linked(source) and not clipboard.can_paste_linked(target),
           "a linked paste only works in the tree the layers came from")
 
     section("paste into a folder, and into the folder that was copied")
     clipboard.copy_layers([folder])
     pasted = clipboard.paste_layers(source, folder)
-    check([(name, level) for name, level in layout(source)][:3] == [("Masker", 0), ("Folder", 0), ("Folder.001", 1)]
+    check([(name, level) for name, level in layout(source)][:2] == [("Folder", 0), ("Folder.001", 1)]
           and ("Deep.001", 3) in layout(source),
           f"a folder pasted into itself holds a copy of its content as it was {layout(source)}")
 
@@ -443,6 +447,21 @@ def test_clipboard():
     check(layout(other) == [("F", 0), ("X", 1), ("F Inner", 1)],
           f"a layer moved into a copied folder since is pasted once, in the folder, with all the folder holds "
           f"{layout(other)}")
+
+    section("a mask linked since the copy cannot make a loop")
+    tree = new_tree("Clip Loop")
+    a = add(tree, SOLID, "A")
+    m = add(tree, SOLID, "M")
+    clipboard.copy_layers([m, a])
+    stack_ops.detach(tree, a)
+    stack_ops.insert_above(tree, a, m)
+    tree.links.new(stack_ops.stack_output(m), a.inputs['Mask'])
+    other = new_tree("Clip Loop Paste")
+    clipboard.paste_layers(other)
+    check(layout(other) == [("M", 0), ("A", 0)], f"the layers keep the order they were copied in {layout(other)}")
+    check(stack_ops.feeding_link(other.nodes["A"].inputs['Mask']) is None
+          and all(link.is_valid for link in other.links),
+          "M sits above A there and reads it, so the mask is left out")
 
     section("a plain paste stands alone")
     tree = new_tree("Clip Plain")

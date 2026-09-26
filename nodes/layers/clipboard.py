@@ -153,7 +153,10 @@ def paste_layers(tree, target=None, *, linked: bool = False) -> list:
         for source, node in pairs:
             link = stack_ops.producing_link(source.inputs['Mask'])
             mask = new_of.get(link.from_node.as_pointer()) if link is not None else None
-            if mask is not None:
+            # The layers are placed in the order they were copied in. A
+            # mask linked since may come from a layer that now sits above
+            # the one it masks, and reads it: that link would be a loop.
+            if mask is not None and not stack_ops.reads_from(mask, node):
                 tree.links.new(mask.outputs[link.from_socket.identifier], node.inputs['Mask'])
 
         if linked:
