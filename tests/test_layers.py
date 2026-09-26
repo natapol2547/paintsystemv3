@@ -271,6 +271,13 @@ try:
     stack_ops.complete_pairs(tree)
     check(len(tree.nodes["A"].pairs) == 1 and len(tree.nodes["A"].inputs) == 3,
           "and a second pass adds nothing")
+    with core.suspend_compile(tree):
+        node = tree.nodes["A"]
+        node.pairs.clear()
+        node.inputs.remove(stack_ops.virtual_input(node))
+        core.compile_tree(tree)
+        direct = len(node.pairs) == 1 and stack_ops.virtual_input(node) is not None
+    check(direct, "so does a compile that does not go through the scheduler, such as Recompile")
 
     section("layer type registry")
     types = registry.layer_types()

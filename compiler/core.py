@@ -87,12 +87,15 @@ def normalize_tree(tree) -> None:
       make duplicates);
     - every channel has a uuid;
     - the Group Input and Group Output nodes exist, and one output is
-      active.
+      active;
+    - every layer has its virtual input and a state per pair
+      (``complete_pairs``).
 
     Links are not repaired here. A compile can run after the edit's undo
     step was pushed (see ``tree_updated``), and then it must not change the
     document.
     """
+    complete_pairs(tree)
     ensure_tree_uuid(tree)
     seen: set[str] = set()
     for node in tree.nodes:

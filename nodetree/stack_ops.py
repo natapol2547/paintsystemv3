@@ -298,7 +298,9 @@ def complete_pairs(tree) -> None:
 
     A layer saved before pairs existed has neither. It comes in when a
     file is read, and when a tree is appended from an older file, which
-    no file read handler sees, so the compiler calls this too. The old
+    no file read handler sees. So every compile calls this too, and so
+    does every flush for all trees, since the panels can draw a tree
+    that nothing has compiled yet. The old
     cache and filter result are not carried over, because v3 is
     unreleased: the layer bakes and builds again instead (PS-098).
     """
