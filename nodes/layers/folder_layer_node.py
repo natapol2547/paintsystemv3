@@ -40,7 +40,7 @@ class PaintSystemFolderLayerNode(PaintSystemLayerNode, Node):
         icon = 'folder_open' if self.is_expanded else 'folder'
         layout.prop(self, "is_expanded", text="", emboss=False, icon_only=True, **icon_kwargs(icon))
 
-    def emit_source(self, ctx):
+    def emit_source(self, ctx, pair):
         return ctx.rgba_input(content_input(self))
 
 

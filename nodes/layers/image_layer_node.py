@@ -60,7 +60,7 @@ class PaintSystemImageLayerNode(PaintSystemLayerNode, Node):
             return self.image.name
         return "Image Layer"
 
-    def emit_source(self, ctx):
+    def emit_source(self, ctx, pair):
         if self.image is None:
             return EMPTY_SOURCE
         return emit_image_texture(ctx, self, 'tex', self.image, self.uv_map)

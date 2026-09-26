@@ -32,7 +32,7 @@ class PaintSystemSolidColorLayerNode(PaintSystemLayerNode, Node):
     def draw_source_settings(self, context, layout):
         layout.prop(self, "fill_color", text="")
 
-    def emit_source(self, ctx):
+    def emit_source(self, ctx, pair):
         r, g, b, a = self.fill_color
         return (r, g, b, 1.0), a
 

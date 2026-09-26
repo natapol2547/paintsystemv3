@@ -46,7 +46,7 @@ FILTER = 'PaintSystemFilterLayerNode'
 
 def below_of(node):
     link = stack_ops.feeding_link(node.inputs['Color'])
-    return link.from_node if link is not None else None
+    return stack_ops.link_source(link) if link is not None else None
 
 
 def current_stamp(tree, node, surface=None):
@@ -55,12 +55,12 @@ def current_stamp(tree, node, surface=None):
     *surface* is the mesh the build needed, as in `InputPlan.surface`.
     """
     ctx = core.build_ir(tree).ctx
-    return freshness.stamp(freshness.fingerprint_parts(ctx, node, below_of(node), surface))
+    return freshness.stamp(freshness.fingerprint_parts(ctx, node, 0, below_of(node), surface))
 
 
 def restamp(tree, node, surface=None):
     """Pretend the layer was just rebuilt, without running a build."""
-    node.derived_image[derived.FINGERPRINT_KEY] = current_stamp(tree, node, surface)
+    node.pairs[0].derived_image[derived.FINGERPRINT_KEY] = current_stamp(tree, node, surface)
     reason(tree, node)
 
 
@@ -73,7 +73,7 @@ def reason(tree, node):
     """
     core.mark_dirty(tree)
     core.flush_now()
-    return node.derived_stale_reason
+    return node.pairs[0].derived_stale_reason
 
 
 try:
@@ -92,7 +92,7 @@ try:
     result.update()
     result[derived.BUILD_KEY] = "hand-stamped"
     result[derived.UV_MAP_KEY] = ""
-    node.derived_image = result
+    node.pairs[0].derived_image = result
     restamp(tree, node)
     check(reason(tree, node) == "", "and a freshly stamped one reads as up to date")
 
@@ -182,7 +182,7 @@ try:
     # The part is left out rather than stamped False, so a stamp written
     # before it existed still matches for the unclipped layer it was
     # already right about, and only a clipped one asks to be rebuilt.
-    parts = freshness.fingerprint_parts(core.build_ir(tree).ctx, node, below_of(node))
+    parts = freshness.fingerprint_parts(core.build_ir(tree).ctx, node, 0, below_of(node))
     check("clip" not in parts, "an unclipped layer stamps what it always did")
 
     section("the mesh a build needed")
@@ -243,21 +243,21 @@ try:
           f"missing altogether: {reason(tree, node)!r}")
 
     restamp(tree, node)
-    parts = freshness.fingerprint_parts(core.build_ir(tree).ctx, node, below_of(node))
+    parts = freshness.fingerprint_parts(core.build_ir(tree).ctx, node, 0, below_of(node))
     parts["version"] = derived.FILTER_VERSION + 1
     result[derived.FINGERPRINT_KEY] = freshness.stamp(parts)
     check(reason(tree, node) == "Paint System was updated",
           f"stamped by another version of the addon: {reason(tree, node)!r}")
 
     section("losing the image")
-    node.derived_image = None
+    node.pairs[0].derived_image = None
     check(reason(tree, node) == "", "clears the reason rather than leaving the last one up")
 
     section("painting below it")
     # The other half. `subtree_hash` reduces an image to its name, so a
     # stroke under a filter layer moves nothing the structural check can
     # see; `note_image_changed` is what closes it.
-    node.derived_image = result
+    node.pairs[0].derived_image = result
     restamp(tree, node)
     with core.suspend_compile(tree):
         picture = tree.insert_layer_node(IMAGE, target=bottom)
@@ -267,21 +267,21 @@ try:
 
     elsewhere = create_managed_image("Fresh Elsewhere", 8, 8)
     freshness.note_image_changed([elsewhere.session_uid])
-    check(node.stale_reason == "", "an image the stack does not read leaves it alone")
+    check(node.pairs[0].stale_reason == "", "an image the stack does not read leaves it alone")
 
     pixels.write_pixels(picture.image, [1.0, 0.0, 0.0, 1.0] * 64)
-    check(node.derived_stale_pixels, "writing pixels below it marks the layer")
-    check(node.stale_reason == "the pixels below changed",
-          f"and names that as the reason: {node.stale_reason!r}")
+    check(node.pairs[0].derived_stale_pixels, "writing pixels below it marks the layer")
+    check(node.pairs[0].stale_reason == "the pixels below changed",
+          f"and names that as the reason: {node.pairs[0].stale_reason!r}")
 
     # Structural first: it says which setting to look at, where the pixel
     # half can only say that something was painted.
     node.resolution = '4096'
-    check(node.stale_reason == "the resolution changed",
-          f"a structural change is the more useful answer: {node.stale_reason!r}")
+    check(node.pairs[0].stale_reason == "the resolution changed",
+          f"a structural change is the more useful answer: {node.pairs[0].stale_reason!r}")
     node.resolution = '2048'
     restamp(tree, node)
-    check(node.stale_reason == "the pixels below changed", "and the pixel half is still there")
+    check(node.pairs[0].stale_reason == "the pixels below changed", "and the pixel half is still there")
 
     section("what the panel says while a refresh is held back")
     # A layer that is switched off or locked is not a candidate for the
@@ -292,12 +292,12 @@ try:
     # pinning.
     # Out of date through the pixel half, so that the compile any of
     # these toggles schedules cannot quietly clear it again.
-    node.derived_image = result
+    node.pairs[0].derived_image = result
     restamp(tree, node)
     node.auto_refresh = True
-    node.derived_stale_pixels = True
-    check(node.stale_reason == freshness.PIXEL_REASON,
-          f"the layer is out of date to begin with: {node.stale_reason!r}")
+    node.pairs[0].derived_stale_pixels = True
+    check(node.pairs[0].stale_reason == freshness.PIXEL_REASON,
+          f"the layer is out of date to begin with: {node.pairs[0].stale_reason!r}")
 
     def held_back_message():
         """The labels `draw_result_settings` puts in its box, as one list."""
@@ -325,10 +325,10 @@ try:
     node.lock_layer = False
 
     section("an unbuilt layer")
-    node.derived_stale_pixels = False
-    node.derived_image = None
+    node.pairs[0].derived_stale_pixels = False
+    node.pairs[0].derived_image = None
     pixels.write_pixels(picture.image, [0.0, 1.0, 0.0, 1.0] * 64)
-    check(not node.derived_stale_pixels,
+    check(not node.pairs[0].derived_stale_pixels,
           "has no claim about pixels to lose, so nothing marks it")
 
 except Exception:

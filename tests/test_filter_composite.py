@@ -211,12 +211,12 @@ if available():
         section("a filter layer below the filter layer")
         with core.suspend_compile(tree):
             inner_filter = tree.insert_layer_node(FILTER, target=over_run)
-            inner_filter.derived_image = built_filter_image("Composite Inner", (0.9, 0.3, 0.1, 1.0))
+            inner_filter.pairs[0].derived_image = built_filter_image("Composite Inner", (0.9, 0.3, 0.1, 1.0))
             inner_filter.opacity = 0.6
         core.flush_now()
         compare(tree, top, "a built filter layer replacing the stack at Amount 0.6")
 
-        inner_filter.derived_image = None
+        inner_filter.pairs[0].derived_image = None
         core.flush_now()
         compare(tree, top, "and an unbuilt one passing it through")
 
@@ -224,7 +224,7 @@ if available():
         # The targets in flight are the backdrop, the layer's own content
         # and one held backdrop per open clip run, so the count follows
         # the nesting rather than the depth of the stack.
-        inner_filter.derived_image = built_filter_image("Composite Inner 2", (0.2, 0.5, 0.8, 1.0))
+        inner_filter.pairs[0].derived_image = built_filter_image("Composite Inner 2", (0.2, 0.5, 0.8, 1.0))
         core.flush_now()
         pool = composite.Pool((SIZE, SIZE))
         plan = composite.plan_below(top)

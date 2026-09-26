@@ -53,24 +53,17 @@ class PAINTSYSTEM_OT_add_layer(Operator):
             self.layout.prop(self, name)
 
 
-def _deleted(plan: list) -> list:
-    """The layers a ``removal`` *plan* deletes: those losing every pair they have."""
-    taken: dict[str, list] = {}
-    for node, _pair in plan:
-        taken.setdefault(node.name, []).append(node)
-    return [nodes[0] for nodes in taken.values() if len(nodes) == pair_count(nodes[0])]
-
-
 def _filter_results(plan: list) -> list:
-    """The filter result images of the layers a ``removal`` *plan* deletes.
+    """The filter result images of the pairs a ``removal`` *plan* takes out.
 
-    A filter result counts as the layer's content, not as an artifact
-    that can be rebuilt, so removing the layer removes it too. Cache
+    A filter result counts as the pair's content, not as an artifact
+    that can be rebuilt, so removing the pair removes it too. Cache
     images are left out on purpose, because they can always be baked
     again.
     """
-    return [layer.derived_image for layer in _deleted(plan)
-            if getattr(layer, 'ps_type', "") == 'FILTER' and layer.derived_image is not None]
+    return [layer.pairs[pair].derived_image for layer, pair in plan
+            if getattr(layer, 'ps_type', "") == 'FILTER'
+            and layer.pairs[pair].derived_image is not None]
 
 
 class PAINTSYSTEM_OT_remove_layer(Operator):
@@ -130,9 +123,9 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
         rows = [item.node.name for item in items[:position] + items[end:]]
         next_active = rows[position] if position < len(rows) else (rows[-1] if rows else None)
 
-        # Remove the filter results before the node. Once the node is
-        # gone, nothing points at the images, and only the next file read
-        # would delete them. This is done here and not in ``Node.free``,
+        # Remove the filter results before the pairs. Once a pair is
+        # gone, nothing points at its image, and only the next file read
+        # would delete it. This is done here and not in ``Node.free``,
         # because ``free`` also runs when undo tears nodes down. This
         # operator has the UNDO option, so its undo step holds the node
         # and the packed image together, and one Ctrl+Z brings both back.
@@ -253,8 +246,8 @@ class PAINTSYSTEM_OT_bake_cache(Operator):
         size = int(self.resolution)
         try:
             image = bake_node_cache(context, tree, node, context.object,
-                                    width=size, height=size, margin=self.margin,
-                                    uv_map=self.uv_map)
+                                    pair=tree.pair_in_stack(node), width=size, height=size,
+                                    margin=self.margin, uv_map=self.uv_map)
         except RuntimeError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -265,8 +258,9 @@ class PAINTSYSTEM_OT_bake_cache(Operator):
     def invoke(self, context, event):
         tree = get_active_tree(context)
         node = button_layer(context, tree)
-        if node is not None and node.cache_image is not None:
-            self.resolution = str(node.cache_image.size[0]) if str(node.cache_image.size[0]) in {
+        image = node.pairs[tree.pair_in_stack(node)].cache_image if node is not None else None
+        if image is not None:
+            self.resolution = str(image.size[0]) if str(image.size[0]) in {
                 i[0] for i in RESOLUTION_ITEMS} else self.resolution
             self.uv_map = node.cache_uv_map
         return context.window_manager.invoke_props_dialog(self)

@@ -281,7 +281,7 @@ try:
     img_layer.opacity = 1.0
     img_layer.blend_mode = 'MIX'
     baked = bake_node_cache(bpy.context, tree, img_layer, cube, width=32, height=32, margin=2)
-    check(baked is not None and img_layer.cache_hash != "", "bake produced image + hash")
+    check(baked is not None and img_layer.pairs[0].cache_hash != "", "bake produced image + hash")
     img_layer.cache_enabled = True
     compile_tree(tree)
     check(not any(n.get("ps_identifier") == f"{img_layer.uuid}:blend" for n in art.nodes),
@@ -309,7 +309,7 @@ try:
     view_layer.objects.active = cube
     scratch = create_managed_image("PS Bake Scratch", 16, 16)
     scratch_hash = bake_subtree(bpy.context, tree, img_layer, bare, scratch, margin=0)
-    check(scratch_hash == img_layer.cache_hash, "bake_subtree returns the subtree fingerprint")
+    check(scratch_hash == img_layer.pairs[0].cache_hash, "bake_subtree returns the subtree fingerprint")
     check(view_layer.objects.active == cube and cube.select_get() and not bare.select_get(),
           "the bake gives the selection and the active object back")
     check(len(bare.material_slots) == 0,
@@ -322,7 +322,7 @@ try:
 
     solid.fill_color = (0.2, 0.2, 0.2, 1.0)
     compile_tree(tree)
-    check(img_layer.cache_stale, "upstream edit invalidates cache")
+    check(img_layer.pairs[0].cache_stale, "upstream edit invalidates cache")
     check(any(n.get("ps_identifier") == f"{img_layer.uuid}:blend" for n in art.nodes),
           "stale cache falls back to live graph")
 

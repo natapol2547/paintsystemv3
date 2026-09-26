@@ -1,19 +1,21 @@
-"""Bake a node's output into its cache image.
+"""Bake a layer's output into its cache image.
 
-In the compiled tree, a cached node and everything upstream of it are
-replaced by this image. The rest of the tree stays live.
+A layer caches each of its pairs separately, since each pair's output
+depends on its own stack below. In the compiled tree, a cached pair and
+everything upstream of it are replaced by that pair's image. The rest of
+the tree stays live.
 
 The compiler builds a temporary shader group whose Color and Alpha outputs
-are the two halves of the target node's live Color output, ignoring the
-node's own cache. A throwaway
-material sends that through an Emission shader. Cycles bakes it twice,
-once for colour and once for alpha, and numpy merges the two images.
+are the two halves of the target pair's live output, ignoring the pair's
+own cache. A throwaway material sends that through an Emission shader.
+Cycles bakes it twice, once for colour and once for alpha, and numpy
+merges the two images.
 
 Entry points:
 
 - ``bake_subtree`` runs the bake and writes into any image it is given.
 - ``bake_node_cache`` adds the cache bookkeeping. On success it sets the
-  node's ``cache_hash`` to the subtree hash, so the next compile uses
+  pair's ``cache_hash`` to the subtree hash, so the next compile uses
   the image in place of the live nodes.
 """
 from __future__ import annotations
@@ -23,7 +25,7 @@ import contextlib
 import bpy
 import numpy as np
 
-from ..nodetree.stack_ops import channel_of
+from ..nodetree.stack_ops import Position, channel_of
 from ..props.channel import image_colorspace
 from .core import build_ir, mark_dirty
 
@@ -44,13 +46,13 @@ def create_managed_image(name: str, width: int, height: int, *,
     return image
 
 
-def build_bake_tree(tree, node) -> tuple[bpy.types.NodeTree, str]:
-    """Compile *node*'s live subtree into the shared bake group.
+def build_bake_tree(tree, node, pair: int = 0) -> tuple[bpy.types.NodeTree, str]:
+    """Compile the live subtree of *node*'s *pair* into the shared bake group.
 
     Returns the group and the subtree hash.
     """
-    ir = build_ir(tree, bake_target=node)
-    subtree_hash = ir.ctx.subtree_hash(node)
+    ir = build_ir(tree, bake_target=Position(node, pair))
+    subtree_hash = ir.ctx.subtree_hash(node, pair)
     bake_tree = bpy.data.node_groups.get(BAKE_TREE_NAME)
     if bake_tree is None or bake_tree.bl_idname != 'ShaderNodeTree':
         bake_tree = bpy.data.node_groups.new(BAKE_TREE_NAME, 'ShaderNodeTree')
@@ -177,9 +179,9 @@ def check_bake_object(obj) -> None:
         raise RuntimeError(f"'{obj.name}' has no UV map")
 
 
-def bake_subtree(context, tree, node, obj, image, *, margin: int = 8,
+def bake_subtree(context, tree, node, obj, image, *, pair: int = 0, margin: int = 8,
                  uv_map: str = "") -> str:
-    """Bake *node*'s live subtree on *obj* into *image*, and return its hash.
+    """Bake the live subtree of *node*'s *pair* on *obj* into *image*, and return its hash.
 
     *image* is written in place and not packed. The caller decides whether
     the result is saved inside the .blend file. The render settings, the
@@ -188,7 +190,7 @@ def bake_subtree(context, tree, node, obj, image, *, margin: int = 8,
     """
     check_bake_object(obj)
 
-    bake_tree, subtree_hash = build_bake_tree(tree, node)
+    bake_tree, subtree_hash = build_bake_tree(tree, node, pair)
     alpha_image = create_managed_image(BAKE_ALPHA_IMAGE_NAME, image.size[0], image.size[1],
                                        alpha=False, colorspace='Non-Color')
 
@@ -230,38 +232,39 @@ def bake_subtree(context, tree, node, obj, image, *, margin: int = 8,
     return subtree_hash
 
 
-def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int = 2048,
-                    margin: int = 8, uv_map: str = "") -> bpy.types.Image:
+def bake_node_cache(context, tree, node, obj, *, pair: int = 0, width: int = 2048,
+                    height: int = 2048, margin: int = 8, uv_map: str = "") -> bpy.types.Image:
     # Check before creating the image, so an object that cannot be baked
     # does not leave an unused image datablock behind.
     check_bake_object(obj)
 
-    channel = channel_of(tree, node)
+    channel = channel_of(tree, node, pair)
     # A vector channel's values can be negative, which a byte image would
     # clamp to 0, and encoded normals keep more precision in float. They
     # are data, so they are stored as they are, whatever colour space the
     # channel's layers paint in.
     float_buffer = channel is not None and channel.type == 'VECTOR'
     colorspace = 'Non-Color' if float_buffer else image_colorspace(channel)
-    old = image = node.cache_image
+    state = node.pairs[pair]
+    old = image = state.cache_image
     if image is None or image.is_float != float_buffer:
         image = create_managed_image(f"{tree.name} {node.name} Cache", width, height,
                                      float_buffer=float_buffer, colorspace=colorspace)
     elif tuple(image.size) != (width, height):
         image.scale(width, height)
 
-    subtree_hash = bake_subtree(context, tree, node, obj, image,
+    subtree_hash = bake_subtree(context, tree, node, obj, image, pair=pair,
                                 margin=margin, uv_map=uv_map)
     image.pack()
 
-    node.cache_image = image
+    state.cache_image = image
     if old is not None and old != image and old.get(PS_IMAGE_KEY) and old.users == 0:
         # The cache from before the channel changed type, which nothing
         # else uses.
         bpy.data.images.remove(old)
-    node.cache_hash = subtree_hash
+    state.cache_hash = subtree_hash
     if uv_map:
         node.cache_uv_map = uv_map
-    node.cache_stale = False
+    state.cache_stale = False
     mark_dirty(tree)
     return image

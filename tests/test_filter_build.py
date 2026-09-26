@@ -108,7 +108,7 @@ if available():
         core.flush_now()
 
         image = layer_build.build_layer(bpy.context, tree, node)
-        check(node.derived_image == image, f"the layer points at what it built ({image.name})")
+        check(node.pairs[0].derived_image == image, f"the layer points at what it built ({image.name})")
         check(tuple(image.size) == (1024, 1024), f"built at the asked-for size {tuple(image.size)}")
         check(not image.is_float and image.colorspace_settings.name == 'sRGB',
               f"byte and sRGB like a painted layer ({image.colorspace_settings.name})")
@@ -183,23 +183,23 @@ if available():
         # nothing on its own; without that the panel would go on claiming
         # the layer was out of date after a build.
         core.flush_now()
-        check(node.derived_stale_reason == "",
-              f"a build leaves the layer up to date: {node.derived_stale_reason!r}")
+        check(node.pairs[0].derived_stale_reason == "",
+              f"a build leaves the layer up to date: {node.pairs[0].derived_stale_reason!r}")
         bottom.fill_color = (0.9, 0.1, 0.1, 1.0)
         core.flush_now()
-        check(node.derived_stale_reason == "the layers below changed",
-              f"and a change under it shows up: {node.derived_stale_reason!r}")
+        check(node.pairs[0].derived_stale_reason == "the layers below changed",
+              f"and a change under it shows up: {node.pairs[0].derived_stale_reason!r}")
         bottom.fill_color = (0.2, 0.6, 0.4, 1.0)
         layer_build.build_layer(bpy.context, tree, node)
         core.flush_now()
-        check(node.derived_stale_reason == "", "building again clears it")
+        check(node.pairs[0].derived_stale_reason == "", "building again clears it")
 
         freshness.note_image_changed([picture.image.session_uid])
-        check(node.stale_reason == "the pixels below changed",
-              f"a write to an image below marks it too: {node.stale_reason!r}")
+        check(node.pairs[0].stale_reason == "the pixels below changed",
+              f"a write to an image below marks it too: {node.pairs[0].stale_reason!r}")
         layer_build.build_layer(bpy.context, tree, node)
         core.flush_now()
-        check(node.stale_reason == "", "and a build reads those pixels, so it clears that as well")
+        check(node.pairs[0].stale_reason == "", "and a build reads those pixels, so it clears that as well")
 
         section("which way up")
         # Every other check here is on one colour, which a readback that
@@ -271,7 +271,7 @@ if available():
         bpy.ops.ed.undo()
         tree, node, bottom, picture, image = refetch()
         agrees(texel(image), before, "one undo brings back the pixels of the build before")
-        check(node.derived_image == image and derived.is_built(image),
+        check(node.pairs[0].derived_image == image and derived.is_built(image),
               "with the layer still pointing at a built image")
         bpy.ops.ed.redo()
         tree, node, bottom, picture, image = refetch()
@@ -296,12 +296,12 @@ if available():
         check(bpy.ops.paint_system.rebuild_filter_layer.poll(),
               "Update polls on an active filter layer")
         check(bpy.ops.paint_system.rebuild_filter_layer('EXEC_DEFAULT') == {'FINISHED'}
-              and derived.is_built(node.derived_image), "and builds")
+              and derived.is_built(node.pairs[0].derived_image), "and builds")
 
-        name = node.derived_image.name
+        name = node.pairs[0].derived_image.name
         check(bpy.ops.paint_system.clear_filter_result('EXEC_DEFAULT') == {'FINISHED'},
               "Clear Result runs")
-        check(node.derived_image is None, "the layer is back to a pass-through")
+        check(node.pairs[0].derived_image is None, "the layer is back to a pass-through")
         check(name not in bpy.data.images, "and the datablock went with it, rather than orphaned")
         check(bpy.ops.paint_system.clear_filter_result('EXEC_DEFAULT') == {'CANCELLED'},
               "a second Clear has nothing to do")
@@ -319,7 +319,7 @@ if available():
         view_layer.objects.active = bpy.data.objects["Camera"]
         try:
             check(bpy.ops.paint_system.rebuild_filter_layer('EXEC_DEFAULT') == {'FINISHED'}
-                  and derived.stamped_uv_map(node.derived_image) == "UVMap",
+                  and derived.stamped_uv_map(node.pairs[0].derived_image) == "UVMap",
                   "Update builds against the layer's Object while the camera is active")
         finally:
             view_layer.objects.active = cube

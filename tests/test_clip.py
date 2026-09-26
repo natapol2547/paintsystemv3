@@ -193,9 +193,9 @@ try:
     clipped = solid(tree, "Clipped", BLUE, clip=True)
     cache = bpy.data.images.new("PS Test Clip Cache", 4, 4)
     for node in (base, clipped):
-        node.cache_image = cache
+        node.pairs[0].cache_image = cache
         node.cache_enabled = True
-        node.cache_hash = core.CompileContext(IR()).subtree_hash(node)
+        node.pairs[0].cache_hash = core.CompileContext(IR()).subtree_hash(node)
     ctx = core.CompileContext(IR())
     check(not ctx.is_cached(base), "a base's cache is not used: its outputs are the run")
     check(ctx.is_cached(clipped), "the top of a run uses its cache")

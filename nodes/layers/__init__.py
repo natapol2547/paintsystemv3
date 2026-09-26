@@ -1,6 +1,8 @@
 from bpy.utils import register_submodule_factory
 
 submodules = (
+    # First, for the pair state every layer type holds.
+    "base_layer_node",
     "image_layer_node",
     "solid_color_layer_node",
     "folder_layer_node",

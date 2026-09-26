@@ -207,19 +207,19 @@ def producing_link(socket) -> bpy.types.NodeLink | None:
 # ── Pairs ────────────────────────────────────────────────────────────
 #
 # A layer takes each stack it sits in on one input and gives it back on
-# one output. That input and output are a pair. The first pair is the
-# ``Color`` input and output, which every layer has, and its sockets are
-# never removed. Pairs added later sit below it, above the virtual input
-# (``PaintSystemLayerNode.add_pair``). A folder's ``Content Color`` and
-# ``Mask`` are shared by every pair.
+# one output. That input and output are a pair. Pairs are numbered by
+# position: the n-th pair input goes with the n-th output. The first
+# pair input is always the layer's first input. A folder's
+# ``Content Color`` and ``Mask`` are shared by every pair.
 #
-# The n-th pair input goes with the n-th output. Identifiers cannot match
-# them: inputs and outputs number their identifiers separately, and
-# Blender gives a new socket the number of one removed earlier. Every
-# pair socket is also named after its pair, not after the stack, so names
-# cannot match them either.
+# Identifiers cannot match an input to its output: inputs and outputs
+# number their identifiers separately, and Blender gives a new socket the
+# number of one removed earlier. Every pair socket is also named after
+# its pair, not after the stack, so names cannot match them either.
+#
+# What a pair builds for its stack, a cache or a filter result, is kept
+# in the layer's ``pairs`` collection, at the pair's position.
 
-FIRST_PAIR = 'Color'
 CONTENT = 'Content Color'
 MASK = 'Mask'
 VIRTUAL_SOCKET = 'NodeSocketVirtual'
@@ -247,19 +247,20 @@ def pair_count(node) -> int:
 
 def pair_of_input(socket) -> int | None:
     """The pair the layer input *socket* belongs to, or None for a shared or virtual input."""
-    if socket.identifier == FIRST_PAIR:
-        return 0
     if not is_pair_input(socket):
         return None
+    if len(socket.node.outputs) == 1:
+        return 0
     return next(index for index, other in enumerate(pair_inputs(socket.node))
                 if other.identifier == socket.identifier)
 
 
 def pair_of_output(socket) -> int:
     """The pair the layer output *socket* belongs to."""
-    if socket.identifier == FIRST_PAIR:
+    outputs = socket.node.outputs
+    if len(outputs) == 1:
         return 0
-    return next(index for index, other in enumerate(socket.node.outputs)
+    return next(index for index, other in enumerate(outputs)
                 if other.identifier == socket.identifier)
 
 
@@ -268,15 +269,54 @@ def virtual_input(node):
     return next((socket for socket in node.inputs if is_virtual(socket)), None)
 
 
+def link_source(link) -> Position:
+    """Where *link* comes from: a layer and the pair of the output it leaves.
+
+    Any other node has one pair, 0, which covers all of its outputs.
+    """
+    node = link.from_node
+    return Position(node, pair_of_output(link.from_socket) if is_layer(node) else 0)
+
+
+def pair_reads(node, pair: int = 0) -> list:
+    """The inputs the output of *node*'s *pair* is made from.
+
+    For a layer, that is the pair's own input and the shared inputs,
+    ``Content Color`` and ``Mask``, in socket order. Any other node reads
+    all of its inputs.
+    """
+    if not is_layer(node):
+        return list(node.inputs)
+    below = below_input(node, pair)
+    return [socket for socket in node.inputs
+            if not is_virtual(socket) and (socket == below or not is_pair_input(socket))]
+
+
+def pair_role(role: str, node, pair: int) -> str:
+    """*role* made unique to *node*'s *pair*, for IR nodes a layer emits once per pair.
+
+    The output a layer is made with has the identifier ``Color``, and its
+    roles stay as they are, so a layer with one pair compiles as it did
+    before pairs existed. Other pairs add their output's identifier.
+    Unlike the position, it does not change when an earlier pair is
+    removed, so the other pairs' compiled nodes are kept.
+    """
+    identifier = node.outputs[pair].identifier
+    return role if identifier == 'Color' else f"{role}@{identifier}"
+
+
+def pair_key(node, pair: int) -> str:
+    """A key for *node*'s *pair* that lasts while the pair exists, for in-memory tables."""
+    return f"{node.uuid}:{node.outputs[pair].identifier}"
+
+
 # ── Walking ──────────────────────────────────────────────────────────
 
 
 def below_input(node, pair: int = 0):
     """The input a layer takes the stack below it on, for its *pair*."""
     if pair == 0:
-        # ``inputs[...]`` matches the identifier, which the first pair
-        # keeps whatever it is named.
-        return node.inputs[FIRST_PAIR]
+        return node.inputs[0]
     return pair_inputs(node)[pair]
 
 

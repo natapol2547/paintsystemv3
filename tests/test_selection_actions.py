@@ -111,7 +111,7 @@ def reset():
     layer.lock_layer = False
     layer.lock_alpha = False
     layer.cache_enabled = False
-    layer.cache_image = None
+    layer.pairs[0].cache_image = None
     select(PAINT)
     return paint_pixels()
 
@@ -317,14 +317,14 @@ def test_a_live_cache_refuses():
     t = tree()
     baked = bpy.data.images.new("PS Action Cache", 32, 32, alpha=True)
     layer = t.nodes[PAINT]
-    layer.cache_image = baked
+    layer.pairs[0].cache_image = baked
     layer.cache_enabled = True
-    layer.cache_stale = False
+    layer.pairs[0].cache_stale = False
     message = refusal(actions.INVERT)
     check(message == f"Layer '{PAINT}' shows its baked cache; turn Use Cache off to edit through it",
           f"an edit nobody would see is refused with the way out ({message})")
     layer.cache_enabled = False
-    layer.cache_image = None
+    layer.pairs[0].cache_image = None
     bpy.data.images.remove(baked)
 
 

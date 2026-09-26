@@ -64,9 +64,10 @@ try:
 
     node = tree.insert_layer_node(FILTER)
     core.flush_now()
-    check(node.derived_image is None and not derived.is_built(node.derived_image),
+    check(node.pairs[0].derived_image is None and not derived.is_built(node.pairs[0].derived_image),
           "a new filter layer has no result yet")
     check(node.paint_image is None, "and is not paintable, so no brush can target it")
+    check(node.pairs[0].node == node, "its pair state finds the layer it belongs to")
     got = artifact_pixel(tree)
     check(close(got, plain), f"adding it changes nothing on screen {fmt(got)}")
     check(f"{node.uuid}:fmix" in identifiers(tree), "it still compiles to a Filter Mix group")
@@ -78,7 +79,7 @@ try:
 
     section("a built filter layer replaces the stack below")
     image = built_image("Filter Result", (0.9, 0.1, 0.1, 1.0))
-    node.derived_image = image
+    node.pairs[0].derived_image = image
     core.flush_now()
     check(f"{node.uuid}:result" in identifiers(tree), "the derived image compiles to an image texture")
     fmix = node_by_id(tree, f"{node.uuid}:fmix")
@@ -99,11 +100,11 @@ try:
     check(close(got, plain), f"disabling it is a pass-through again {fmt(got)}")
     node.enabled = True
 
-    node.derived_image = None
+    node.pairs[0].derived_image = None
     core.flush_now()
     got = artifact_pixel(tree)
     check(close(got, plain), f"losing the image gives the original back, not a black band {fmt(got)}")
-    node.derived_image = image
+    node.pairs[0].derived_image = image
     core.flush_now()
 
     section("what the compiler's fingerprints see")
@@ -115,10 +116,10 @@ try:
     check(core.build_ir(tree).ctx.subtree_hash(node) == before,
           "asking for a different filter changes no hash before the rebuild")
     spare = built_image("Filter Result Spare", (0.0, 0.0, 1.0, 1.0))
-    node.derived_image = spare
+    node.pairs[0].derived_image = spare
     check(core.build_ir(tree).ctx.subtree_hash(node) != before,
           "but different pixels do, so a cache above cannot go on showing the old ones")
-    node.derived_image = image
+    node.pairs[0].derived_image = image
     check(core.build_ir(tree).ctx.subtree_hash(node) == before, "and swapping back restores it")
     bpy.data.images.remove(spare)
 
@@ -155,12 +156,12 @@ try:
     clipped = tree.insert_layer_node(SOLID, target=node)
     clipped.fill_color = (1.0, 0.0, 1.0, 1.0)
     clipped.is_clip = True
-    node.derived_image = None
+    node.pairs[0].derived_image = None
     core.flush_now()
     got = artifact_pixel(tree)
     check(close(got, plain),
           f"clipped to an unbuilt filter there is nothing to clip to, so the stack below shows {fmt(got)}")
-    node.derived_image = image
+    node.pairs[0].derived_image = image
     core.flush_now()
     got = artifact_pixel(tree)
     check(close(got, (1.0, 0.0, 1.0, 1.0)),
@@ -171,7 +172,7 @@ try:
     section("duplicating a filter layer")
     duplicate_tree = tree.copy()
     duplicate = duplicate_tree.nodes[node.name]
-    check(duplicate.derived_image is not None and duplicate.derived_image != image,
+    check(duplicate.pairs[0].derived_image is not None and duplicate.pairs[0].derived_image != image,
           "the copy gets its own derived image, not a second pointer to the original's")
     check(duplicate.uuid != node.uuid, "and its own uuid")
     bpy.data.node_groups.remove(duplicate_tree)

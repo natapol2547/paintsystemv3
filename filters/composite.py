@@ -203,13 +203,14 @@ def _plan_layer(position, indexes, visited, group_input, *, holds_run: bool) -> 
         # A filter layer replaces the stack below instead of compositing
         # over it. It is transparent until it is built.
         rule = blend_glsl.FILTER_MIX
-        strength = layer.amount
-        if derived.is_built(layer.derived_image):
+        strength = layer.amount(pair)
+        result = layer.pairs[pair].derived_image
+        if derived.is_built(result):
             # Skip `_source_image`. A built result was packed by the
             # build that stamped it, so there is nothing to check. Also,
             # reading the size of a result just committed would decode
             # the whole file (`filters.layer_build.commit`).
-            image = layer.derived_image
+            image = result
             uv_map = derived.stamped_uv_map(image)
 
     if rule == blend_glsl.BLEND and layer.blend_mode not in blend_glsl.ALLOWED_BLEND_MODES:

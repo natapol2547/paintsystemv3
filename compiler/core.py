@@ -6,7 +6,9 @@ Main entry points: ``compile_tree``, ``mark_dirty``, ``suspend_compile``,
 - Data flows one way. The Paint System tree is the document. The compiled
   shader tree is a build artifact that the tree owns (``tree.compiled``).
 - Nodes never own shader datablocks. Each node implements ``emit(ctx)``,
-  which adds its part of the shader graph to the IR.
+  which adds its part of the shader graph to the IR. A layer's is
+  ``emit(ctx, pair)``: each of its pairs compiles on its own, as one
+  blend from the pair's input to its output (``stack_ops``, "Pairs").
 - Edits compile right away, not on a timer. See "Scheduling" below for
   why.
 - A batch of edits runs inside ``suspend_compile`` and compiles once at
@@ -27,7 +29,8 @@ from .library import MIX_IN_A_COLOR, MIX_IN_B_COLOR, MIX_IN_FACTOR, MIX_OUT_COLO
 from .profile import phase
 from .vector import input_value
 from ..context import MATERIAL_GROUP_KEY
-from ..nodetree.stack_ops import feeding_link, feeds_clip_run, link_index, producing_link, stack_output
+from ..nodetree.stack_ops import (Position, feeding_link, feeds_clip_run, is_layer, link_index,
+                                  link_source, pair_reads, producing_link, stack_output)
 from ..props.channel import PREVIEW_OUTPUT, channel_alpha_name, interface_socket_specs
 
 log = logging.getLogger(__name__)
@@ -47,8 +50,10 @@ ARTIFACT_FINGERPRINT_KEY = "ps_fingerprint"
 last_build_stats: BuildStats | None = None
 
 _BASE_NODE_PROPS = {p.identifier for p in bpy.types.Node.bl_rna.properties}
-# Identity and editing state that never reaches the shader.
-_HASH_EXCLUDED_PROPS = {'uuid', 'is_expanded', 'lock_layer', 'lock_alpha'}
+# Identity and editing state that never reaches the shader. A layer's
+# ``pairs`` hold what its pairs built, which ``hash_parts`` covers where
+# it matters.
+_HASH_EXCLUDED_PROPS = {'uuid', 'is_expanded', 'lock_layer', 'lock_alpha', 'pairs'}
 # Node class -> the property names node_state reads. See _hashed_props.
 _hashed_prop_names: dict[type, tuple[str, ...]] = {}
 
@@ -144,14 +149,17 @@ class CompileContext:
 
     It records the (colour, alpha) IR sockets that provide each Paint
     System node output, so nodes further down the graph can link to them.
+    *bake_target* is the position, a layer and a pair, whose output a
+    bake renders, or None for a normal compile.
     """
 
-    def __init__(self, ir: IR, *, bake_target=None) -> None:
+    def __init__(self, ir: IR, *, bake_target: Position | None = None) -> None:
         self.ir = ir
         self.bake_target = bake_target
         self._outputs: dict[tuple[str, str], tuple[Ref, Ref]] = {}
         self._inputs: dict[str, tuple[Ref, Ref | float]] = {}
-        self._subtree_hashes: dict[str, str] = {}
+        self._sources: dict[tuple[str, int | None], tuple[Ref | Any, Ref | Any]] = {}
+        self._subtree_hashes: dict[tuple[str, int], str] = {}
 
     # -- emitting -------------------------------------------------------
 
@@ -213,16 +221,16 @@ class CompileContext:
         opaque base. The nodes are emitted once per build, so the Group
         Input and the Group Output share them.
         """
-        pair = self._inputs.get(channel.uuid)
-        if pair is None:
+        refs = self._inputs.get(channel.uuid)
+        if refs is None:
             if _INPUT_ID not in self.ir.nodes:
                 self.ir.add_node(_INPUT_ID, 'NodeGroupInput')
             color = (_INPUT_ID, channel.name)
             if channel.type == 'VECTOR':
                 color = input_value(self, channel, color)
             alpha = (_INPUT_ID, channel_alpha_name(channel.name)) if channel.use_alpha else 1.0
-            pair = self._inputs[channel.uuid] = (color, alpha)
-        return pair
+            refs = self._inputs[channel.uuid] = (color, alpha)
+        return refs
 
     def output(self, socket) -> tuple[Ref, Ref] | None:
         """The (colour, alpha) refs recorded for the output *socket*, or None."""
@@ -250,9 +258,9 @@ class CompileContext:
         Unlinked, the socket's default value gives the colour and its
         fourth component the alpha.
         """
-        pair = self.upstream(socket)
-        if pair is not None:
-            return pair
+        refs = self.upstream(socket)
+        if refs is not None:
+            return refs
         value = _copy_value(socket.default_value)
         return value, value[3]
 
@@ -262,8 +270,8 @@ class CompileContext:
         Linked, it reads the colour half, and the shader converts that to
         the input's type.
         """
-        pair = self.upstream(socket)
-        self.link_or_set(pair[0] if pair is not None else _copy_value(socket.default_value),
+        refs = self.upstream(socket)
+        self.link_or_set(refs[0] if refs is not None else _copy_value(socket.default_value),
                          to_id, to_socket)
 
     def flattened(self, socket, channel) -> Ref:
@@ -280,10 +288,10 @@ class CompileContext:
         only the input shows.
         """
         base = self.channel_base(channel)[0]
-        pair = self.upstream(socket)
-        if pair is None:
+        refs = self.upstream(socket)
+        if refs is None:
             return base
-        color, alpha = pair
+        color, alpha = refs
         return self.mix_colors(socket.node, f"flatten:{socket.identifier}", alpha, base, color)
 
     def mix_colors(self, node, role: str, factor: Ref | Any, a: Ref, b: Ref) -> Ref:
@@ -296,47 +304,65 @@ class CompileContext:
         self.link(b, mix, MIX_IN_B_COLOR)
         return (mix, MIX_OUT_COLOR)
 
+    def layer_source(self, layer, pair: int) -> tuple[Ref | Any, Ref | Any]:
+        """(colour, alpha) of *layer*'s own content for *pair*, emitted once per build.
+
+        Most layer types show the same content in every pair, so it is
+        emitted for the first pair that asks and shared by the others. A
+        type with ``ps_source_per_pair`` emits it for each pair.
+        """
+        key = (layer.name, pair if layer.ps_source_per_pair else None)
+        source = self._sources.get(key)
+        if source is None:
+            source = self._sources[key] = layer.emit_source(self, pair)
+        return source
+
     # -- caching --------------------------------------------------------
 
-    def is_cached(self, node) -> bool:
-        if node == self.bake_target:
-            return False
+    def is_cached(self, node, pair: int = 0) -> bool:
+        """Whether the output of *node*'s *pair* compiles as its baked cache image."""
         if not getattr(node, 'cache_enabled', False):
             return False
-        if getattr(node, 'cache_image', None) is None:
+        if Position(node, pair) == self.bake_target:
             return False
-        # A cache image holds a finished stack, but these outputs are part
+        state = node.pairs[pair]
+        if state.cache_image is None:
+            return False
+        # A cache image holds a finished stack, but this output is part
         # of a clip run. The top layer of the run also needs the base's
         # inputs compiled.
-        if feeds_clip_run(node):
+        if feeds_clip_run(node, pair):
             return False
-        return node.cache_hash == self.subtree_hash(node)
+        return state.cache_hash == self.subtree_hash(node, pair)
 
-    def subtree_hash(self, node) -> str:
-        """Return a hash of everything that affects *node*'s outputs.
+    def subtree_hash(self, node, pair: int = 0) -> str:
+        """Return a hash of everything that affects the output of *node*'s *pair*.
 
-        That is its own properties, its unlinked socket values, its
-        ``hash_parts`` and, recursively, every node upstream of it.
+        That is the node's own properties, the values of the unlinked
+        inputs the pair reads (``pair_reads``), its ``hash_parts`` and,
+        recursively, everything upstream of those inputs. A node that is
+        not a layer has one pair, 0, which covers all of its outputs.
         """
-        cached = self._subtree_hashes.get(node.name)
+        key = (node.name, pair)
+        cached = self._subtree_hashes.get(key)
         if cached is not None:
             return cached
         # A placeholder entry stops a cycle from recursing forever.
-        self._subtree_hashes[node.name] = "cycle"
+        self._subtree_hashes[key] = "cycle"
         parts: list[Any] = [node.bl_idname, _serialize(node_state(node))]
-        for sock in node.inputs:
+        for sock in pair_reads(node, pair):
             link = feeding_link(sock)
             if link is not None:
                 parts.append([sock.identifier, 'link',
-                              self.subtree_hash(link.from_node),
+                              self.subtree_hash(*link_source(link)),
                               link.from_socket.identifier])
             else:
                 parts.append([sock.identifier, 'value', _serialize(sock.default_value)])
         extra = getattr(node, 'hash_parts', None)
         if extra is not None:
-            parts.append(_serialize(extra(self)))
+            parts.append(_serialize(extra(self, pair) if is_layer(node) else extra(self)))
         result = hash_payload(parts)
-        self._subtree_hashes[node.name] = result
+        self._subtree_hashes[key] = result
         return result
 
 
@@ -407,31 +433,34 @@ def interface_outputs(ir: IR, tree) -> None:
         ir.add_socket('OUTPUT', 'NodeSocketShader', PREVIEW_OUTPUT, preview=True)
 
 
-def topological_order(start, ctx: CompileContext) -> list:
-    """Return every node reachable from *start*, upstream nodes first.
+def topological_order(start: Position, ctx: CompileContext) -> list[Position]:
+    """Return every position reachable from *start*, upstream positions first.
 
-    Cached nodes are treated as leaves, so their upstream is not compiled.
+    A layer's pairs are separate positions, since each one reads its own
+    input below. Any other node is one position, pair 0. Cached positions
+    are treated as leaves, so their upstream is not compiled.
     """
-    order: list = []
-    visited: set[str] = set()
+    order: list[Position] = []
+    visited: set[tuple[str, int]] = set()
 
-    def visit(node) -> None:
-        if node.name in visited:
+    def visit(position: Position) -> None:
+        node, pair = position
+        if (node.name, pair) in visited:
             return
-        visited.add(node.name)
-        if not ctx.is_cached(node):
-            for sock in node.inputs:
+        visited.add((node.name, pair))
+        if not ctx.is_cached(node, pair):
+            for sock in pair_reads(node, pair):
                 link = producing_link(sock)
                 if link is not None:
-                    visit(link.from_node)
-        order.append(node)
+                    visit(link_source(link))
+        order.append(position)
 
     visit(start)
     return order
 
 
-def build_ir(tree, *, bake_target=None) -> IR:
-    """Build the IR for *tree*, or for the subtree of the layer *bake_target* when given."""
+def build_ir(tree, *, bake_target: Position | None = None) -> IR:
+    """Build the IR for *tree*, or for the subtree of the position *bake_target* when given."""
     # The build only reads *tree*'s links, so one link index serves the
     # whole walk. A nested compile of a child tree installs its own index,
     # under its own key.
@@ -439,7 +468,7 @@ def build_ir(tree, *, bake_target=None) -> IR:
         return _build_ir(tree, bake_target=bake_target)
 
 
-def _build_ir(tree, *, bake_target=None) -> IR:
+def _build_ir(tree, *, bake_target: Position | None = None) -> IR:
     ir = IR()
     ir.meta['tree'] = tree.name
     ctx = CompileContext(ir, bake_target=bake_target)
@@ -450,7 +479,8 @@ def _build_ir(tree, *, bake_target=None) -> IR:
     interface_inputs(ir, tree.channels)
     if bake_target is None:
         interface_outputs(ir, tree)
-        start = tree.get_output_node()
+        output = tree.get_output_node()
+        start = Position(output, 0) if output is not None else None
     else:
         ir.add_socket('OUTPUT', 'NodeSocketColor', 'Color')
         ir.add_socket('OUTPUT', 'NodeSocketFloat', 'Alpha')
@@ -459,16 +489,20 @@ def _build_ir(tree, *, bake_target=None) -> IR:
     if start is None:
         return ir
 
-    for node in topological_order(start, ctx):
+    for node, pair in topological_order(start, ctx):
         emit = getattr(node, 'emit', None)
-        if emit is not None:
+        if emit is None:
+            continue
+        if is_layer(node):
+            emit(ctx, pair)
+        else:
             emit(ctx)
 
     if bake_target is not None:
         out_id = ir.add_node('bake:out', 'NodeGroupOutput').id
-        pair = ctx.output(stack_output(bake_target))
-        if pair is not None:
-            color, alpha = pair
+        refs = ctx.output(stack_output(*bake_target))
+        if refs is not None:
+            color, alpha = refs
             ir.link(color, out_id, 'Color')
             ir.link(alpha, out_id, 'Alpha')
     # Not part of the fingerprint. The bake reads subtree hashes from it.

@@ -13,6 +13,7 @@ register_addon()
 core = import_from("compiler.core")
 stack_ops = import_from("nodetree.stack_ops")
 registry = import_from("nodes.layers.registry")
+base_layer_node = import_from("nodes.layers.base_layer_node")
 layer_ops = import_from("ops.layer_ops")
 layers_panels = import_from("panels.layers_panels")
 icon_kwargs = import_from("common").icon_kwargs
@@ -230,23 +231,38 @@ try:
     tree = build("Duplicate")
     original = tree.nodes["A"]
     cache_image = bpy.data.images.new("Cache For A", 8, 8)
-    original.cache_image = cache_image
+    original.pairs[0].cache_image = cache_image
     original.cache_enabled = True
-    original.cache_hash = "deadbeef"
+    original.pairs[0].cache_hash = "deadbeef"
     original.cache_uv_map = "UVMap"
     duplicate_tree = tree.copy()
     duplicate = duplicate_tree.nodes["A"]
     check(duplicate.uuid != original.uuid, "the copy gets its own uuid")
-    check(duplicate.cache_image is None and not duplicate.cache_enabled
-          and duplicate.cache_hash == "" and duplicate.cache_uv_map == "",
+    check(duplicate.pairs[0].cache_image is None and not duplicate.cache_enabled
+          and duplicate.pairs[0].cache_hash == "" and duplicate.cache_uv_map == "",
           "and no cache, so baking it cannot overwrite the original's pixels")
-    check(original.cache_image == cache_image and original.cache_enabled
-          and original.cache_hash == "deadbeef", "the original keeps its own")
+    check(original.pairs[0].cache_image == cache_image and original.cache_enabled
+          and original.pairs[0].cache_hash == "deadbeef", "the original keeps its own")
     plain = duplicate_tree.nodes["B"]
-    check(plain.cache_image is None and plain.uuid != tree.nodes["B"].uuid,
+    check(plain.pairs[0].cache_image is None and plain.uuid != tree.nodes["B"].uuid,
           "a layer that had no cache copies unchanged")
     bpy.data.node_groups.remove(duplicate_tree)
     bpy.data.images.remove(cache_image)
+
+    section("pair states")
+    tree = build("Pair States")
+    check(all(len(node.pairs) == stack_ops.pair_count(node) == 1
+              for node in tree.nodes if stack_ops.is_layer(node)),
+          "every new layer has one state for its one pair")
+    # A layer saved before pairs had state reads back with none.
+    tree.nodes["A"].pairs.clear()
+    tree.nodes["F"].pairs.clear()
+    base_layer_node.add_missing_pair_states()
+    check(len(tree.nodes["A"].pairs) == 1 and len(tree.nodes["F"].pairs) == 1,
+          "reading a file gives such a layer a state for each pair")
+    base_layer_node.add_missing_pair_states()
+    check(len(tree.nodes["A"].pairs) == 1, "and a second pass adds nothing")
+    check(core.compile_tree(tree), "so it compiles")
 
     section("layer type registry")
     types = registry.layer_types()

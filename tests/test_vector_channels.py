@@ -491,7 +491,7 @@ def test_cache():
     bake_node_cache(bpy.context, tree, top, obj, width=SIZE, height=SIZE, margin=2)
     top.cache_enabled = True
     compile_tree(tree)
-    image = top.cache_image
+    image = top.pairs[0].cache_image
     check(image.is_float and image.colorspace_settings.name == 'Non-Color',
           f"the cache is a float image of data ({image.is_float}, {image.colorspace_settings.name})")
     check(colour_cache not in bpy.data.images, "the byte cache from before is removed, as nothing else uses it")

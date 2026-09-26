@@ -14,6 +14,8 @@ class LayerRow:
     """How the layer list shows one layer of the stack."""
     order: int
     level: int
+    # The pair the layer sits in this stack through.
+    pair: int
     # No folder around the layer is collapsed.
     visible: bool
     # Every folder around the layer is enabled.
@@ -37,7 +39,7 @@ def layer_rows(tree) -> dict[str, LayerRow]:
             visible = parent.visible and folder.is_expanded
             parent_enabled = parent.parent_enabled and folder.enabled
         rows[item.node.name] = LayerRow(
-            len(rows), item.level, visible, parent_enabled)
+            len(rows), item.level, item.pair, visible, parent_enabled)
     return rows
 
 
@@ -96,7 +98,7 @@ class PAINTSYSTEM_UL_layers(UIList):
 
         row = main_row.row(align=True)
         row.alignment = 'RIGHT'
-        item.draw_row_state(row)
+        item.draw_row_state(row, row_state.pair)
         if item.lock_layer:
             row.label(text="", **icon_kwargs('VIEW_LOCKED', 'LOCKED'))
         row.prop(item, "enabled", text="", emboss=False,
