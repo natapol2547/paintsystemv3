@@ -332,11 +332,13 @@ class PAINTSYSTEM_OT_bake_cache(Operator):
     def invoke(self, context, event):
         tree = get_active_tree(context)
         node = button_layer(context, tree)
-        image = node.pairs[tree.pair_in_stack(node)].cache_image if node is not None else None
-        if image is not None:
-            self.resolution = str(image.size[0]) if str(image.size[0]) in {
-                i[0] for i in RESOLUTION_ITEMS} else self.resolution
+        if node is not None:
+            # Every pair's cache is read with the layer's one UV map, so
+            # baking with another one makes the other pairs bake again.
             self.uv_map = node.cache_uv_map
+            image = node.pairs[tree.pair_in_stack(node)].cache_image
+            if image is not None and str(image.size[0]) in {item[0] for item in RESOLUTION_ITEMS}:
+                self.resolution = str(image.size[0])
         return context.window_manager.invoke_props_dialog(self)
 
     def draw(self, context):

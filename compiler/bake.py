@@ -263,8 +263,14 @@ def bake_node_cache(context, tree, node, obj, *, pair: int = 0, width: int = 204
         # else uses.
         bpy.data.images.remove(old)
     state.cache_hash = subtree_hash
-    if uv_map:
+    if node.cache_uv_map != uv_map:
+        # Every pair's cache is read with this one UV map. The other
+        # pairs were baked with the old one, so they must bake again
+        # before the compiler uses them.
         node.cache_uv_map = uv_map
+        for other, other_state in enumerate(node.pairs):
+            if other != pair:
+                other_state.cache_hash = ""
     state.cache_stale = False
     mark_dirty(tree)
     return image

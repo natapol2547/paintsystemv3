@@ -15,6 +15,7 @@ from harness import (bake_group, check, close, finish, fmt, import_from, over,  
                      pixel_at, register_addon, section)
 
 register_addon()
+bake = import_from("compiler.bake")
 core = import_from("compiler.core")
 derived = import_from("filters.derived")
 layer_job = import_from("filters.layer_job")
@@ -146,7 +147,19 @@ try:
     check(close(channel_pixel(tree, "Second"), BLUE), "the second, with none, still blends its stack")
     check(shared.pairs[1].cache_stale is False and f"{shared.uuid}:cache@Color 2" not in compiled_ids(tree),
           "and has no cache node")
+    cube = bpy.data.objects["Cube"]
+    second_uv = cube.data.uv_layers.new(name="Second UV")
+    bake.bake_node_cache(bpy.context, tree, shared, cube, pair=0, width=SIZE, height=SIZE, margin=0)
+    bake.bake_node_cache(bpy.context, tree, shared, cube, pair=1, width=SIZE, height=SIZE, margin=0,
+                         uv_map="Second UV")
+    channel_pixel(tree, "Color")
+    check(shared.cache_uv_map == "Second UV" and shared.pairs[1].cache_hash != ""
+          and shared.pairs[0].cache_hash == "" and shared.pairs[0].cache_stale,
+          "baking a pair with another UV map sends the other pairs back to baking, "
+          "since one UV map reads every pair's cache")
+    cube.data.uv_layers.remove(second_uv)
     shared.cache_enabled = False
+    bpy.data.images.remove(shared.pairs[1].cache_image)
     shared.pairs[0].cache_image = None
     bpy.data.images.remove(cache)
 
