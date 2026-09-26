@@ -61,11 +61,15 @@ def layout(tree):
     return [(item.node.name, item.level) for item in tree.stack()]
 
 
+def fill_pixels(image, color):
+    image.pixels.foreach_set(np.tile(np.array(color, dtype=np.float32), image.size[0] * image.size[1]))
+    image.update()
+
+
 def painted_image(name, color):
     """A generated image with unsaved painting: its pixels differ from what it generates."""
     image = bpy.data.images.new(name, 4, 4, alpha=True)
-    image.pixels.foreach_set(np.tile(np.array(color, dtype=np.float32), 16))
-    image.update()
+    fill_pixels(image, color)
     return image
 
 
@@ -352,7 +356,28 @@ def test_images():
     copy = bake.duplicate_image(from_file)
     check(copy.packed_file is not None and from_file.packed_file is None,
           "a copy of an image read from a file is packed, so painting it cannot overwrite the file")
+
+    # Image.copy reads the file again, or generates the image again, at
+    # the size it had before an unsaved resize.
+    from_file.scale(8, 8)
+    fill_pixels(from_file, (0.0, 0.5, 1.0, 1.0))
+    resized = painted_image("Resized", (1, 0, 0, 1))
+    resized.scale(8, 8)
+    fill_pixels(resized, (0.0, 0.5, 1.0, 1.0))
+    for image in (from_file, resized):
+        copy = bake.duplicate_image(image)
+        check(tuple(copy.size) == (8, 8) and close(first_pixel(copy), (0.0, 0.5, 1.0, 1.0)),
+              f"a copy of {image.source.lower()} {image.name!r} after an unsaved resize has its size and pixels "
+              f"({tuple(copy.size)}, {first_pixel(copy)})")
     os.remove(path)
+    copy = bake.duplicate_image(from_file)
+    check(tuple(copy.size) == (8, 8) and close(first_pixel(copy), (0.0, 0.5, 1.0, 1.0)) and copy.packed_file,
+          f"and so does one whose file is gone, packed ({tuple(copy.size)}, {first_pixel(copy)})")
+    i1.image = i2.image = resized
+    links.link([i2], i1)
+    links.unlink(i2)
+    check(not i2.link_id and i2.image not in (None, resized) and tuple(i2.image.size) == (8, 8),
+          "an unlinked layer gets its own copy of a resized image")
 
 
 def test_clipboard():

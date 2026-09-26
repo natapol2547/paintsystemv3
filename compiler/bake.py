@@ -59,6 +59,15 @@ def duplicate_image(image: bpy.types.Image) -> bpy.types.Image:
     """
     copy = image.copy()
     if image.is_dirty:
+        # After an unsaved resize the copy comes back at the old size, and
+        # with its file gone it comes back empty.
+        if tuple(copy.size) != tuple(image.size):
+            if any(copy.size):
+                copy.scale(*image.size)
+            else:
+                copy.source = 'GENERATED'
+                copy.use_generated_float = image.is_float
+                copy.generated_width, copy.generated_height = image.size
         pixels = np.empty(len(image.pixels), dtype=np.float32)
         image.pixels.foreach_get(pixels)
         copy.pixels.foreach_set(pixels)
