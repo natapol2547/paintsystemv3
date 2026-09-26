@@ -576,6 +576,8 @@ def test_tabs():
     from_preview = np.array(preview.image_pixels_float[:], dtype=np.float32)
     check(from_preview.shape == from_file.shape and np.allclose(from_preview[3::4], from_file[3::4], atol=2 / 255),
           "the preview's pixels run bottom row first, as a texture's do")
+    check(np.allclose(from_preview[0::4], from_file[0::4] * from_file[3::4], atol=2 / 255),
+          "and their colour is premultiplied by their alpha")
 
     if not gpu_core.gpu_available():
         skip("no GPU context in this background Blender, so the tab is not drawn")
@@ -620,17 +622,25 @@ def test_tabs():
     header = (*a.header_color, 1.0)
     check(close(at(tab_left + 3, top + 3), header, 2 / 255), f"the tab has the header colour {at(tab_left + 3, top + 3)}")
     check(at(tab_left - 3, top + 3)[3] == 0 and at(tab_right + 3, top + 3)[3] == 0, "it is as wide as a tab")
-    check(at(tab_left + 3, tab_top + 3)[3] == 0, "and as high")
-    check(at(tab_left + 1, tab_top - 1)[3] == 0 and at(tab_left + 3, top - 1)[3] > 0,
-          "its top corners are round and its bottom ones square")
     half = link_tabs.ICON_SIZE * scale / 2
     cx, cy = (tab_left + tab_right) / 2, (top + tab_top) / 2
+    # Above and below the icon, at the middle, clear of the round corners.
+    check(at(cx, tab_top - 3)[3] > 0 and at(cx, tab_top + 3)[3] == 0, "and as high")
+    check(at(tab_left + 1, tab_top - 1)[3] == 0 and at(tab_left + 3, top - 1)[3] > 0,
+          "its top corners are round and its bottom ones square")
     icon = pixels[int(cy - half - y0):int(cy + half - y0), int(cx - half - x0):int(cx + half - x0)]
     white = (icon[..., 0] > 0.9) & (icon[..., 1] > 0.9)
     mid = white.shape[0] // 2
-    upper_right, upper_left = white[mid:, mid:].mean(), white[mid:, :mid].mean()
+    # Rows run bottom first, so white[mid:] is the upper half.
+    rising = white[mid:, mid:].mean() + white[:mid, :mid].mean()
+    falling = white[mid:, :mid].mean() + white[:mid, mid:].mean()
     check(white.mean() > 0.1, f"the chain is drawn inside ({white.mean():.2f} white)")
-    check(upper_right > 2 * upper_left, f"the right way up, rising to the right ({upper_right:.2f} > {upper_left:.2f})")
+    check(rising > 1.5 * falling, f"the right way up, rising to the right ({rising:.2f} > {falling:.2f})")
+    # A white icon over the tab only lightens it. Blending its
+    # premultiplied colour as straight alpha darkens its soft edges.
+    darkest = icon[..., :3].min(axis=(0, 1))
+    check(np.all(darkest >= np.array(header[:3]) - 2 / 255),
+          f"its soft edges are no darker than the tab ({tuple(np.round(darkest, 3))})")
     lone_tab_left = 150 * scale + link_tabs.TAB_INSET * scale
     check(at(lone_tab_left + 3, top + 3)[3] == 0, "an unlinked layer gets no tab")
     link_tabs.release()

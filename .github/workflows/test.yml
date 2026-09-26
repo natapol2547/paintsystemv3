@@ -134,7 +134,7 @@ jobs:
               test_selection_view_raster.py test_selection_actions.py \
               test_filters_gpu.py test_filter_blend.py test_filter_composite.py \
               test_filter_build.py test_filter_blur.py test_filter_painter.py \
-              test_filter_auto.py test_filter_plan.py
+              test_filter_auto.py test_filter_plan.py test_links.py
           else
             echo "Blender $SERIES has no background GPU context; skipping"
           fi

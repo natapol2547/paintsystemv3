@@ -76,7 +76,7 @@ def icon_preview(name: str) -> bpy.types.ImagePreview | None:
     """The preview of the add-on icon *name*, or None when there is no such icon.
 
     Its ``image_pixels_float`` are the icon's pixels, for drawing it with
-    the ``gpu`` module.
+    the ``gpu`` module. Their colour is premultiplied by their alpha.
     """
     if _icon_previews is None or name not in _icon_previews:
         return None
