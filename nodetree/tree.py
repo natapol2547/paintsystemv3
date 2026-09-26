@@ -338,7 +338,7 @@ class PaintSystemNodeTree(NodeTree):
         *direction* is ``'UP'`` or ``'DOWN'``. *action* picks one of the
         moves ``stack_ops.movement_options`` offers. A folder takes its
         content along. Returns False, and changes nothing, when the move is
-        not offered or would loop a mask link (see ``stack_ops.move``).
+        not offered or would make a loop (see ``stack_ops.move``).
         """
         channel_name = self._channel_name(channel_name)
         if channel_name is None:

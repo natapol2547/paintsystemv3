@@ -17,7 +17,8 @@ Epic B. Size L. Milestone M2. The layer socket model that linked layers
 - Slice 3, Paste and Paste Linked: replaced by linked layers as separate
   nodes with linked settings (PS-016, a8749b5 and 05754ee) and the
   clipboard (PS-017, a8749b5).
-- Slice 4, a Separate Color node in the Paint System tree: not started.
+- Slice 4, a Separate Color node in the Paint System tree: done. See
+  "Slice 4" below.
 
 ## Decisions
 
@@ -271,6 +272,52 @@ has pairs.
   channel by walking that channel's stack, about 0.4 ms per redraw for a
   layer with several pairs in a 40-layer stack. That is left as it is.
 
+## Slice 4: Separate Color
+
+`PaintSystemSeparateColorNode` (`nodes/converter/separate_color_node.py`),
+under Converter in the node editor's Add menu.
+
+- One RGBA input, `Color`, with a value field (0.8 grey, as on Blender's
+  node). Four float outputs, `Red`, `Green`, `Blue` and `Alpha`.
+- `mode` is RGB, HSV or HSL, as on the shader's Separate Color. The first
+  three outputs are renamed to match (Hue, Saturation, Value or
+  Lightness). Their identifiers stay `Red`, `Green` and `Blue`, so a mode
+  change keeps the links. The mode is hashed, so a cache above the node
+  goes stale when it changes.
+- It emits a shader Separate Color. Each output is recorded with an alpha
+  of 1, from one Value node, which is how Blender converts a float to a
+  colour, as in the compositor. `Alpha` gives the input's alpha as its
+  value.
+- It is not a layer, so its input is not a slot. A layer that feeds it
+  stays in its stack, and `detach` keeps the link, as it keeps a mask
+  link. `move` already follows every input when it checks for a loop, so
+  it refuses a move that would loop through the node, as it refuses a
+  mask loop. Examples are a layer moved below the layer its mask reads
+  through the node, and a layer moved above a folder whose content starts
+  from the node reading that layer. The Move operators report that the layer would read its
+  own result.
+- An output can feed a Group Output socket, a layer's `Mask`, or the
+  bottom of a stack, where it is that stack's backdrop, as the Group
+  Input is. The stack edits keep it at the bottom: a new bottom layer
+  takes it as the stack below, and removing the last layer links it to
+  the output again.
+- With it, a mask can read one component of a colour, such as its red,
+  instead of the luminance the shader's implicit conversion gives.
+
+### Known gaps
+
+- A filter layer over a stack that starts from the node cannot build.
+  The GPU composite does not draw the node and refuses it by name
+  (`filters.composite._plan_chain`), and the Cycles bake path it would
+  fall back to is not built (PS-057, Path B). Drawing it would take a
+  conversion pass per mode after compositing the stack that feeds it.
+- A filter layer's own `Mask` can come from the node, because a build
+  reads only what feeds the filter's `Color` input. A layer below a
+  filter layer with a mask from the node is refused, as any linked mask
+  below one is (`filters.composite._plan_layer`).
+- The layer list shows only layers, so a stack starting from the node
+  looks like any other in the panel.
+
 ## Acceptance
 
 - Slice 1, done:
@@ -314,3 +361,18 @@ has pairs.
     (`tests/test_ui_draw.py`, CI only).
   - Dragging a link onto the virtual socket in the node editor, and the
     Pairs list (a GUI check by the user).
+- Slice 4, done, with `tests/test_separate_color.py`:
+  - An output starts another channel, and the layer feeding the node
+    stays in its own stack.
+  - A layer inserted, moved to the bottom or removed keeps the node at
+    the bottom of the stack it starts.
+  - HSV and HSL separate as the shader does, rename the outputs and keep
+    their links, and the mode changes the hash.
+  - `Alpha` gives the input's alpha, and a colour output carries an
+    alpha of 1. Unlinked, the node separates its own value.
+  - An output masks a layer, and a move that would loop through the node
+    is refused, from a mask or from a stack the node starts.
+  - A filter layer over it in a colour channel is refused as needing a
+    Cycles bake, naming the node. A filter layer whose own mask comes
+    from it still plans.
+  - The node in the node editor (a GUI check by the user).

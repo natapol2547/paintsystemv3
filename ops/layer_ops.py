@@ -181,8 +181,8 @@ class LayerMoveOperator:
         if action not in {option.action for option in options}:
             return {'CANCELLED'}
         if not ps.tree.move_layer_node(ps.layer, self.direction, action):
-            # The move was on offer, so only the mask loop check refused it.
-            self.report({'WARNING'}, "This move would make a loop through a mask link")
+            # The move was on offer, so only the loop check refused it.
+            self.report({'WARNING'}, "This move would make the layer read its own result")
             return {'CANCELLED'}
         return {'FINISHED'}
 

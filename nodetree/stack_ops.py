@@ -13,8 +13,9 @@ slots. The bottom layer of a folder has nothing linked below it. The
 compiler reads that as a transparent backdrop.
 
 Edits keep one rule: a layer's ``Color`` output feeds at most one slot.
-It may also feed masks, and edits leave those links alone. A move that
-would loop such a link back into the layer is refused.
+It may also feed inputs that are not slots, such as masks and a Separate
+Color's input, and edits leave those links alone. A move that would loop
+such a link back into the layer is refused.
 
 The socket accessors (``below_input``, ``stack_output``,
 ``content_input``, ``channel_input``) are the only code here that names
@@ -241,8 +242,8 @@ def is_slot(socket) -> bool:
 def consumer_input(node):
     """The slot *node*'s stack output feeds, or None.
 
-    Links into masks are skipped. A mask reads the layer's value without
-    putting the layer in a stack.
+    Links into inputs that are not slots are skipped. A mask or a Separate
+    Color reads the layer's value without putting the layer in a stack.
     """
     return _consumer_slot(stack_output(node))
 
@@ -418,7 +419,7 @@ def attach(tree, node, slot) -> None:
 def detach(tree, node) -> None:
     """Take *node* out of the stack and close the gap behind it.
 
-    Links from *node* into masks stay.
+    Links from *node* into inputs that are not slots, such as masks, stay.
     """
     slot = consumer_input(node)
     link = feeding_link(below_input(node))
@@ -588,10 +589,12 @@ def move(tree, channel_name: str, node, direction: str, action: str) -> bool:
     """Make the *action* move that ``movement_options`` offers *node*.
 
     Returns False if no such move is offered, or if it would loop a link
-    into a mask back into *node*. That happens when a layer moves above a
-    layer it masks: it would read the masked layer's result and feed its
-    mask at the same time. The compiler cannot order that, so the layer is
-    put back where it was.
+    that is not a slot back into *node*. That happens when a layer moves
+    above a layer it masks: it would read the masked layer's result and
+    feed its mask at the same time. A Separate Color the layer feeds can
+    close the same loop, when a stack it starts would end up below the
+    layer. The compiler cannot order that, so the layer is put back where
+    it was.
     """
     option = next((option for option in movement_options(stack(tree, channel_name), node, direction)
                    if option.action == action), None)

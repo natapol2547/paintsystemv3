@@ -125,7 +125,7 @@ groups and templates (040-042), colour history (062).
 | [PS-017](tickets/PS-017-clipboard.md) | Clipboard: copy, copy all, paste, paste linked, unlink. Done apart from the GUI check | M | 010 016 098 |
 | [PS-018](tickets/PS-018-merge-duplicate-convert.md) | Merge up/down, duplicate, convert to image layer, transfer UV | M | 010 020 |
 | [PS-019](tickets/PS-019-base-layer-flags.md) | Base layer flags and warnings API | S | – |
-| [PS-098](tickets/PS-098-rgba-sockets-and-socket-pairs.md) | RGBA sockets and socket pairs. Slice 1, RGBA-only sockets, done; socket pairs backed out | L | 010 |
+| [PS-098](tickets/PS-098-rgba-sockets-and-socket-pairs.md) | RGBA sockets and socket pairs. Slice 1, RGBA-only sockets, done; socket pairs backed out; Separate Color node done apart from the GUI check | L | 010 |
 
 ## Epic C. Layer types
 

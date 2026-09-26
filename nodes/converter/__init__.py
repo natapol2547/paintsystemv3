@@ -1,10 +1,7 @@
 from bpy.utils import register_submodule_factory
 
 submodules = (
-    "io",
-    "converter",
-    "layers",
-    "link_tabs",
+    "separate_color_node",
 )
 
 register, unregister = register_submodule_factory(__name__, submodules)

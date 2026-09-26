@@ -21,6 +21,9 @@ def node_categories():
             *layer_items,
             NodeItem('PaintSystemGroupLayerNode'),
         ]),
+        PaintSystemNodeCategory('PAINTSYSTEM_CONVERTER', "Converter", items=[
+            NodeItem('PaintSystemSeparateColorNode'),
+        ]),
         PaintSystemNodeCategory('PAINTSYSTEM_IO', "Group", items=[
             NodeItem('PaintSystemGroupInputNode'),
             NodeItem('PaintSystemGroupOutputNode'),
