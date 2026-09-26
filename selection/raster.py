@@ -89,16 +89,6 @@ MAX_TEXELS = 1 << 26
 MIN_RADIUS = 1e-3
 """Ellipse radius in texels below which the ellipse covers nothing."""
 
-SELF_TEST_SIZE = 64
-"""Width and height of the self-test target, in texels."""
-
-SELF_TEST_WIDE_SIZE = (140, 64)
-"""Width and height of the second self-test target, in texels. It is
-three span columns wide, so its lasso tables use more than one."""
-
-SELF_TEST_TOLERANCE = 1e-4
-"""Largest difference from the expected values the self-test accepts."""
-
 SUPPORTED_KINDS = frozenset(('BOX', 'ELLIPSE', 'LASSO', 'ALL', 'INVERT'))
 """Op kinds this module can rasterise. `FACES`, `RASTER` and `TRANSFORM`
 will be added with the tools that create them (PS-093, PS-094)."""
@@ -483,143 +473,19 @@ def _run_chain(specs, source, targets, width: int, height: int, tile: int) -> No
 
 # ── Self-test ────────────────────────────────────────────────────────
 
-SELF_TEST_OPS = (
-    OpSpec('BOX', 'REPLACE', 8.0, True, [(0.25, 0.125), (0.75, 0.5)]),
-    OpSpec('ELLIPSE', 'ADD', 16.0, True, [(20.25 / 64, 36.25 / 64), (44.75 / 64, 60.75 / 64)]),
-    OpSpec('LASSO', 'SUBTRACT', 4.0, True,
-           [(28.25 / 64, 4.25 / 64), (60.25 / 64, 4.25 / 64), (60.25 / 64, 36.25 / 64)]),
-    OpSpec('LASSO', 'ADD', 0.0, False, [(2 / 64, 40 / 64), (12 / 64, 40 / 64), (12 / 64, 62 / 64), (2 / 64, 62 / 64)]),
-    OpSpec('INVERT', 'ADD'),
-    OpSpec('BOX', 'INTERSECT', 0.0, True, [(0.0, 0.0), (1.0, 0.96875)]),
-)
-"""A 64 x 64 chain of six ops.
-
-In order: a box feathered by 8 texels, an added circle feathered by 16,
-a subtracted triangle lasso feathered by 4, an added hard square lasso,
-an inversion, and an intersected anti-aliased box.
-
-`SELF_TEST_EXPECTED` checks the soft edge profile, the ellipse's early
-out and its root, the lasso distance tables over a 2 x 2 grid of
-32-texel cells, the hard branch of the lasso pass, all four modes,
-`INVERT`, and an `ADD` of fractional coverage to a fractional mask
-(where `max` differs from a sum). Every lasso table fits in one span
-column and one data texture row."""
-
-SELF_TEST_EXPECTED = {
-    (12, 16): 0.98876953125,
-    (17, 16): 0.23193359375,
-    (20, 16): 0.0,
-    (20, 40): 0.6986395918352175,
-    (47, 48): 0.7476577758789062,
-    (43, 57): 0.6803087713210262,
-    (40, 60): 0.6986395918352175,
-    (30, 10): 0.09228515625,
-    (44, 12): 1.0,
-    (58, 30): 1.0,
-    (5, 45): 0.0,
-    (12, 50): 0.9997371090224711,
-    (1, 50): 1.0,
-    (32, 62): 0.0,
-    (32, 61): 0.5701065063476562,
-    (63, 0): 1.0,
-    (33, 33): 0.7504059740217613,
-}
-"""Texel (x, y) to the value of `SELF_TEST_OPS` there, computed in float64
-by `tests/selection_reference.py`. At (33, 33) the circle adds coverage
-0.2496 to the box's 0.2319."""
-
-
-def _self_test_comb() -> list[tuple[float, float]]:
-    """The outline of the comb lasso in `SELF_TEST_WIDE_OPS`, in UV.
-
-    33 teeth, each 2 texels wide, one every 4 texels from x = 3.3. Each
-    tooth runs from below the bottom row to above the top row, and the
-    teeth are joined below the target. The 133 points cross each of the
-    64 rows 66 times.
-    """
-    width, height = SELF_TEST_WIDE_SIZE
-    teeth = 33
-    points = [(3.3, -2.0)]
-    for tooth in range(teeth):
-        left = 3.3 + 4.0 * tooth
-        points += [(left, 66.0), (left + 2.0, 66.0), (left + 2.0, -1.0)]
-        points.append((left + 4.0, -1.0) if tooth < teeth - 1 else (left + 2.0, -2.0))
-    return [(x / width, y / height) for x, y in points]
-
-
-SELF_TEST_WIDE_OPS = (
-    OpSpec('ALL'),
-    OpSpec('BOX', 'SUBTRACT', 0.0, False, [(20.25 / 140, 10.25 / 64), (60.75 / 140, 30.75 / 64)]),
-    OpSpec('LASSO', 'INTERSECT', 0.0, False, _self_test_comb()),
-)
-"""A chain on `SELF_TEST_WIDE_SIZE`: everything selected, then a
-subtracted hard box and an intersected hard comb lasso.
-
-`SELF_TEST_WIDE_EXPECTED` checks `ALL`, the hard branch of the edge
-profile, and the lasso parity tables past one span column and one data
-texture row. The comb's 4224 crossings fill two rows of the key texture.
-Its teeth run through all three span columns and straddle their
-boundaries, so both the span column lookup and the parity carried into a
-span are used."""
-
-SELF_TEST_WIDE_EXPECTED = {
-    (5, 1): 0.0, (7, 1): 1.0, (29, 1): 0.0, (31, 1): 1.0, (69, 1): 0.0,
-    (71, 1): 1.0, (101, 1): 0.0, (103, 1): 1.0, (133, 1): 0.0, (135, 1): 0.0,
-    (5, 20): 0.0, (7, 20): 1.0, (29, 20): 0.0, (31, 20): 0.0, (69, 20): 0.0,
-    (71, 20): 1.0, (101, 20): 0.0, (103, 20): 1.0, (133, 20): 0.0, (135, 20): 0.0,
-    (5, 63): 0.0, (7, 63): 1.0, (29, 63): 0.0, (31, 63): 1.0, (69, 63): 0.0,
-    (71, 63): 1.0, (101, 63): 0.0, (103, 63): 1.0, (133, 63): 0.0, (135, 63): 0.0,
-}
-"""Texel (x, y) to the value of `SELF_TEST_WIDE_OPS` there, computed in
-float64 by `tests/selection_reference.py`."""
-
 _self_test_result: bool | None = None
-
-
-def _run_self_test(name: str, chains) -> bool | None:
-    """Render each of *chains* and compare it with its expected texels.
-
-    Each chain is `(label, render, expected)`, with *expected* mapping
-    (x, y) to a value. Returns True when every texel is within
-    `SELF_TEST_TOLERANCE`. Returns False when one is not, or when a render
-    raised anything but `RuntimeError`. Returns None when a render raised
-    `RuntimeError`. `MaskUnavailable` propagates.
-    """
-    failed = {}
-    try:
-        for label, draw, expected in chains:
-            got = draw()
-            for (x, y), value in expected.items():
-                off = abs(float(got[y, x]) - value)
-                if not off <= SELF_TEST_TOLERANCE:
-                    failed[f"({x}, {y}) of {label}"] = off
-    except MaskUnavailable:
-        raise
-    except RuntimeError as error:
-        # gpu.types raises RuntimeError when no GPU context is active,
-        # as in a load_post handler on Blender 5.3, or when an allocation
-        # fails. Neither shows that the GPU draws wrongly, so the result
-        # is not memoised and the next build runs the self-test again.
-        log.warning("The %s self-test could not run and will be retried: %s", name, str(error))
-        return None
-    except Exception:
-        log.exception("The %s self-test could not run", name)
-        return False
-    if failed:
-        log.error("The %s self-test failed on %s: texels off by more than %g: %s",
-                  name, gpu.platform.renderer_get(), SELF_TEST_TOLERANCE, failed)
-    return not failed
 
 
 def self_test() -> bool | None:
     """True when this GPU draws masks correctly. Runs once per session, on the first build.
 
-    Renders `SELF_TEST_OPS` and `SELF_TEST_WIDE_OPS` and passes only when
-    both match their expected texels within `SELF_TEST_TOLERANCE`. If a
-    driver gets a checked path wrong, the test fails and every later build
-    raises `SELF_TEST` instead of giving tools a wrong mask. Neither chain
-    checks a hard ellipse, distance cells wider than 32 texels, distance
-    tables past one data texture row, or a tile other than 1001.
+    Renders `raster_selftest.SELF_TEST_OPS` and `SELF_TEST_WIDE_OPS` and
+    passes only when both match their expected texels within
+    `SELF_TEST_TOLERANCE`. If a driver gets a checked path wrong, the test
+    fails and every later build raises `SELF_TEST` instead of giving tools
+    a wrong mask. Neither chain checks a hard ellipse, distance cells wider
+    than 32 texels, distance tables past one data texture row, or a tile
+    other than 1001.
 
     Returns None when the test could not run because the GPU raised
     `RuntimeError`, as it does with no active context. None is not
@@ -628,12 +494,10 @@ def self_test() -> bool | None:
     """
     global _self_test_result
     if _self_test_result is None:
-        chains = [(f"{width} x {height}", lambda specs=specs, width=width, height=height: render(specs, width, height),
-                   expected)
-                  for specs, (width, height), expected in (
-                      (SELF_TEST_OPS, (SELF_TEST_SIZE, SELF_TEST_SIZE), SELF_TEST_EXPECTED),
-                      (SELF_TEST_WIDE_OPS, SELF_TEST_WIDE_SIZE, SELF_TEST_WIDE_EXPECTED))]
-        _self_test_result = _run_self_test("selection", chains)
+        # Imported here, not at the top: `raster_selftest` builds its ops
+        # with `OpSpec` as it loads, so this module must finish loading first.
+        from . import raster_selftest
+        _self_test_result = raster_selftest.run_mask_test()
     return _self_test_result
 
 

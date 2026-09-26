@@ -36,6 +36,7 @@ surface = import_from("gpu_passes.surface")
 texel_map = import_from("gpu_passes.texel_map")
 raster = import_from("selection.raster")
 view_raster = import_from("selection.view_raster")
+selftest = import_from("selection.raster_selftest")
 session = import_from("selection.session")
 
 TREE = "PS View Raster Tree"
@@ -232,20 +233,20 @@ def test_self_test():
         return
     check(view_raster.view_self_test() is True, "view_self_test() passes")
     for perspective_view in (False, True):
-        scene = view_raster.self_test_scene(perspective_view)
+        scene = selftest.self_test_scene(perspective_view)
         for through in (False, True):
             label = f"{'perspective' if perspective_view else 'orthographic'}, through {through}"
-            want = reference.view_chain(scene, view_raster.self_test_ops(), through, view_raster.SELF_TEST_REGION)
+            want = reference.view_chain(scene, selftest.self_test_ops(), through, selftest.SELF_TEST_REGION)
             expected = {(x, y): value for (in_perspective, with_through, x, y), value
-                        in view_raster.SELF_TEST_VIEW_EXPECTED.items() if (in_perspective, with_through)
+                        in selftest.SELF_TEST_VIEW_EXPECTED.items() if (in_perspective, with_through)
                         == (perspective_view, through)}
             stored = max(abs(want[y, x] - value) for (x, y), value in expected.items())
             check(len(expected) >= 5 and stored < 1e-12,
                   f"{label}: the {len(expected)} stored values are the reference's (off by {stored:.1e})")
-            got = view_raster.self_test_chain(through, perspective_view)
+            got = selftest.self_test_chain(through, perspective_view)
             error = float(np.abs(got.astype(np.float64) - want).max())
             check(error <= 1e-4, f"{label}: every texel within 1e-4 (worst {error:.2e})")
-            wide = view_raster.self_test_chain(through, perspective_view, band_rows=512)
+            wide = selftest.self_test_chain(through, perspective_view, band_rows=512)
             check(np.array_equal(got, wide), f"{label}: bands of 16 and 512 rows agree")
         if perspective_view:
             positions = scene["positions"][scene["positions"][..., 3] > 0.0][:, :3]
@@ -259,7 +260,7 @@ def test_self_test_failure():
     section("a GPU that fails the view self-test builds no VIEW masks, and UV masks still")
     if not available():
         return
-    expected = view_raster.SELF_TEST_VIEW_EXPECTED
+    expected = selftest.SELF_TEST_VIEW_EXPECTED
     saved = dict(expected)
     view = look_at(EYE)
     view_selection = fresh_selection()

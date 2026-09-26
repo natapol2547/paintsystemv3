@@ -135,7 +135,7 @@ def draw_in_bands(framebuffer: gpu.types.GPUFrameBuffer, height: int, draw_band)
     """Bind *framebuffer* and call ``draw_band(first, last)`` for each band of its rows.
 
     A band is `BAND_ROWS` rows. It is read at call time, so the view
-    self-test (`selection.view_raster.self_test_chain`) can change it.
+    self-test (`selection.raster_selftest.self_test_chain`) can change it.
     After every band but the last, one texel is read back. That makes the
     GPU finish the band before the next one is queued, which limits the
     GPU time of any single command. A slow software rasteriser or a heavy

@@ -34,6 +34,7 @@ from harness import check, finish, guarded, import_from, op_points, register_add
 register_addon()
 core = import_from("gpu_passes.core")
 raster = import_from("selection.raster")
+selftest = import_from("selection.raster_selftest")
 
 TREE = "PS Selection Raster Tree"
 SIZE = (1024, 1024)
@@ -201,9 +202,9 @@ def test_self_test():
     if not available():
         return
     check(raster.self_test() is True, f"self_test() passes on {renderer()}")
-    chains = (("64x64", raster.SELF_TEST_OPS, (raster.SELF_TEST_SIZE, raster.SELF_TEST_SIZE),
-               raster.SELF_TEST_EXPECTED),
-              ("wide", raster.SELF_TEST_WIDE_OPS, raster.SELF_TEST_WIDE_SIZE, raster.SELF_TEST_WIDE_EXPECTED))
+    chains = (("64x64", selftest.SELF_TEST_OPS, (selftest.SELF_TEST_SIZE, selftest.SELF_TEST_SIZE),
+               selftest.SELF_TEST_EXPECTED),
+              ("wide", selftest.SELF_TEST_WIDE_OPS, selftest.SELF_TEST_WIDE_SIZE, selftest.SELF_TEST_WIDE_EXPECTED))
     for label, specs, (width, height), expected in chains:
         ops = [dict(kind=s.kind, mode=s.mode, feather=s.feather, antialias=s.antialias, points=s.points.tolist())
                for s in specs]
@@ -214,21 +215,21 @@ def test_self_test():
         check(worst(got, want) < 1e-5, f"{label}: every texel within 1e-5 (worst {worst(got, want):.2e})")
 
     outline = import_from("selection.outline")
-    comb = raster.SELF_TEST_WIDE_OPS[-1].points * raster.SELF_TEST_WIDE_SIZE
-    spans, keys = outline.parity_tables(*outline.closed_outline(comb), *raster.SELF_TEST_WIDE_SIZE)
+    comb = selftest.SELF_TEST_WIDE_OPS[-1].points * selftest.SELF_TEST_WIDE_SIZE
+    spans, keys = outline.parity_tables(*outline.closed_outline(comb), *selftest.SELF_TEST_WIDE_SIZE)
     check(len(keys) == 2 * outline.DATA_WIDTH and spans.shape[1] == 3 and bool((spans[:, 1:, 1] % 2 == 1).any()),
           f"the wide comb fills two key rows and three span columns and carries parity into a span "
           f"({len(keys) // outline.DATA_WIDTH} rows, {spans.shape[1]} columns)")
 
     # The same chain with ADD as a saturating sum rather than max must miss
     # an expected value, so a driver that gets max wrong fails.
-    summed = np.zeros((raster.SELF_TEST_SIZE, raster.SELF_TEST_SIZE))
-    for s in raster.SELF_TEST_OPS:
+    summed = np.zeros((selftest.SELF_TEST_SIZE, selftest.SELF_TEST_SIZE))
+    for s in selftest.SELF_TEST_OPS:
         if s.kind == 'INVERT':
             summed = 1.0 - summed
             continue
         op = dict(kind=s.kind, feather=s.feather, antialias=s.antialias, points=s.points.tolist())
-        covered = reference.coverage(op, raster.SELF_TEST_SIZE, raster.SELF_TEST_SIZE)
+        covered = reference.coverage(op, selftest.SELF_TEST_SIZE, selftest.SELF_TEST_SIZE)
         if s.mode == 'REPLACE':
             summed = covered
         elif s.mode == 'ADD':
@@ -237,8 +238,8 @@ def test_self_test():
             summed = np.minimum(summed, 1.0 - covered)
         else:
             summed = np.minimum(summed, covered)
-    missed = [(x, y) for (x, y), value in raster.SELF_TEST_EXPECTED.items()
-              if abs(summed[y, x] - value) > raster.SELF_TEST_TOLERANCE]
+    missed = [(x, y) for (x, y), value in selftest.SELF_TEST_EXPECTED.items()
+              if abs(summed[y, x] - value) > selftest.SELF_TEST_TOLERANCE]
     check(bool(missed), f"ADD as a saturating sum misses the expected values at {missed}")
 
 
@@ -247,8 +248,8 @@ def test_self_test_failure():
     if not available():
         return
     message = "The GPU failed the selection self-test, so selections are disabled in this session"
-    tables = (("SELF_TEST_EXPECTED", raster.SELF_TEST_EXPECTED, (63, 0)),
-              ("SELF_TEST_WIDE_EXPECTED", raster.SELF_TEST_WIDE_EXPECTED, (7, 1)))
+    tables = (("SELF_TEST_EXPECTED", selftest.SELF_TEST_EXPECTED, (63, 0)),
+              ("SELF_TEST_WIDE_EXPECTED", selftest.SELF_TEST_WIDE_EXPECTED, (7, 1)))
     saved = [dict(table) for _, table, _ in tables]
 
     def restore():
@@ -261,7 +262,7 @@ def test_self_test_failure():
     records = []
     handler = logging.Handler()
     handler.emit = records.append
-    raster.log.addHandler(handler)
+    selftest.log.addHandler(handler)
     sel = fresh_selection()
     sel.add_op('ALL')
     try:
@@ -281,7 +282,7 @@ def test_self_test_failure():
             check(any(record.levelno == logging.ERROR and f"({x}, {y}) of" in record.getMessage()
                       for record in records), "and the error log names the texel")
     finally:
-        raster.log.removeHandler(handler)
+        selftest.log.removeHandler(handler)
         restore()
     check(raster.get_mask(sel, size=(64, 64)) is not None and raster.self_test() is True,
           "with the expected values restored, get_mask builds again")

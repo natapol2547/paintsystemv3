@@ -29,22 +29,10 @@ The op stores the object-to-view matrix when it is committed.
 world matrix. So the selection stays on the texels it was drawn over
 when the object moves. The eye comes from `view_eye`.
 
-`view_self_test` renders `self_test_chain` for the orthographic and
-perspective scenes, with and without Through. It compares the result
-with float64 values from `tests/selection_reference.py`. It cannot
-catch:
-
-- dropping only one of the two depth slope terms
-- dropping `REACH_PAD`
-- using a smooth normal for facing instead of the geometric one
-- in perspective, a missing `clip.w` in-front test, an eye vector used
-  as the eye position for facing, or a missing perspective divide in
-  the texel slope
-
-`view_eye` runs on the CPU, so the tests check it instead.
+`view_self_test` checks, once per session, that the GPU draws these
+passes correctly. Its scene and expected values are in
+`raster_selftest.py`, with the list of what it cannot catch.
 """
-import math
-
 import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
@@ -74,15 +62,6 @@ MARGIN_ALPHA = 0.75
 TARGET_SETS = 2
 """Region target sets kept, one per region size. The least recently used
 is dropped first."""
-
-SELF_TEST_TEXELS = 32
-"""Width and height of the self-test mask and texel map."""
-
-SELF_TEST_REGION = (64, 64)
-"""Region size of the self-test views, in pixels."""
-
-FLOOR_TILT = -0.25
-"""Slope of the self-test floor in z per unit x, so its depth has a screen slope."""
 
 _BLOCK_TYPEDEF = """
 struct PSViewBlock {
@@ -506,193 +485,26 @@ def run_view_pass(spec: "raster.OpSpec", source, target, width: int, height: int
 
 # ── Self-test ────────────────────────────────────────────────────────
 
-
-def self_test_scene(perspective: bool) -> dict:
-    """The self-test surface and view, in float64.
-
-    The texels form four strips, and each row is one island:
-
-    - a floor tilted by `FLOOR_TILT`
-    - an occluder above the middle third of the floor
-    - a quad whose smooth normal faces away
-    - a margin strip (coverage 0.5) under the floor and the occluder
-
-    `triangles` is the depth soup (the floor, the occluder and the back
-    quad). The orthographic view looks down -z, with the scene square
-    filling the region. The perspective view is rotated and 1.50 to 2.27
-    units from the islands.
-
-    Returns `positions` and `normals` `(32, 32, 4)` with coverage in
-    alpha, `triangles` `(n, 3)`, `view`, `projection`, and `labels`, the
-    island name of each texel ('' for none).
-    """
-    n = SELF_TEST_TEXELS
-    positions = np.zeros((n, n, 4))
-    normals = np.zeros((n, n, 4))
-    labels = np.full((n, n), '', dtype=object)
-    column = np.arange(n)
-
-    def strip(rows, xs, ys, z, normal_z, alpha, label):
-        for index, row in enumerate(rows):
-            positions[row, :, 0] = xs
-            positions[row, :, 1] = ys[index]
-            positions[row, :, 2] = z
-            positions[row, :, 3] = alpha
-            normals[row, :, 2] = normal_z
-            normals[row, :, 3] = alpha
-            labels[row, :] = label
-
-    # Orthographic screen x is 2 * column + 1.25, so the bilinear reads mix 3:1.
-    rows = range(0, 14)
-    xs = (2 * column + 1.25) / 64
-    strip(rows, xs, [(2 * row + 1.25) / 64 for row in rows], FLOOR_TILT * xs, 1.0, 1.0, 'floor')
-    rows = range(15, 21)
-    strip(rows, 1 / 3 + (column + 0.5) / 96, [(row - 15 + 0.5) / 6 * 0.4375 for row in rows], 0.5, 1.0, 1.0,
-          'occluder')
-    rows = range(22, 28)
-    strip(rows, xs, [0.5 + (row - 22 + 0.5) / 6 * 0.25 for row in rows], 0.0, -1.0, 1.0, 'back')
-    rows = range(29, 32)
-    strip(rows, xs, [0.2 + (row - 29) * 0.01 for row in rows], 0.0, 1.0, 0.5, 'margin')
-
-    def quad(x0, y0, x1, y1, z, tilt=0.0):
-        return [(x, y, z + tilt * x) for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y0), (x1, y1), (x0, y1))]
-
-    triangles = np.array(quad(0.0, 0.0, 1.0, 0.45, 0.0, FLOOR_TILT) + quad(1 / 3, 0.0, 2 / 3, 0.45, 0.5)
-                         + quad(0.0, 0.5, 1.0, 0.75, 0.0))
-    if perspective:
-        angle, tilt, distance = 0.3, 0.12, 2.0
-        near, far = 0.5, 20.0
-        spin = np.eye(4)
-        spin[:2, :2] = ((math.cos(angle), -math.sin(angle)), (math.sin(angle), math.cos(angle)))
-        pitch = np.eye(4)
-        pitch[1:3, 1:3] = ((math.cos(tilt), -math.sin(tilt)), (math.sin(tilt), math.cos(tilt)))
-        centre = np.eye(4)
-        centre[:3, 3] = (-0.5, -0.4, 0.0)
-        back = np.eye(4)
-        back[2, 3] = -distance
-        view = back @ pitch @ spin @ centre
-        projection = np.zeros((4, 4))
-        projection[0, 0] = projection[1, 1] = 3.2
-        projection[2, 2] = (far + near) / (near - far)
-        projection[2, 3] = 2.0 * far * near / (near - far)
-        projection[3, 2] = -1.0
-    else:
-        near, far = 1.0, 20.0
-        view = np.eye(4)
-        view[2, 3] = -10.0
-        projection = np.eye(4)
-        projection[0, 0] = projection[1, 1] = 2.0
-        projection[0, 3] = projection[1, 3] = -1.0
-        projection[2, 2] = -2.0 / (far - near)
-        projection[2, 3] = -(far + near) / (far - near)
-    return dict(positions=positions, normals=normals, triangles=triangles, view=view, projection=projection,
-                labels=labels)
-
-
-def self_test_ops() -> list[tuple]:
-    """The self-test chain as (kind, mode, feather, antialias, points in region pixels).
-
-    In order: a box feathered by 8 that runs past the region's top and
-    bottom, a subtracted anti-aliased ellipse and an added lasso feathered
-    by 3.
-    """
-    return [
-        ('BOX', 'REPLACE', 8.0, True, [(9.7, -30.0), (55.1, 80.0)]),
-        ('ELLIPSE', 'SUBTRACT', 0.0, True, [(38.3, 3.1), (50.9, 22.7)]),
-        ('LASSO', 'ADD', 3.0, True, [(3.3, 18.7), (29.6, 25.2), (15.9, 58.4)]),
-    ]
-
-
-def self_test_chain(through: bool, perspective: bool, band_rows: int = 16) -> np.ndarray:
-    """Render the self-test chain from an empty mask, float32 `(32, 32)`."""
-    scene = self_test_scene(perspective)
-    surface = SyntheticSurface(scene["positions"], scene["normals"], scene["triangles"])
-    view = ViewSpec(surface, SELF_TEST_REGION, scene["view"], scene["projection"], through)
-    specs = [raster.OpSpec(kind, mode, feather, antialias, points, view=view)
-             for kind, mode, feather, antialias, points in self_test_ops()]
-    saved = core.BAND_ROWS
-    core.BAND_ROWS = band_rows
-    try:
-        return raster.render(specs, SELF_TEST_TEXELS, SELF_TEST_TEXELS)
-    finally:
-        core.BAND_ROWS = saved
-        # A raised error must not keep the textures alive (`raster._run_chain`).
-        surface = view = specs = None
-
-
-SELF_TEST_VIEW_EXPECTED = {
-    (False, False, 10, 0): 0.25,
-    (False, False, 21, 0): 0.75,
-    (False, False, 25, 6): 0.9466509384707502,
-    (False, False, 24, 9): 0.32307476618676945,
-    (False, False, 25, 17): 0.5319478811371541,
-    (False, False, 3, 22): 0.0,
-    (False, False, 4, 22): 0.0,
-    (False, False, 27, 29): 0.47188818359375023,
-    (False, True, 19, 3): 0.7749872597643838,
-    (False, True, 19, 8): 0.13065546209896384,
-    (False, True, 25, 17): 0.5319478811371541,
-    (False, True, 27, 22): 0.47188818359375023,
-    (False, True, 27, 29): 0.47188818359375023,
-    (True, False, 7, 0): 0.4816929503255505,
-    (True, False, 24, 0): 0.6957518555167337,
-    (True, False, 7, 8): 0.8943933631298719,
-    (True, False, 17, 15): 0.9041868346355607,
-    (True, False, 0, 22): 0.0,
-    (True, False, 1, 22): 0.0,
-    (True, False, 8, 29): 1.0,
-    (True, False, 9, 29): 1.0,
-    (True, False, 29, 31): 0.4280356519898755,
-    (True, True, 24, 0): 0.6957518555167337,
-    (True, True, 17, 15): 0.9041868346355607,
-    (True, True, 0, 22): 0.32114357833544815,
-    (True, True, 1, 22): 0.907121219365551,
-    (True, True, 29, 31): 0.4280356519898755,
-}
-"""The expected `self_test_chain` values, keyed by (perspective, through, x, y).
-
-Each value is the chain's value at texel (x, y), computed in float64 by
-`tests/selection_reference.py`. Rows 0 to 13 are the floor, 15 to 20
-the occluder, 22 to 27 the back quad and 29 to 31 the margin. Each chain
-has at least two texels that change by more than 1e-3 under any of
-these bugs:
-
-- a wrong bilinear read, smoothstep, mode, projection flip or distance
-  sign
-- with Through off, also a wrong facing, margin rule, depth tap, depth
-  bias or slope
-- in perspective, also `d` used for `-1/d` in either pass, or a missing
-  perspective divide
-- with Through on, the Through flag ignored
-"""
-
 _view_self_test_result: bool | None = None
 
 
 def view_self_test() -> bool | None:
     """True when this GPU draws `VIEW` ops correctly. Runs once per session, on the first `VIEW` build.
 
-    Renders `self_test_chain` for the orthographic and the perspective
-    scene, each with Through off and on. Compares them with
-    `SELF_TEST_VIEW_EXPECTED` within `raster.SELF_TEST_TOLERANCE`. A
-    failure blocks only `VIEW` ops, with `SELF_TEST`. That is because the
-    view passes use a uniform buffer, a depth target and a depth pass that
-    selections drawn in UV space never touch. The module docstring lists what it
-    cannot catch. None and exceptions are handled as in
-    `raster.self_test`.
+    Renders `raster_selftest.self_test_chain` for the orthographic and the
+    perspective scene, each with Through off and on. Compares them with
+    `SELF_TEST_VIEW_EXPECTED` within `SELF_TEST_TOLERANCE`. A failure
+    blocks only `VIEW` ops, with `SELF_TEST`. That is because the view
+    passes use a uniform buffer, a depth target and a depth pass that
+    selections drawn in UV space never touch. The `raster_selftest`
+    docstring lists what it cannot catch. None and exceptions are handled
+    as in `raster.self_test`.
     """
     global _view_self_test_result
     if _view_self_test_result is None:
-        chains = []
-        for perspective in (False, True):
-            for through in (False, True):
-                expected = {(x, y): value for (in_perspective, with_through, x, y), value
-                            in SELF_TEST_VIEW_EXPECTED.items()
-                            if (in_perspective, with_through) == (perspective, through)}
-                label = f"the {'perspective' if perspective else 'orthographic'} view, through {through}"
-                chains.append((label, lambda through=through, perspective=perspective:
-                               self_test_chain(through, perspective), expected))
-        _view_self_test_result = raster._run_self_test("view selection", chains)
+        # Imported here for the reason `raster.self_test` gives.
+        from . import raster_selftest
+        _view_self_test_result = raster_selftest.run_view_test()
     return _view_self_test_result
 
 
