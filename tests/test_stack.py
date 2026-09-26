@@ -86,7 +86,8 @@ try:
     ], f"folders nested two deep walk top first with levels {layout(tree)}")
     check(tree.nodes.active == d, "the inserted layer becomes active")
     check(not tree.nodes["B"].inputs['Color'].is_linked, "bottom layer of a folder has nothing below it")
-    check([n.name for n in stack_ops.descendants(f)] == ["G", "C", "B"], "descendants include nested content")
+    check([(node.name, pair) for node, pair in stack_ops.removal(f)] == [("F", 0), ("G", 0), ("C", 0), ("B", 0)],
+          "removing a folder takes its nested content, top first")
     check(tree.nodes["C"].location.y > g.location.y > a.location.y, "folder content is laid out above its folder")
     check([socket.name for socket in a.inputs] == ["Color", "Mask"], "a layer takes Color, then Mask")
     check([socket.name for socket in f.inputs] == ["Color", "Content Color", "Mask"],
@@ -171,7 +172,7 @@ try:
     bottom.name = "Bottom"
     masked.links.new(bottom.outputs['Color'], top.inputs['Mask'])
     with core.suspend_compile(masked):
-        stack_ops.insert_below(masked, bottom, top)
+        stack_ops.insert_below(masked, bottom, stack_ops.Position(top, 0))
     check(stack_ops.consumer_input(bottom) == top.inputs['Color'], "the stack skips a link into a mask")
     mid = solid(masked, "Mid", target=bottom)
     check([name for name, *_ in layout(masked)] == ["Top", "Mid", "Bottom"], "a layer inserts above the masking layer")

@@ -286,7 +286,7 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
             if not feeds_clip_run(self):
                 # Top of the run. Blend the base, with everything clipped to
                 # it, over the stack below the base.
-                color, alpha = base.emit_blend(ctx, color, alpha)
+                color, alpha = base.node.emit_blend(ctx, color, alpha)
         elif not feeds_clip_run(self):
             color, alpha = self.emit_blend(ctx, color, alpha)
         # Otherwise this is a clip base. The clipped layers above composite

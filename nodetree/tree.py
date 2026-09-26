@@ -304,7 +304,7 @@ class PaintSystemNodeTree(NodeTree):
             if target is not None and target.is_folder:
                 stack_ops.insert_into(self, target, node)
             elif target is not None:
-                stack_ops.insert_above(self, node, target)
+                stack_ops.insert_above(self, node, stack_ops.Position(target, self.pair_in_stack(target, channel_name)))
             elif channel_name is not None:
                 stack_ops.insert_on_top(self, node, channel_name)
             if channel_name is not None:
@@ -314,12 +314,22 @@ class PaintSystemNodeTree(NodeTree):
         return node
 
     def remove_layer_node(self, node: bpy.types.Node, channel_name: str | None = None) -> None:
-        """Remove a layer (a folder with its content) and close the gap."""
+        """Take a layer out of the channel's stack and close the gap.
+
+        Only the pair in that stack goes. The layer is deleted with its last
+        pair, and a folder's content with the folder (``stack_ops.remove``).
+        """
         channel_name = self._channel_name(channel_name)
         with suspend_compile(self):
-            stack_ops.remove(self, node)
+            stack_ops.remove(self, node, self.pair_in_stack(node, channel_name))
             if channel_name is not None:
                 stack_ops.arrange_stack(self, channel_name)
+
+    def pair_in_stack(self, node: bpy.types.Node, channel_name: str | None = None) -> int:
+        """The pair *node* sits in the channel's stack through, or its first pair when it is not there."""
+        if stack_ops.pair_count(node) == 1:
+            return 0
+        return next((item.pair for item in self.stack(channel_name) if item.node == node), 0)
 
     def move_layer_node(self, node: bpy.types.Node, direction: str, action: str,
                         channel_name: str | None = None) -> bool:

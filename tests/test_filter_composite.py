@@ -120,7 +120,7 @@ def above(tree, bl_idname, target):
     """
     with core.suspend_compile(tree):
         node = tree.nodes.new(bl_idname)
-        stack_ops.insert_above(tree, node, target)
+        stack_ops.insert_above(tree, node, stack_ops.Position(target, 0))
     return node
 
 

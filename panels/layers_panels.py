@@ -21,9 +21,15 @@ class LayerRow:
 
 
 def layer_rows(tree) -> dict[str, LayerRow]:
-    """Rows of the active channel's stack by node name, top first."""
+    """Rows of the active channel's stack by node name, top first.
+
+    A layer wired into the stack twice by hand gets the row of its first
+    place. The orders stay 0, 1, 2 and so on, as ``filter_items`` needs.
+    """
     rows: dict[str, LayerRow] = {}
-    for order, item in enumerate(tree.stack()):
+    for item in tree.stack():
+        if item.node.name in rows:
+            continue
         visible = parent_enabled = True
         if item.parent is not None:
             folder = item.parent.node
@@ -31,7 +37,7 @@ def layer_rows(tree) -> dict[str, LayerRow]:
             visible = parent.visible and folder.is_expanded
             parent_enabled = parent.parent_enabled and folder.enabled
         rows[item.node.name] = LayerRow(
-            order, item.level, visible, parent_enabled)
+            len(rows), item.level, visible, parent_enabled)
     return rows
 
 

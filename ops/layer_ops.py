@@ -10,7 +10,7 @@ from ..compiler.core import suspend_compile
 from ..filters.layer_specs import layer_filter_items
 from ..nodes.layers.base_layer_node import RESOLUTION_ITEMS
 from ..nodes.layers.registry import layer_type, layer_type_items
-from ..nodetree.stack_ops import descendants, is_layer, movement_options
+from ..nodetree.stack_ops import is_layer, movement_options, pair_count, removal
 from ..undo import undo_restores_data
 
 
@@ -53,23 +53,31 @@ class PAINTSYSTEM_OT_add_layer(Operator):
             self.layout.prop(self, name)
 
 
-def _filter_results(node) -> list:
-    """The filter result images of *node* and of the layers inside it.
+def _deleted(plan: list) -> list:
+    """The layers a ``removal`` *plan* deletes: those losing every pair they have."""
+    taken: dict[str, list] = {}
+    for node, _pair in plan:
+        taken.setdefault(node.name, []).append(node)
+    return [nodes[0] for nodes in taken.values() if len(nodes) == pair_count(nodes[0])]
+
+
+def _filter_results(plan: list) -> list:
+    """The filter result images of the layers a ``removal`` *plan* deletes.
 
     A filter result counts as the layer's content, not as an artifact
     that can be rebuilt, so removing the layer removes it too. Cache
     images are left out on purpose, because they can always be baked
     again.
     """
-    nodes = [node, *descendants(node)] if node.is_folder else [node]
-    return [layer.derived_image for layer in nodes
+    return [layer.derived_image for layer in _deleted(plan)
             if getattr(layer, 'ps_type', "") == 'FILTER' and layer.derived_image is not None]
 
 
 class PAINTSYSTEM_OT_remove_layer(Operator):
     bl_idname = "paint_system.remove_layer"
     bl_label = "Remove Layer"
-    bl_description = "Remove the active layer, and a folder's content with it, and close the gap"
+    bl_description = ("Remove the active layer from this channel, and a folder's content with it, "
+                      "and close the gap. A layer linked into other channels stays there")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -80,16 +88,23 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
     def invoke(self, context, event):
         # The dialog draws on every redraw, so work out what it shows once
         # here.
-        node = parse_context(context).layer
+        ps = parse_context(context)
+        node = ps.layer
+        plan = removal(node, ps.tree.pair_in_stack(node))
         self.layer_name = node.name
-        self.content_count = len(descendants(node)) if node.is_folder else 0
-        self.filter_count = len(_filter_results(node))
+        self.content_count = len({position.node.name for position in plan} - {node.name})
+        self.other_stacks = pair_count(node) - sum(position.node == node for position in plan)
+        self.filter_count = len(_filter_results(plan))
         self.undo_restores = undo_restores_data(context)
         return context.window_manager.invoke_props_dialog(self, confirm_text="Remove")
 
     def draw(self, context):
         layout = self.layout
         layout.label(text=f"Remove '{self.layer_name}'?", **icon_kwargs('ERROR'))
+        if self.other_stacks == 1:
+            layout.label(text="It stays in the other stack it is linked into.")
+        elif self.other_stacks > 1:
+            layout.label(text=f"It stays in the {self.other_stacks} other stacks it is linked into.")
         if self.content_count == 1:
             layout.label(text="The layer inside it goes with it.")
         elif self.content_count > 1:
@@ -105,14 +120,15 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
         ps = parse_context(context)
         tree, node = ps.tree, ps.layer
         # The row that moves up into the removed row's place becomes
-        # active. If the removed row was at the bottom, the new last row
-        # becomes active.
-        rows = [item.node.name for item in tree.stack()]
-        gone = {node.name, *(child.name for child in descendants(node))} if node.is_folder else {node.name}
-        position = rows.index(node.name) if node.name in rows else len(rows)
-        after = [name for name in rows[position:] if name not in gone]
-        before = [name for name in rows[:position] if name not in gone]
-        next_active = after[0] if after else (before[-1] if before else None)
+        # active. That is the first row after the layer's content. If the
+        # removed row was at the bottom, the new last row becomes active.
+        items = tree.stack()
+        position = next((index for index, item in enumerate(items) if item.node == node), len(items))
+        end = position + 1
+        while end < len(items) and items[end].level > items[position].level:
+            end += 1
+        rows = [item.node.name for item in items[:position] + items[end:]]
+        next_active = rows[position] if position < len(rows) else (rows[-1] if rows else None)
 
         # Remove the filter results before the node. Once the node is
         # gone, nothing points at the images, and only the next file read
@@ -120,7 +136,7 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
         # because ``free`` also runs when undo tears nodes down. This
         # operator has the UNDO option, so its undo step holds the node
         # and the packed image together, and one Ctrl+Z brings both back.
-        for image in _filter_results(node):
+        for image in _filter_results(removal(node, tree.pair_in_stack(node))):
             bpy.data.images.remove(image)
 
         tree.remove_layer_node(node)
