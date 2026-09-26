@@ -1,7 +1,16 @@
+"""Every Blender app handler the addon registers.
+
+Several systems react to the same events: trees compile, caches that
+belong to an old file or undo step are dropped, and texture painting
+follows the active layer (`paint_handlers`). Each event has one handler
+here that calls them in the order written, so that order does not depend
+on which module registered its handler first.
+"""
 import logging
 
 import bpy
 
+from . import paint_handlers
 from ..compiler.bake import PS_IMAGE_KEY
 from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty, ps_trees,
                              unblock_compile)
@@ -64,7 +73,7 @@ def save_image(image: bpy.types.Image) -> None:
 
 @bpy.app.handlers.persistent
 def on_depsgraph_update_post(scene, depsgraph=None):
-    """Initialise new trees, and pass geometry, image and scene changes on.
+    """Initialise new trees, pass geometry, image and scene changes on, and sync the canvas.
 
     A tree created from the node editor header gets no init call, so it
     is initialised here.
@@ -72,8 +81,14 @@ def on_depsgraph_update_post(scene, depsgraph=None):
     for tree in ps_trees():
         if not tree.is_initialized:
             tree.initialize()
-    if depsgraph is None:
-        return
+    if depsgraph is not None:
+        _pass_updates_on(depsgraph)
+    # Selecting another object reaches the addon only as a depsgraph update.
+    paint_handlers.sync_selection()
+
+
+def _pass_updates_on(depsgraph) -> None:
+    """Tell the surfaces, filter layers and selection session what *depsgraph* changed."""
     # Texel maps and overlay batches are keyed by the content of the
     # evaluated surface. So a geometry update only marks the surface as
     # suspect, and the next `surface.resolve_key` compares the arrays.
@@ -173,6 +188,7 @@ def on_load_post(*args):
     # Runs before Blender records the file's initial undo step, so the
     # compile result is part of it.
     mark_dirty()
+    paint_handlers.on_file_loaded()
 
 
 @bpy.app.handlers.persistent
@@ -204,6 +220,10 @@ def on_undo_post(*args):
     # separately, so the session syncs everything derived from the
     # selection even when its state has not changed.
     selection_session.notify(force=True)
+    # The restored step can hold the new selection with the old canvas,
+    # because the sync runs after the undo step for the selection change
+    # was pushed. Forget the last sync so the next update syncs again.
+    paint_handlers.reset()
 
 
 @bpy.app.handlers.persistent

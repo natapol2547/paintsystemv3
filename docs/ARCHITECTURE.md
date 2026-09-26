@@ -202,6 +202,9 @@ through the addon: `depsgraph_update_post` for another active object, a
 message bus subscription on `Object.active_material_index` for another
 material slot, and a node editor draw callback plus a timer for a node
 clicked in the node editor, which Blender reports in no other way.
+`handlers/app_handlers.py` owns every app handler the addon registers.
+Where the canvas reacts to an event too, that handler calls the
+`paint_handlers` hook after the tree's own work, in the order written.
 
 A selection (PS-091) is document data too: ops on the tree, compiled
 into a GPU mask the way the tree is compiled into a material. Only one
@@ -243,7 +246,7 @@ requesting a resolve when it is not fresh, so a draw shows the previous
 result for one frame at most.
 
 Painted pixels live in memory until the file is saved. `save_pre`
-(`handlers/node_tree_handlers.py`) passes every image a Paint System node
+(`handlers/app_handlers.py`) passes every image a Paint System node
 points at, and every image the addon created, to `save_image` beside it: a
 packed image or one without a file is packed again, an image with a file
 is written to it, and a failed write drops the path and packs instead.

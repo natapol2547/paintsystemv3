@@ -11,6 +11,10 @@ Each kind of change reaches the addon in a different way:
   a draw callback cannot write data.
 - Mode and scene switches notify the message bus. This module passes
   them on to the selection session.
+
+The app handlers in `app_handlers` call `sync_selection` after each
+depsgraph update, `on_file_loaded` after a file read and `reset` after
+an undo or redo.
 """
 import bpy
 
@@ -56,11 +60,6 @@ def sync_selection(force: bool = False) -> None:
     update_active_image(bpy.context)
 
 
-@bpy.app.handlers.persistent
-def on_depsgraph_update_post(scene, depsgraph=None):
-    sync_selection()
-
-
 def on_active_material_index(*args):
     sync_selection()
 
@@ -89,19 +88,11 @@ def subscribe() -> None:
                              owner=_msgbus_owner, args=(), notify=on_scene_change)
 
 
-@bpy.app.handlers.persistent
-def on_load_post(*args):
+def on_file_loaded() -> None:
+    """Subscribe again and sync the canvas to the file just read."""
     reset()
     subscribe()
     sync_selection(force=True)
-
-
-@bpy.app.handlers.persistent
-def on_undo_post(*args):
-    # The restored step can hold the new selection with the old canvas,
-    # because the sync runs after the undo step for the selection change
-    # was pushed. Forget the last sync so the next update syncs again.
-    reset()
 
 
 def on_node_editor_draw():
@@ -117,19 +108,8 @@ def on_node_editor_draw():
         bpy.app.timers.register(sync_canvas, first_interval=0.0)
 
 
-_handlers = [
-    (bpy.app.handlers.depsgraph_update_post, on_depsgraph_update_post),
-    (bpy.app.handlers.load_post, on_load_post),
-    (bpy.app.handlers.undo_post, on_undo_post),
-    (bpy.app.handlers.redo_post, on_undo_post),
-]
-
-
 def register():
     global _draw_handle
-    for handler_list, fn in _handlers:
-        if fn not in handler_list:
-            handler_list.append(fn)
     subscribe()
     _draw_handle = bpy.types.SpaceNodeEditor.draw_handler_add(on_node_editor_draw, (), 'WINDOW', 'POST_PIXEL')
 
@@ -142,7 +122,4 @@ def unregister():
         _draw_handle = None
     if bpy.app.timers.is_registered(sync_canvas):
         bpy.app.timers.unregister(sync_canvas)
-    for handler_list, fn in _handlers:
-        if fn in handler_list:
-            handler_list.remove(fn)
     reset()

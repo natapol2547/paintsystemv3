@@ -15,7 +15,7 @@ registers only so that `unregister` can free its GPU objects. Python's
 own teardown would free them after the GPU context is gone, which
 crashes a background Blender with a segfault.
 
-`handlers.node_tree_handlers` marks surfaces suspect when geometry may
+`handlers.app_handlers` marks surfaces suspect when geometry may
 have changed, and drops all cached data when a file is loaded.
 """
 from . import core, surface, texel_map

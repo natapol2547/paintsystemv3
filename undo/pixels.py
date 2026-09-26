@@ -107,7 +107,7 @@ def write_pixels(image: bpy.types.Image, pixels) -> bool:
 
     *pixels* holds ``width * height * channels`` float values in Blender's
     own layout, bottom row first. The write marks the image dirty, so
-    `handlers.node_tree_handlers.on_save_pre` saves or packs it with the
+    `handlers.app_handlers.on_save_pre` saves or packs it with the
     blend file.
 
     Returns False when the pixels were written but no undo step could be

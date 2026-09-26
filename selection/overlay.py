@@ -27,8 +27,8 @@ fresh (after a geometry update, an undo or a frame change), the draw uses
 the cached batch and requests a resolve. The batch is rebuilt only once
 the resolved key differs. So a texture paint stroke, which reports a
 geometry update on Blender 5.3, rebuilds nothing. A real surface change
-shows the previous batch for one frame. `handlers.node_tree_handlers`
-drops every batch when a file is read.
+shows the previous batch for one frame. `handlers.app_handlers` drops
+every batch when a file is read.
 """
 import functools
 import time

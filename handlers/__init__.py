@@ -1,7 +1,7 @@
 from bpy.utils import register_submodule_factory
 
 submodules = (
-    "node_tree_handlers",
+    "app_handlers",
     "paint_handlers",
 )
 

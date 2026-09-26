@@ -6,7 +6,7 @@ Epic F. Size S. Milestone M1.
 
 Done for the demo (M0 slice 6).
 
-- `handlers/node_tree_handlers.py::save_image(image)` follows the v2 rules. It skips an image
+- `handlers/app_handlers.py::save_image(image)` follows the v2 rules. It skips an image
   without unsaved changes. It packs an image that is already packed or has
   no file path. Otherwise it writes the image to its file. When that write
   raises, it logs a warning, clears `filepath_raw` and packs. A failed pack
@@ -46,7 +46,7 @@ image after load.
 
 ## v3 design
 
-`handlers/node_tree_handlers.py::on_save_pre` currently packs dirty
+`handlers/app_handlers.py::on_save_pre` currently packs dirty
 `ps_managed` images. Extend:
 
 - `common/image.py::save_image(image)` with the v2 rules.

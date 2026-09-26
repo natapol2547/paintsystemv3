@@ -22,7 +22,7 @@ from harness import (check, finish, import_from, register_addon,  # noqa: E402
 register_addon()
 core = import_from("compiler.core")
 derived = import_from("filters.derived")
-handlers = import_from("handlers.node_tree_handlers")
+handlers = import_from("handlers.app_handlers")
 create_managed_image = import_from("compiler.bake").create_managed_image
 
 SOLID = 'PaintSystemSolidColorLayerNode'

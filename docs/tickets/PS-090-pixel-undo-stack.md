@@ -5,7 +5,7 @@ Epic J. Size S. Milestone M3b.
 ## Status
 
 Done. `undo/pixels.py` and `tests/test_pixel_undo.py`; the handlers in
-`handlers/node_tree_handlers.py` clear its session state after undo, redo
+`handlers/app_handlers.py` clear its session state after undo, redo
 and a file read. 24 checks pass on 5.2.1 and 4.2.23.
 
 Two things the spikes had not reached, found while building it:
@@ -68,7 +68,7 @@ pixels, and the addon only registers its writes with it.
   - `ensure_undo_stack()`: in background mode only, pushes one memfile
     step so the stack exists. See the Status section.
   - `forget_baselines()` after undo and redo, `forget_undo_state()` after
-    a file read: both called from `handlers/node_tree_handlers.py`.
+    a file read: both called from `handlers/app_handlers.py`.
   - `pack_write_once(image)`, not built yet: packs a write-once image so
     it survives undo past its creation and redo. Used instead of
     `write_pixels`, not with it: such an image takes no step of its own.

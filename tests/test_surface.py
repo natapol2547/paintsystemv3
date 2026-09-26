@@ -19,7 +19,7 @@ from harness import check, finish, guarded, import_from, register_addon, section
 register_addon()
 surface = import_from("gpu_passes.surface")
 texel_map = import_from("gpu_passes.texel_map")
-handlers = import_from("handlers.node_tree_handlers")
+handlers = import_from("handlers.app_handlers")
 session = import_from("selection.session")
 
 UV = "UVMap"

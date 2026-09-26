@@ -859,7 +859,7 @@ name.
   datablocks. `tests/test_smoke_loop.py`, which undoes and redoes
   exactly that operator and calls `check_no_freed_images`, is the test
   most likely to catch a mistake.
-- `handlers/node_tree_handlers.py::paint_system_images()` stops returning
+- `handlers/app_handlers.py::paint_system_images()` stops returning
   orphaned filter results. That is a deliberate departure from PS-056's
   blanket rule and both PS-056 and `docs/ARCHITECTURE.md` need the
   sentence; `tests/test_images.py` needs the cases.

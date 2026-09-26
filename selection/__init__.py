@@ -18,8 +18,7 @@ The package has no classes. Import from the submodules directly.
 header note, and the overlay's draw handlers. `unregister` frees the GPU
 objects while the GPU context still exists. Python's own teardown would
 free them after the context is gone, which segfaults a background
-Blender. `handlers.node_tree_handlers` drops the cache when a file is
-read.
+Blender. `handlers.app_handlers` drops the cache when a file is read.
 """
 from . import overlay, raster, session, stencil
 

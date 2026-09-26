@@ -219,7 +219,7 @@ def note_image_changed(uids) -> None:
     a rename, where a name lookup would miss, and they are what the
     depsgraph provides.
 
-    Called from `handlers.node_tree_handlers.on_depsgraph_update_post`
+    Called from `handlers.app_handlers.on_depsgraph_update_post`
     with the images Blender tagged, and directly from the addon's own
     pixel writes. This only sets the flag and counts the stroke. It never
     rebuilds anything itself. A filter layer keeps rendering its previous

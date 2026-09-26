@@ -4,7 +4,8 @@ Drives the operators on the factory cube and checks where painting goes:
 the canvas, the image paint mode, the mesh's active UV map and the brush
 alpha, as the active layer, its lock settings, the active object and the
 active material change, and across paint mode, undo and file reload.
-None of it may recompile the tree.
+None of it may recompile the tree. The canvas hooks are called by
+`handlers.app_handlers`, the one module that registers app handlers.
 
 Clicking a node in the node editor and the message bus subscription for
 material slots need a window loop and are covered by test_ui_draw.py.
@@ -61,6 +62,23 @@ def activate(obj):
 
 def layer(tree, bl_idname):
     return next(item.node for item in tree.stack() if item.node.bl_idname == bl_idname)
+
+
+def test_one_handler_per_event():
+    section("one app handler per event")
+    package = core.__name__.rsplit(".", 2)[0]
+    ours = {}
+    for name in dir(bpy.app.handlers):
+        handler_list = getattr(bpy.app.handlers, name)
+        if isinstance(handler_list, list):
+            mine = [fn for fn in handler_list if getattr(fn, "__module__", "").startswith(package + ".")]
+            if mine:
+                ours[name] = mine
+    modules = sorted({fn.__module__ for fns in ours.values() for fn in fns})
+    check(modules == [package + ".handlers.app_handlers"], f"every app handler is in handlers.app_handlers ({modules})")
+    counts = {name: len(fns) for name, fns in ours.items()}
+    check("load_post" in counts and all(count == 1 for count in counts.values()),
+          f"and each event lists one, so its steps run in the order written there ({counts})")
 
 
 def test_active_layer():
@@ -191,6 +209,7 @@ def test_undo_and_reload():
     check(canvas is not None and canvas.name == image_name, f"loading the file paints on the active layer ({canvas})")
 
 
+guarded(test_one_handler_per_event)
 guarded(test_active_layer)
 guarded(test_active_object_and_material)
 guarded(test_undo_and_reload)

@@ -43,7 +43,7 @@ it.
   settings, not the user's. So its backup is Blender's defaults.
 
 `selection.session` decides when. Its tick calls `sync` with the state
-it resolved. `handlers.node_tree_handlers` calls `restore_all`,
+it resolved. `handlers.app_handlers` calls `restore_all`,
 `on_file_loaded` and a forced session sync around saving and loading.
 The message bus subscriptions here cover only the settings this module
 owns. Values are only written when they differ, so the notifications
