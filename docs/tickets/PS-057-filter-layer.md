@@ -589,7 +589,7 @@ job had turned it off (`derived_error` set, see the data model).
 
 The steps: resolve (nothing allocated yet, `Refused` by name), composite,
 the kind's passes or its own build, the sRGB encode into a byte target,
-banded readback into a PNG stream (`filters/png.py`), commit. **Only the
+banded readback into a PNG stream (`png.py`), commit. **Only the
 commit writes anything**, so a cancel leaves the previous pixels
 bit-identical, and the textures live in the generator's frame, so
 closing it gives them back.
@@ -943,7 +943,7 @@ corruption. Not taken here.
 
 **Since PS-053, the build writes the PNG itself.** The encode pass draws
 into a byte target, the readback bands are read as bytes, and each band
-goes into a PNG stream (`filters/png.py`: the Up filter, zlib at level 1
+goes into a PNG stream (`png.py`: the Up filter, zlib at level 1
 with the run-length strategy) as it arrives. The commit hands the
 finished file to `image.pack(data=...)`, switches the image to a file
 source and frees its buffer, so the pack no longer encodes anything and

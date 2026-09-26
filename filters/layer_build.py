@@ -9,7 +9,7 @@
 3. The layer's kind runs over it: its list of passes, or its own build
    where it has one. Then the result is encoded to sRGB.
 4. The result is read back as bytes, one band of rows at a time. Each
-   band goes straight into a PNG (`filters.png`).
+   band goes straight into a PNG (`png.RGBAStream`).
 5. `commit` packs that PNG into the layer's image and stamps it.
 
 The build is a generator because only the last unit writes anything,
@@ -47,10 +47,10 @@ from ..compiler.bake import create_managed_image
 from ..compiler.core import hash_context, mark_dirty
 from ..compiler.ir import hash_payload
 from ..gpu_passes.core import BAND_ROWS, read_color_bytes
+from ..png import RGBAStream
 from . import composite, derived, freshness, layer_plan
 from .core import FilterSpec, Refused, new_texture, run_pass
 from .layer_specs import layer_filter_kind
-from .png import RGBAStream
 from .registry import ENCODE_SRGB
 
 log = logging.getLogger(__name__)

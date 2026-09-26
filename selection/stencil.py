@@ -52,13 +52,13 @@ they cause settle after one more sync.
 import logging
 import os
 import shutil
-import struct
 import zlib
 
 import bpy
 import numpy as np
 
 from . import raster
+from .. import png
 from ..common import icon_kwargs
 
 log = logging.getLogger(__name__)
@@ -94,17 +94,9 @@ def _write_png(path: str, mask: np.ndarray) -> None:
     rows[:, 0] = 0  # no row filter
     rows[:, 1::2] = 255
     rows[:, 2::2] = mask[::-1]
-
-    def chunk(kind: bytes, data: bytes) -> bytes:
-        return (struct.pack(">I", len(data)) + kind + data
-                + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
-
-    # 8 bits per channel, colour type 4: grey with alpha.
-    header = struct.pack(">IIBBBBB", width, height, 8, 4, 0, 0, 0)
     temporary = path + ".tmp"
     with open(temporary, "wb") as file:
-        file.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
-                   + chunk(b"IDAT", zlib.compress(rows.tobytes(), 1)) + chunk(b"IEND", b""))
+        file.write(png.encode(width, height, png.GREY_ALPHA, zlib.compress(rows.tobytes(), 1)))
     os.replace(temporary, path)
 
 

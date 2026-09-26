@@ -1,6 +1,6 @@
 """The PNG a filter layer's build packs, checked without a GPU (PS-053).
 
-`filters.png` writes it a band of rows at a time, so the checks are on
+`png.RGBAStream` writes it a band of rows at a time, so the checks are on
 what a band boundary could get wrong: the Up filter carried across it,
 the rows kept in order, and a file a reader takes. Blender is the reader
 that matters, so it reads one too. `tests/test_filter_build.py` checks
@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import check, finish, import_from, register_addon, section  # noqa: E402
 
 register_addon()
-png = import_from("filters.png")
+png = import_from("png")
 
 WIDTH, HEIGHT = 37, 23
 # Uneven on purpose, one of them a single row.

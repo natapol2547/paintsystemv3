@@ -1,14 +1,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""An 8-bit RGBA PNG written one band of rows at a time.
+"""8-bit PNG files written without Blender.
 
-`filters.layer_build` packs this file into a filter layer's image.
-Blender's own `Image.pack` encodes the whole image in one call, about
-0.9 s at 4096 x 4096, and nothing else can run meanwhile. That would make
-the commit by far the longest freeze of a build. With `RGBAStream`, each
-band is encoded as it comes off the GPU, in the same unit as its
-readback, so the commit only hands over finished bytes.
+`encode` wraps rows that are already filtered and compressed into a
+file. It is the one place that knows the chunk layout, for both writers:
 
-The encoding favours speed over size. Every row uses the PNG Up filter,
+- `RGBAStream`, which `filters.layer_build` packs into a filter layer's
+  image. Blender's own `Image.pack` encodes the whole image in one call,
+  about 0.9 s at 4096 x 4096, and nothing else can run meanwhile. That
+  would make the commit by far the longest freeze of a build. With
+  `RGBAStream`, each band is encoded as it comes off the GPU, in the same
+  unit as its readback, so the commit only hands over finished bytes.
+- `selection.stencil`, which writes the selection's mask as grey with
+  alpha.
+
+The stream favours speed over size. Every row uses the PNG Up filter,
 which is one numpy subtraction per band, and zlib runs at level 1 with
 its run-length strategy. For a painted result the file is smaller than
 Blender's own. For a blur, which is all long smooth gradients, it is
@@ -23,6 +28,9 @@ import zlib
 import numpy as np
 
 SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# The PNG colour types used here.
+GREY_ALPHA = 4
+RGBA = 6
 # The PNG filter type that stores each byte minus the one above it.
 UP = 2
 
@@ -30,6 +38,17 @@ UP = 2
 def _chunk(kind: bytes, data: bytes) -> bytes:
     return (struct.pack(">I", len(data)) + kind + data
             + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+
+
+def encode(width: int, height: int, color_type: int, compressed: bytes) -> bytes:
+    """A whole PNG file of 8 bits per channel.
+
+    *compressed* is the zlib stream of every row, each one led by its
+    filter type byte.
+    """
+    header = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)
+    return (SIGNATURE + _chunk(b"IHDR", header)
+            + _chunk(b"IDAT", compressed) + _chunk(b"IEND", b""))
 
 
 class RGBAStream:
@@ -70,6 +89,4 @@ class RGBAStream:
         if self._rows != self.height:
             raise ValueError(f"A PNG {self.height} rows high was given {self._rows}")
         self._pieces.append(self._compressor.flush())
-        header = struct.pack(">IIBBBBB", self.width, self.height, 8, 6, 0, 0, 0)
-        return (SIGNATURE + _chunk(b"IHDR", header)
-                + _chunk(b"IDAT", b"".join(self._pieces)) + _chunk(b"IEND", b""))
+        return encode(self.width, self.height, RGBA, b"".join(self._pieces))
