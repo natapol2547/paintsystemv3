@@ -21,7 +21,7 @@ import uuid
 import bpy
 
 from ...compiler.builder import same_value
-from ...compiler.core import ps_trees
+from ...compiler.core import ps_trees, suspend_compile
 
 # The type ``bpy.props.*Property(...)`` returns in a class body, before
 # Blender registers the class.
@@ -38,9 +38,15 @@ _image_prop_names: dict[type, tuple[str, ...]] = {}
 def _copies_on_change(name: str, update):
     """An ``update`` callback that runs *update*, then copies *name* to the linked layers."""
     def callback(self, context):
-        if update is not None:
-            update(self, context)
-        if self.link_id and not _copying:
+        if not self.link_id or _copying:
+            if update is not None:
+                update(self, context)
+            return
+        # Each write compiles the tree on its own. Suspended, the change
+        # and its copies compile once.
+        with suspend_compile(self.id_data):
+            if update is not None:
+                update(self, context)
             copy_settings(self, linked_layers(self), (name,))
     callback.ps_linked = True
     return callback
@@ -161,7 +167,8 @@ def link(nodes, source) -> None:
     left = {node.link_id for node in nodes if node.link_id and node.link_id != source.link_id}
     for node in nodes:
         node.link_id = source.link_id
-    copy_settings(source, nodes)
+    with suspend_compile(source.id_data):
+        copy_settings(source, nodes)
     _drop_lone_ids(source.id_data, left)
 
 

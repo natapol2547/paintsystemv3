@@ -11,6 +11,7 @@ Run:  blender -b --factory-startup --python tests/test_links.py
 import os
 import sys
 import tempfile
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import bpy
@@ -23,6 +24,7 @@ from harness import (RecordingLayout, bake_group, check, close, finish, guarded,
 
 register_addon()
 core = import_from("compiler.core")
+IR = import_from("compiler.ir").IR
 bake = import_from("compiler.bake")
 links = import_from("nodes.layers.links")
 clipboard = import_from("nodes.layers.clipboard")
@@ -85,6 +87,23 @@ def node_editor(tree):
     return bpy.context.temp_override(window=window, area=area, region=region, space_data=space)
 
 
+@contextmanager
+def counted_applies():
+    """A list that gets one entry for each artifact write inside the block."""
+    applies = []
+    apply = IR.apply
+
+    def counting(self, *args, **kwargs):
+        applies.append(self)
+        return apply(self, *args, **kwargs)
+
+    IR.apply = counting
+    try:
+        yield applies
+    finally:
+        IR.apply = apply
+
+
 def select_only(tree, active, *others):
     for node in tree.nodes:
         node.select = node == active or node in others
@@ -143,6 +162,21 @@ def test_link_and_sync():
     a.lock_layer = True
     check(b.lock_layer, "the lock is linked")
     a.lock_layer = False
+
+    section("a linked change compiles the tree once")
+    tree = new_tree("Link Once")
+    a = add(tree, SOLID, "A")
+    b = add(tree, SOLID, "B")
+    c = add(tree, SOLID, "C")
+    a.fill_color = RED
+    a.opacity = 0.5
+    with counted_applies() as applies:
+        links.link([b, c], a)
+    check(len(applies) == 1, f"linking two layers that differ in two settings writes the artifact once ({len(applies)})")
+    with counted_applies() as applies:
+        b.opacity = 0.75
+    check(len(applies) == 1 and abs(a.opacity - 0.75) < 1e-6 and abs(c.opacity - 0.75) < 1e-6,
+          f"a change on one of three writes it once too ({len(applies)})")
 
     section("a change reaches the compiled result of the other layer")
     tree = new_tree("Link Pixels")
