@@ -304,7 +304,7 @@ class PaintSystemNodeTree(NodeTree):
             if target is not None and target.is_folder:
                 stack_ops.insert_into(self, target, node)
             elif target is not None:
-                stack_ops.insert_above(self, node, stack_ops.Position(target, self.pair_in_stack(target, channel_name)))
+                stack_ops.insert_above(self, node, target)
             elif channel_name is not None:
                 stack_ops.insert_on_top(self, node, channel_name)
             if channel_name is not None:
@@ -314,43 +314,31 @@ class PaintSystemNodeTree(NodeTree):
         return node
 
     def remove_layer_node(self, node: bpy.types.Node, channel_name: str | None = None) -> None:
-        """Take a layer out of the channel's stack and close the gap.
-
-        Only the pair in that stack goes. The layer is deleted when none of
-        its other pairs feeds anything, and a folder's content with the
-        folder (``stack_ops.removal``).
-        """
+        """Remove a layer (a folder with its content) and close the gap."""
         channel_name = self._channel_name(channel_name)
         with suspend_compile(self):
-            stack_ops.remove(self, node, self.pair_in_stack(node, channel_name))
+            stack_ops.remove(self, node)
             if channel_name is not None:
                 stack_ops.arrange_stack(self, channel_name)
 
-    def pair_in_stack(self, node: bpy.types.Node, channel_name: str | None = None) -> int:
-        """The pair *node* sits in the channel's stack through, or its first pair when it is not there."""
-        if stack_ops.pair_count(node) == 1:
-            return 0
-        return next((item.pair for item in self.stack(channel_name) if item.node == node), 0)
-
     def move_layer_node(self, node: bpy.types.Node, direction: str, action: str,
-                        channel_name: str | None = None) -> str:
+                        channel_name: str | None = None) -> bool:
         """Move a layer one row up or down, using a ``movement_options`` move.
 
         *direction* is ``'UP'`` or ``'DOWN'``. *action* picks one of the
         moves ``stack_ops.movement_options`` offers. A folder takes its
-        content along. Returns ``'MOVED'``, or why nothing changed: the
-        move is not offered, would loop a mask link or would put a layer in
-        one channel twice (see ``stack_ops.move``).
+        content along. Returns False, and changes nothing, when the move is
+        not offered or would loop a mask link (see ``stack_ops.move``).
         """
         channel_name = self._channel_name(channel_name)
         if channel_name is None:
-            return 'NOT_OFFERED'
+            return False
         with suspend_compile(self):
-            result = stack_ops.move(self, channel_name, node, direction, action)
-            if result == 'MOVED':
+            moved = stack_ops.move(self, channel_name, node, direction, action)
+            if moved:
                 stack_ops.arrange_stack(self, channel_name)
                 self.reveal_layer_node(node, channel_name)
-        return result
+        return moved
 
     def activate_layer_node(self, node: bpy.types.Node) -> None:
         """Make *node* the active and only selected node."""

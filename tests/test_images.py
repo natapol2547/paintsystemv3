@@ -115,7 +115,7 @@ def test_save_and_reopen():
     packed.pack()
     broken = broken_layer.image = load(paths["broken"])
     clean = clean_layer.image = load(paths["clean"])
-    generated = solid.pairs[0].cache_image = bpy.data.images.new("Generated Cache", SIZE, SIZE, alpha=True)
+    generated = solid.cache_image = bpy.data.images.new("Generated Cache", SIZE, SIZE, alpha=True)
     unrelated = bpy.data.images.new("Unrelated", SIZE, SIZE, alpha=True)
     unrelated.use_fake_user = True
     names = {image: image.name for image in (managed, disk, packed, broken, clean, generated, unrelated)}

@@ -10,8 +10,7 @@ from ..compiler.core import suspend_compile
 from ..filters.layer_specs import layer_filter_items
 from ..nodes.layers.base_layer_node import RESOLUTION_ITEMS
 from ..nodes.layers.registry import layer_type, layer_type_items
-from ..nodetree.stack_ops import (Position, Removal, arrange_stack, channel_of, movement_options,
-                                  pair_count, remove_pair, removal)
+from ..nodetree.stack_ops import descendants, is_layer, movement_options
 from ..undo import undo_restores_data
 
 
@@ -54,68 +53,43 @@ class PAINTSYSTEM_OT_add_layer(Operator):
             self.layout.prop(self, name)
 
 
-def _filter_results(plan: Removal) -> list:
-    """The filter result images that go with *plan*, which is about to be carried out.
+def _filter_results(node) -> list:
+    """The filter result images of *node* and of the layers inside it.
 
-    That is the image of each pair taken out, and of every pair of a
-    layer that is deleted, linked or not. A filter result counts as the
-    pair's content, not as an artifact that can be rebuilt, so removing
-    the pair removes it too. Cache images are left out on purpose,
-    because they can always be baked again.
+    A filter result counts as the layer's content, not as an artifact
+    that can be rebuilt, so removing the layer removes it too. Cache
+    images are left out on purpose, because they can always be baked
+    again.
     """
-    pairs = {(layer.name, pair): layer for layer, pair in plan.positions}
-    pairs.update({(layer.name, each): layer for layer, _ in plan.positions if layer.name in plan.deleted
-                  for each in range(pair_count(layer))})
-    return [layer.pairs[pair].derived_image for (_, pair), layer in pairs.items()
-            if getattr(layer, 'ps_type', "") == 'FILTER'
-            and layer.pairs[pair].derived_image is not None]
+    nodes = [node, *descendants(node)] if node.is_folder else [node]
+    return [layer.derived_image for layer in nodes
+            if getattr(layer, 'ps_type', "") == 'FILTER' and layer.derived_image is not None]
 
 
 class PAINTSYSTEM_OT_remove_layer(Operator):
     bl_idname = "paint_system.remove_layer"
     bl_label = "Remove Layer"
-    bl_description = ("Remove the active layer from this channel, and a folder's content with it, "
-                      "and close the gap. A layer linked into other channels stays there")
+    bl_description = "Remove the active layer, and a folder's content with it, and close the gap"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        ps = parse_context(context)
-        if ps.layer is None:
-            return False
-        if ps.stack_item is None:
-            # Which pair to take out follows from the channel's stack.
-            cls.poll_message_set("The active layer is not in this channel")
-            return False
-        return True
+        tree = get_active_tree(context)
+        return tree is not None and is_layer(tree.nodes.active)
 
     def invoke(self, context, event):
         # The dialog draws on every redraw, so work out what it shows once
         # here.
-        ps = parse_context(context)
-        node = ps.layer
-        plan = removal(node, ps.stack_item.pair)
+        node = parse_context(context).layer
         self.layer_name = node.name
-        self.content_count = len(plan.deleted - {node.name})
-        self.stays = node.name not in plan.deleted
-        taken = {position.pair for position in plan.positions if position.node == node}
-        channels = (channel_of(ps.tree, node, pair) for pair in range(pair_count(node))
-                    if pair not in taken)
-        self.other_stacks = len({channel.name for channel in channels
-                                 if channel is not None and channel != ps.channel})
-        self.filter_count = len(_filter_results(plan))
+        self.content_count = len(descendants(node)) if node.is_folder else 0
+        self.filter_count = len(_filter_results(node))
         self.undo_restores = undo_restores_data(context)
         return context.window_manager.invoke_props_dialog(self, confirm_text="Remove")
 
     def draw(self, context):
         layout = self.layout
         layout.label(text=f"Remove '{self.layer_name}'?", **icon_kwargs('ERROR'))
-        if self.other_stacks == 1:
-            layout.label(text="It stays in the other stack it is linked into.")
-        elif self.other_stacks > 1:
-            layout.label(text=f"It stays in the {self.other_stacks} other stacks it is linked into.")
-        elif self.stays:
-            layout.label(text="It stays in the node tree, where its other pairs are still linked.")
         if self.content_count == 1:
             layout.label(text="The layer inside it goes with it.")
         elif self.content_count > 1:
@@ -129,83 +103,30 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
 
     def execute(self, context):
         ps = parse_context(context)
-        tree, node, pair = ps.tree, ps.layer, ps.stack_item.pair
+        tree, node = ps.tree, ps.layer
         # The row that moves up into the removed row's place becomes
-        # active. That is the first row after the layer's content whose
-        # layer is still there. If there is none, the nearest row above
+        # active. If the removed row was at the bottom, the new last row
         # becomes active.
-        items = tree.stack()
-        position = next((index for index, item in enumerate(items) if item.node == node), len(items))
-        end = position + 1
-        while end < len(items) and items[end].level > items[position].level:
-            end += 1
-        rows = [item.node.name for item in items[end:] + items[:position][::-1]]
+        rows = [item.node.name for item in tree.stack()]
+        gone = {node.name, *(child.name for child in descendants(node))} if node.is_folder else {node.name}
+        position = rows.index(node.name) if node.name in rows else len(rows)
+        after = [name for name in rows[position:] if name not in gone]
+        before = [name for name in rows[:position] if name not in gone]
+        next_active = after[0] if after else (before[-1] if before else None)
 
-        # Remove the filter results before the pairs. Once a pair is
-        # gone, nothing points at its image, and only the next file read
-        # would delete it. This is done here and not in ``Node.free``,
+        # Remove the filter results before the node. Once the node is
+        # gone, nothing points at the images, and only the next file read
+        # would delete them. This is done here and not in ``Node.free``,
         # because ``free`` also runs when undo tears nodes down. This
         # operator has the UNDO option, so its undo step holds the node
         # and the packed image together, and one Ctrl+Z brings both back.
-        for image in _filter_results(removal(node, pair)):
+        for image in _filter_results(node):
             bpy.data.images.remove(image)
 
         tree.remove_layer_node(node)
-        next_active = next((tree.nodes[name] for name in rows if name in tree.nodes), None)
         if next_active is not None:
-            tree.activate_layer_node(next_active)
+            tree.activate_layer_node(tree.nodes[next_active])
             update_active_image(context)
-        return {'FINISHED'}
-
-
-class PAINTSYSTEM_OT_add_pair(Operator):
-    bl_idname = "paint_system.add_pair"
-    bl_label = "Add Pair"
-    bl_description = ("Give the layer another pair of sockets. Link its output into another stack "
-                      "to show the layer there too")
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        return button_layer(context, get_active_tree(context)) is not None
-
-    def execute(self, context):
-        node = button_layer(context, get_active_tree(context))
-        node.add_pair()
-        node.active_pair_index = pair_count(node) - 1
-        return {'FINISHED'}
-
-
-class PAINTSYSTEM_OT_remove_pair(Operator):
-    bl_idname = "paint_system.remove_pair"
-    bl_label = "Remove Pair"
-    bl_description = ("Take the layer out of the selected pair's stack, close the gap, and remove "
-                      "the pair. A filter layer's image for that stack goes with it")
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        node = button_layer(context, get_active_tree(context))
-        if node is None:
-            return False
-        if pair_count(node) == 1:
-            cls.poll_message_set("A layer keeps at least one pair. Remove the layer instead")
-            return False
-        return True
-
-    def execute(self, context):
-        tree = get_active_tree(context)
-        node = button_layer(context, tree)
-        pair = min(node.active_pair_index, pair_count(node) - 1)
-        channel = channel_of(tree, node, pair)
-        # As in Remove Layer, before the pair is gone (``_filter_results``).
-        for image in _filter_results(Removal([Position(node, pair)], set())):
-            bpy.data.images.remove(image)
-        with suspend_compile(tree):
-            remove_pair(tree, node, pair)
-            if channel is not None:
-                arrange_stack(tree, channel.name)
-        node.active_pair_index = min(pair, pair_count(node) - 1)
         return {'FINISHED'}
 
 
@@ -218,14 +139,6 @@ MOVE_ACTION_ITEMS = [
     ('MOVE_OUT_BOTTOM', "Move Out Bottom", "Move out of the folder, below it"),
     ('MOVE_ADJACENT', "Move Adjacent", "Move to the level of the neighbouring layer"),
 ]
-
-
-# Why ``move_layer_node`` left the stack as it was, by the reason it returns.
-MOVE_REFUSALS = {
-    'NOT_OFFERED': "This move is not possible here",
-    'LOOP': "This move would make a loop through a mask link",
-    'REPEAT': "This move would put the layer in one channel twice",
-}
 
 
 def move_label(option) -> str:
@@ -267,9 +180,9 @@ class LayerMoveOperator:
             action = options[0].action
         if action not in {option.action for option in options}:
             return {'CANCELLED'}
-        result = ps.tree.move_layer_node(ps.layer, self.direction, action)
-        if result != 'MOVED':
-            self.report({'WARNING'}, MOVE_REFUSALS[result])
+        if not ps.tree.move_layer_node(ps.layer, self.direction, action):
+            # The move was on offer, so only the mask loop check refused it.
+            self.report({'WARNING'}, "This move would make a loop through a mask link")
             return {'CANCELLED'}
         return {'FINISHED'}
 
@@ -306,8 +219,7 @@ class PAINTSYSTEM_OT_move_layer_down(LayerMoveOperator, Operator):
 class PAINTSYSTEM_OT_bake_cache(Operator):
     bl_idname = "paint_system.bake_cache"
     bl_label = "Bake Layer Cache"
-    bl_description = ("Bake this layer's output (including everything below it) into its cache "
-                      "image. A linked layer bakes its cache for the active channel")
+    bl_description = "Bake this layer's output (including everything below it) into its cache image"
     bl_options = {'REGISTER', 'UNDO'}
 
     resolution: EnumProperty(name="Resolution", items=RESOLUTION_ITEMS, default='2048')
@@ -325,8 +237,8 @@ class PAINTSYSTEM_OT_bake_cache(Operator):
         size = int(self.resolution)
         try:
             image = bake_node_cache(context, tree, node, context.object,
-                                    pair=tree.pair_in_stack(node), width=size, height=size,
-                                    margin=self.margin, uv_map=self.uv_map)
+                                    width=size, height=size, margin=self.margin,
+                                    uv_map=self.uv_map)
         except RuntimeError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -337,13 +249,10 @@ class PAINTSYSTEM_OT_bake_cache(Operator):
     def invoke(self, context, event):
         tree = get_active_tree(context)
         node = button_layer(context, tree)
-        if node is not None:
-            # Every pair's cache is read with the layer's one UV map, so
-            # baking with another one makes the other pairs bake again.
+        if node is not None and node.cache_image is not None:
+            self.resolution = str(node.cache_image.size[0]) if str(node.cache_image.size[0]) in {
+                i[0] for i in RESOLUTION_ITEMS} else self.resolution
             self.uv_map = node.cache_uv_map
-            image = node.pairs[tree.pair_in_stack(node)].cache_image
-            if image is not None and str(image.size[0]) in {item[0] for item in RESOLUTION_ITEMS}:
-                self.resolution = str(image.size[0])
         return context.window_manager.invoke_props_dialog(self)
 
     def draw(self, context):
@@ -358,8 +267,6 @@ class PAINTSYSTEM_OT_bake_cache(Operator):
 classes = (
     PAINTSYSTEM_OT_add_layer,
     PAINTSYSTEM_OT_remove_layer,
-    PAINTSYSTEM_OT_add_pair,
-    PAINTSYSTEM_OT_remove_pair,
     PAINTSYSTEM_OT_move_layer_up,
     PAINTSYSTEM_OT_move_layer_down,
     PAINTSYSTEM_OT_bake_cache,

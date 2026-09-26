@@ -219,7 +219,7 @@ def built_result(tree, node):
     image[derived.UV_MAP_KEY] = ""
     link = stack_ops.feeding_link(node.inputs['Color'])
     ctx = core.build_ir(tree).ctx
-    parts = freshness.fingerprint_parts(ctx, node, 0, stack_ops.link_source(link) if link else None)
+    parts = freshness.fingerprint_parts(ctx, node, link.from_node if link else None)
     image[derived.FINGERPRINT_KEY] = freshness.stamp(parts)
     return image
 
@@ -358,10 +358,10 @@ try:
     filtered = build_tree("Perf Filtered", SMALL_LAYERS, images)
     instanced(filtered)
     top = filtered.insert_layer_node(FILTER)
-    top.pairs[0].derived_image = built_result(filtered, top)
+    top.derived_image = built_result(filtered, top)
     core.flush_now()
-    check(top.pairs[0].derived_stale_reason == "",
-          f"the filter layer reads as up to date ({top.pairs[0].derived_stale_reason!r})")
+    check(top.derived_stale_reason == "",
+          f"the filter layer reads as up to date ({top.derived_stale_reason!r})")
 
     small_mid, filtered_mid = plain_middle_layer(small), plain_middle_layer(filtered)
     plain_patch = bench("opacity edit, no filter layer",

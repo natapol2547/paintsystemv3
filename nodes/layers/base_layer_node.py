@@ -1,16 +1,11 @@
 import bpy
-from bpy.props import (BoolProperty, CollectionProperty, FloatProperty, EnumProperty,
-                       IntProperty, PointerProperty, StringProperty)
-from bpy.types import PropertyGroup
-from bpy.utils import register_classes_factory
+from bpy.props import BoolProperty, FloatProperty, EnumProperty, PointerProperty, StringProperty
 
 from ..base_node import PaintSystemBaseNode, mark_tree_dirty
 from ...common import icon_kwargs
 from ...compiler.library import layer_blend_group
 from ...context import update_active_image
-from ...nodetree.stack_ops import (add_virtual_input, after_pairs, below_input, clip_base,
-                                   feeds_clip_run, pair_count, pair_inputs, pair_name, pair_role,
-                                   stack_output, virtual_input)
+from ...nodetree.stack_ops import below_input, clip_base, feeds_clip_run, stack_output
 
 
 def update_painting(self, context):
@@ -53,7 +48,6 @@ def new_hidden_input(node, socket_type: str, name: str, default):
     return socket
 
 
-
 def draw_uv_map(context, layout, node, obj=None, prop="uv_map"):
     """Draw *node*'s UV map field, the property *prop*.
 
@@ -85,18 +79,17 @@ def emit_image_texture(ctx, node, role: str, image, uv_map: str = ""):
     return (tid, 'Color'), (tid, 'Alpha')
 
 
-def emit_mix_group(ctx, node, pair: int, role: str, group, amount_socket: str, amount: float,
+def emit_mix_group(ctx, node, role: str, group, amount_socket: str, amount: float,
                    color, alpha, *, clip: bool):
-    """Emit the library mix *group* to put (color, alpha) over the stack of *node*'s *pair*.
+    """Emit the library mix *group* to put (color, alpha) over *node*'s stack.
 
-    The group reads the stack below from the pair's input, and the mask
-    from the node's ``Mask`` input. *amount* goes to the *amount_socket*
+    The group reads the stack below from *node*'s ``Color`` input, and the
+    mask from its ``Mask`` input. *amount* goes to the *amount_socket*
     input. *clip* keeps the backdrop's alpha. Returns the colour and alpha
     refs of the result.
     """
-    mix = ctx.emit_node(node, pair_role(role, node, pair), 'ShaderNodeGroup',
-                        properties={'node_tree': group})
-    prev_color, prev_alpha = ctx.rgba_input(below_input(node, pair))
+    mix = ctx.emit_node(node, role, 'ShaderNodeGroup', properties={'node_tree': group})
+    prev_color, prev_alpha = ctx.rgba_input(below_input(node))
     ctx.link_or_set(prev_color, mix, 'Prev Color')
     ctx.link_or_set(prev_alpha, mix, 'Prev Alpha')
     ctx.connect_input(node.inputs['Mask'], mix, 'Mask')
@@ -109,36 +102,15 @@ def emit_mix_group(ctx, node, pair: int, role: str, group, amount_socket: str, a
     return (mix, 'Color'), (mix, 'Alpha')
 
 
-class PairCache:
-    """The baked cache of one pair, part of every layer type's pair state.
-
-    While it is valid, the compiler replaces the pair's output, and
-    everything upstream of it, with one image texture. Whether the layer
-    uses its caches, and the UV map they are read with, are settings of
-    the layer, shared by every pair.
-    """
-    cache_image: PointerProperty(type=bpy.types.Image, name="Cache Image",
-                                 update=mark_tree_dirty)
-    cache_hash: StringProperty(name="Cache Fingerprint")
-    cache_stale: BoolProperty(name="Cache Stale", default=False, options={'SKIP_SAVE'})
-
-
-class PaintSystemLayerPair(PairCache, PropertyGroup):
-    """What one pair of a layer builds for its stack (``stack_ops``, "Pairs")."""
-
-
 class PaintSystemLayerNode(PaintSystemBaseNode):
-    """A layer. For each stack it sits in, it takes the stack below and outputs a new one.
+    """A layer. It takes the stack below on ``Color`` and outputs a new stack.
 
-    Each stack goes through a pair of sockets, ``Color`` for the first
-    (``stack_ops``, "Pairs"). Each link carries the stack as one RGBA
-    value. Linking into the virtual input adds a pair, and ``Mask`` is
-    always the last input.
+    Each link carries the stack as one RGBA value. ``Mask`` is always the
+    last input.
 
-    Subclasses implement ``emit_source(ctx, pair)``, which returns
+    Subclasses implement ``emit_source(ctx)``, which returns
     ``(color, alpha)``. Each is an IR ref or a constant. Blending is shared
-    by every layer type, and is emitted once per pair, from the pair's
-    input to its output.
+    by every layer type.
 
     Types offered in the Add Layer menu set the ``ps_*`` attributes and are
     listed in ``nodes/layers/registry.py``.
@@ -164,11 +136,6 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     # Label for ``opacity``. A type that replaces what is below it uses
     # opacity to fade between the two, not to make itself see-through.
     ps_opacity_label = "Opacity"
-    # True for a type whose content differs from one pair to the next.
-    # Otherwise ``emit_source`` runs once per compile, for whichever pair
-    # compiles first, and every pair shares what it emitted
-    # (``CompileContext.layer_source``).
-    ps_source_per_pair = False
 
     opacity: FloatProperty(name="Opacity", default=1.0, min=0.0, max=1.0,
                            subtype='FACTOR', update=mark_tree_dirty)
@@ -186,19 +153,17 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
     lock_alpha: BoolProperty(name="Lock Alpha", default=False, update=update_painting,
                              description="Paint without changing this layer's transparency")
 
-    # Baked caches, one per pair (``PairCache``). These two settings are
-    # shared by every pair.
+    # Baked cache. While it is valid, the compiler replaces this node and
+    # everything upstream of it with one image texture.
     cache_enabled: BoolProperty(
         name="Use Cache", default=False, update=mark_tree_dirty,
         description="Replace this layer and everything below it with its baked image while the bake is up to date")
+    cache_image: PointerProperty(type=bpy.types.Image, name="Cache Image",
+                                 update=mark_tree_dirty)
+    cache_hash: StringProperty(name="Cache Fingerprint")
     cache_uv_map: StringProperty(name="Cache UV Map", update=mark_tree_dirty)
-
-    # What each pair builds for its stack, at the pair's position. A type
-    # with more to keep per pair redeclares it with its own type.
-    pairs: CollectionProperty(type=PaintSystemLayerPair)
-    # The row selected in the node editor's pair list. Editing state only,
-    # which the compiler ignores (``core._HASH_EXCLUDED_PROPS``).
-    active_pair_index: IntProperty(name="Active Pair", min=0)
+    cache_stale: BoolProperty(name="Cache Stale", default=False,
+                              options={'SKIP_SAVE'})
 
     @property
     def paint_image(self):
@@ -207,89 +172,27 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
 
     def copy(self, node):
         super().copy(node)
-        # Blender copies the pointers, so both layers would share their
-        # cache images. ``bake_node_cache`` reuses whatever ``cache_image``
-        # holds, so baking either copy would silently overwrite the
-        # other's pixels. A cache can be baked again, so the copy starts
-        # without one and bakes its own. Authored content stays shared on
-        # purpose.
-        if not self.cache_enabled and all(state.cache_image is None for state in self.pairs):
+        # Blender copies the pointer, so both layers would share one cache
+        # image. ``bake_node_cache`` reuses whatever ``cache_image`` holds,
+        # so baking either copy would silently overwrite the other's
+        # pixels. A cache can be baked again, so the copy starts without
+        # one and bakes its own. Authored content stays shared on purpose.
+        if self.cache_image is None and not self.cache_enabled:
             return
         # Assigning ``cache_enabled``, ``cache_image`` or ``cache_uv_map``
         # triggers a recompile, so only write them when there is a cache to
         # clear.
         self.cache_enabled = False
+        self.cache_image = None
         self.cache_uv_map = ""
-        for state in self.pairs:
-            state.cache_image = None
-            state.cache_hash = ""
-            state.cache_stale = False
+        self.cache_hash = ""
+        self.cache_stale = False
 
     def init(self, context):
         super().init(context)
-        new_hidden_input(self, 'NodeSocketColor', pair_name(0), (0, 0, 0, 0))
-        add_virtual_input(self)
+        new_hidden_input(self, 'NodeSocketColor', "Color", (0, 0, 0, 0))
         new_hidden_input(self, 'NodeSocketFloat', "Mask", 1.0)
-        self.outputs.new('NodeSocketColor', pair_name(0))
-        self.pairs.add()
-
-    def update(self):
-        # Blender calls this on every node when the tree's links change,
-        # before ``NodeTree.update`` compiles. So a link dropped on the
-        # virtual input moves onto a new pair before the compile sees it.
-        # Unlike ``NodeTree.update``, this callback may link. Afterwards
-        # nothing is linked into the virtual input, so calling it again
-        # does nothing.
-        virtual = virtual_input(self)
-        if virtual is None or not virtual.is_linked:
-            return
-        links = self.id_data.links
-        for link in list(virtual.links):
-            source = link.from_socket
-            links.remove(link)
-            links.new(source, self.add_pair())
-
-    def add_pair(self):
-        """Give this layer a new pair after its others, and return the pair's input.
-
-        The input goes just above the virtual input. The pair sits in no
-        stack until something links to it.
-        """
-        pair = pair_count(self)
-        index = after_pairs(self)
-        new_hidden_input(self, 'NodeSocketColor', pair_name(pair), (0, 0, 0, 0))
-        self.inputs.move(len(self.inputs) - 1, index)
-        self.outputs.new('NodeSocketColor', pair_name(pair))
-        self.pairs.add()
-        return below_input(self, pair)
-
-    def remove_pair(self, pair: int) -> None:
-        """Remove *pair*'s sockets and state, and name the pairs after it again.
-
-        The other pairs keep their links. ``stack_ops.remove_pair`` takes
-        the pair out of its stack first.
-        """
-        doomed = below_input(self, pair)
-        # Blender gives each output an internal link, the pass-through a
-        # muted node uses, and several outputs can take it from the same
-        # input. Removing that input drops only one of those links. The
-        # rest point at freed memory and crash the next depsgraph update
-        # on Blender 4.5 and later. Blender chooses the links again
-        # whenever a link or the socket order changes, and of two pair
-        # inputs it never chooses a later, unlinked one. So the input is
-        # unlinked and moved after the other pair inputs before it goes.
-        links = self.id_data.links
-        for link in list(doomed.links):
-            links.remove(link)
-        self.inputs.move(next(index for index, socket in enumerate(self.inputs) if socket == doomed),
-                         after_pairs(self) - 1)
-        self.inputs.remove(doomed)
-        self.outputs.remove(stack_output(self, pair))
-        self.pairs.remove(pair)
-        for index, sockets in enumerate(zip(pair_inputs(self), self.outputs)):
-            for socket in sockets:
-                if socket.name != pair_name(index):
-                    socket.name = pair_name(index)
+        self.outputs.new('NodeSocketColor', "Color")
 
     @classmethod
     def create(cls, tree, target=None, ps_object=None, **options):
@@ -313,8 +216,8 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         """The type icon at the start of this layer's row in the layer list."""
         layout.label(text="", **icon_kwargs(*self.ps_icon))
 
-    def draw_row_state(self, layout, pair: int):
-        """Draw an optional badge at the end of this layer's row, for the *pair* the row shows.
+    def draw_row_state(self, layout):
+        """Draw an optional badge at the end of this layer's row.
 
         Nothing by default. A filter layer uses it to show that its result
         no longer matches the layers below it. By design, the viewport does
@@ -341,78 +244,62 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
             settings.prop(self, "blend_mode", text="")
 
     def draw_cache_settings(self, context, layout):
-        state = self.pairs[self.id_data.pair_in_stack(self)]
         box = layout.box()
         row = box.row(align=True)
         row.prop(self, "cache_enabled", text="Cache")
-        if state.cache_image is not None and self.cache_enabled:
-            if state.cache_stale:
+        if self.cache_image is not None and self.cache_enabled:
+            if self.cache_stale:
                 row.label(text="Stale", **icon_kwargs('ERROR'))
             else:
                 row.label(text="Baked", **icon_kwargs('CHECKMARK'))
         row.operator("paint_system.bake_cache", text="", **icon_kwargs('RENDER_STILL'))
         if self.cache_enabled:
-            box.template_ID(state, "cache_image")
+            box.template_ID(self, "cache_image")
 
     # -- compiler -----------------------------------------------------------------
 
-    def emit_source(self, ctx, pair: int):
-        """Return (color, alpha) for this layer's own content, as *pair* shows it.
+    def emit_source(self, ctx):
+        """Return (color, alpha) for this layer's own content.
 
-        Each is an IR ref or a constant. Only a type with
-        ``ps_source_per_pair`` needs to read *pair*.
+        Each is an IR ref or a constant.
         """
         return EMPTY_SOURCE
 
-    def hash_parts(self, ctx, pair: int = 0):
-        """Extra data for the subtree hash of *pair*'s output. See ``CompileContext.subtree_hash``."""
-        return []
-
-    def emit(self, ctx, pair: int = 0):
-        """Emit the output of *pair*: this layer's content over the stack on the pair's input."""
-        state = self.pairs[pair]
-        if ctx.is_cached(self, pair):
+    def emit(self, ctx):
+        if ctx.is_cached(self):
             # Writing an RNA property tags the tree and the materials that
             # use it for an update, so only write when the value changes.
-            if state.cache_stale:
-                state.cache_stale = False
-            color, alpha = emit_image_texture(ctx, self, pair_role('cache', self, pair),
-                                              state.cache_image, self.cache_uv_map)
-            ctx.set_output(stack_output(self, pair), color, alpha)
+            if self.cache_stale:
+                self.cache_stale = False
+            color, alpha = emit_image_texture(ctx, self, 'cache', self.cache_image,
+                                              self.cache_uv_map)
+            ctx.set_output(stack_output(self), color, alpha)
             return
-        stale = bool(self.cache_enabled and state.cache_image is not None)
-        if state.cache_stale != stale:
-            state.cache_stale = stale
+        stale = bool(self.cache_enabled and self.cache_image is not None)
+        if self.cache_stale != stale:
+            self.cache_stale = stale
 
-        color, alpha = ctx.layer_source(self, pair)
-        base = clip_base(self, pair)
+        color, alpha = self.emit_source(ctx)
+        base = clip_base(self)
         if base is not None:
-            color, alpha = self.emit_blend(ctx, pair, color, alpha, clip=True)
-            if not feeds_clip_run(self, pair):
+            color, alpha = self.emit_blend(ctx, color, alpha, clip=True)
+            if not feeds_clip_run(self):
                 # Top of the run. Blend the base, with everything clipped to
                 # it, over the stack below the base.
-                color, alpha = base.node.emit_blend(ctx, base.pair, color, alpha)
-        elif not feeds_clip_run(self, pair):
-            color, alpha = self.emit_blend(ctx, pair, color, alpha)
+                color, alpha = base.emit_blend(ctx, color, alpha)
+        elif not feeds_clip_run(self):
+            color, alpha = self.emit_blend(ctx, color, alpha)
         # Otherwise this is a clip base. The clipped layers above composite
         # onto its content. The top clipped layer then blends the result
         # using this base's settings.
-        ctx.set_output(stack_output(self, pair), color, alpha)
+        ctx.set_output(stack_output(self), color, alpha)
 
-    def emit_blend(self, ctx, pair: int, color, alpha, *, clip=False):
-        """Blend (color, alpha) over the stack on the input of this layer's *pair*.
+    def emit_blend(self, ctx, color, alpha, *, clip=False):
+        """Blend (color, alpha) over the stack on this layer's ``Color`` input.
 
         Uses this layer's blend mode, opacity and mask, and returns the
         result's colour and alpha refs. *clip* keeps the backdrop's alpha.
         """
-        return emit_mix_group(ctx, self, pair, 'blend', layer_blend_group(self.blend_mode),
+        return emit_mix_group(ctx, self, 'blend', layer_blend_group(self.blend_mode),
                               'Opacity', self.opacity if self.enabled else 0.0,
                               color, alpha, clip=clip)
-
-
-classes = (
-    PaintSystemLayerPair,
-)
-
-
-register, unregister = register_classes_factory(classes)

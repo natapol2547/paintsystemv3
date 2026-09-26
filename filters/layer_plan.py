@@ -45,7 +45,7 @@ import bpy
 from ..context import get_ps_object, uses_tree
 from ..gpu_passes.core import gpu_known
 from ..gpu_passes.texel_map import resolve_uv_map
-from ..nodetree.stack_ops import Position, below_input, channel_of, feeding_link, link_source
+from ..nodetree.stack_ops import below_input, channel_of, feeding_link
 from . import composite
 from .core import Refused
 
@@ -56,9 +56,9 @@ COMPOSITE, BAKE = 'COMPOSITE', 'BAKE'
 
 @dataclass(frozen=True)
 class InputPlan:
-    """How to get the picture below one pair of a filter layer.
+    """How to get the picture below a filter layer.
 
-    *source* is the position feeding the pair's input below, which
+    *source* is the node feeding the layer's ``Color`` input, which
     `compiler.core.build_ir` takes as its `bake_target`. For a clipped
     filter layer it is the base's own content, which is what such a layer
     filters. *chain* is the composite plan on the composite path. On the
@@ -71,7 +71,7 @@ class InputPlan:
     needed none. A build stores it on the layer (`keep_surface`).
     """
     path: str
-    source: Position
+    source: bpy.types.Node
     chain: composite.ChainPlan | None
     uv_map: str
     reason: str
@@ -82,23 +82,23 @@ class InputPlan:
         return self.path == COMPOSITE
 
 
-def resolve_input(context, tree, node, pair: int = 0) -> InputPlan:
-    """Decide how the stack below *node*'s *pair* is turned into pixels.
+def resolve_input(context, tree, node) -> InputPlan:
+    """Decide how the stack below *node* is turned into pixels.
 
     Raises `filters.core.Refused` when neither path can run, naming the
     layer or image at fault.
     """
-    channel = channel_of(tree, node, pair)
+    channel = channel_of(tree, node)
     if channel is not None and channel.type != 'COLOR':
         raise Refused("Filter layers only work on colour channels")
 
-    link = feeding_link(below_input(node, pair))
+    link = feeding_link(below_input(node))
     if link is None:
         raise Refused(f"There is nothing below '{node.name}' to filter")
-    source = link_source(link)
+    source = link.from_node
 
     try:
-        chain = composite.plan_below(node, pair)
+        chain = composite.plan_below(node)
     except composite.Unsupported as error:
         return _bake_plan(context, tree, node, source, str(error))
 

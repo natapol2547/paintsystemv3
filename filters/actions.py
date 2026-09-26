@@ -57,16 +57,15 @@ def _consumers(tree) -> dict[str, list]:
 
 
 def _showing_cache(node) -> bool:
-    """True when any pair of *node* is compiled as its baked cache, not from its inputs.
+    """True when *node* is compiled as its baked cache, not from its inputs.
 
     `compiler.core.CompileContext.is_cached` also compares the stored hash
-    with the tree. This is only the cheap part of that test, and it does
-    not ask which pair the edit is below. It can only err towards
-    refusing, which is enough for an operator.
+    with the tree. This is only the cheap part of that test. It can only
+    err towards refusing, which is enough for an operator.
     """
     return (getattr(node, 'cache_enabled', False)
-            and any(state.cache_image is not None and not state.cache_stale
-                    for state in node.pairs))
+            and getattr(node, 'cache_image', None) is not None
+            and not getattr(node, 'cache_stale', False))
 
 
 def _cache_hiding(tree, layer):

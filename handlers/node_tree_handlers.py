@@ -7,7 +7,6 @@ from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty
                              unblock_compile)
 from ..filters import derived, freshness, layer_job
 from ..gpu_passes import surface, texel_map
-from ..nodetree.stack_ops import complete_pairs
 from ..nodetree.tree import subscribe_name_changes
 from ..selection import overlay as selection_overlay
 from ..selection import raster as selection_raster
@@ -29,13 +28,11 @@ def paint_system_images() -> set[bpy.types.Image]:
     pointed_at = set()
     for tree in ps_trees():
         for node in tree.nodes:
-            # A layer keeps its cache and filter result in its pair states.
-            for owner in (node, *getattr(node, 'pairs', ())):
-                for prop in owner.bl_rna.properties:
-                    if prop.type == 'POINTER' and prop.fixed_type.identifier == 'Image':
-                        image = getattr(owner, prop.identifier)
-                        if image is not None:
-                            pointed_at.add(image)
+            for prop in node.bl_rna.properties:
+                if prop.type == 'POINTER' and prop.fixed_type.identifier == 'Image':
+                    image = getattr(node, prop.identifier)
+                    if image is not None:
+                        pointed_at.add(image)
     made = {image for image in bpy.data.images
             if image.get(PS_IMAGE_KEY) and image.get(derived.OWNER_KEY) is None}
     return made | pointed_at
@@ -136,10 +133,6 @@ def on_restore_pre(*args):
 @bpy.app.handlers.persistent
 def on_load_post(*args):
     unblock_compile()
-    # Before anything reads a layer's pair states, including the cleanup
-    # below that looks for the filter results they point at.
-    for tree in ps_trees():
-        complete_pairs(tree)
     subscribe_name_changes()
     cleanup_orphan_artifacts()
     # Orphaned filter results are deleted here and nowhere else. A file

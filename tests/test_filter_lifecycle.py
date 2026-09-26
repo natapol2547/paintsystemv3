@@ -42,7 +42,7 @@ def built(node, name):
     image[derived.OWNER_KEY] = f"{node.id_data.uuid}:{node.uuid}"
     image[derived.BUILD_KEY] = "hand-stamped"
     image[derived.UV_MAP_KEY] = ""
-    node.pairs[0].derived_image = image
+    node.derived_image = image
     return image
 
 
@@ -85,20 +85,20 @@ try:
     # Blender duplicates the properties itself and then calls `copy` to
     # fix up what a shared pointer would break, so the pointer is already
     # the original's by the time the hook runs.
-    copy.pairs[0].derived_image = image
+    copy.derived_image = image
     copy.copy(node)
-    check(copy.pairs[0].derived_image is not None and copy.pairs[0].derived_image != image,
+    check(copy.derived_image is not None and copy.derived_image != image,
           "the duplicate gets its own image, not a second pointer at the original's")
-    check(derived.is_built(copy.pairs[0].derived_image),
+    check(derived.is_built(copy.derived_image),
           "which arrives built: the stamps and the packed pixels both come with a copy")
-    check(tuple(copy.pairs[0].derived_image.pixels[:4]) == tuple(image.pixels[:4]),
+    check(tuple(copy.derived_image.pixels[:4]) == tuple(image.pixels[:4]),
           "and holds the same pixels, because the original was packed")
     tree.nodes.remove(copy)
 
     section("the save path")
     images = handlers.paint_system_images()
     check(image in images, "a result a layer points at is saved with the file")
-    node.pairs[0].derived_image = None
+    node.derived_image = None
     check(image not in handlers.paint_system_images(),
           "one nothing points at is not, so an orphan is never packed into the next file")
 
@@ -119,7 +119,7 @@ try:
     check(unrelated.name in bpy.data.images, "and an image that is not a filter result is not touched")
 
     live_image.use_fake_user = True
-    node.pairs[0].derived_image = None
+    node.derived_image = None
     check(derived.cleanup_orphan_derived() == 0,
           "a second sweep has nothing to do")
 

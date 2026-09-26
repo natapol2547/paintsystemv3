@@ -111,8 +111,8 @@ class ChainPlan:
     uv_maps: frozenset[str]
 
 
-def plan_below(node, pair: int = 0) -> ChainPlan:
-    """Plan the composite of everything feeding the input of *node*'s *pair*.
+def plan_below(node) -> ChainPlan:
+    """Plan the composite of everything feeding *node*'s ``Color`` input.
 
     The compiler passes that socket to the layer as Prev Color. For a
     clipped filter layer it carries the base's own content, not the
@@ -124,11 +124,11 @@ def plan_below(node, pair: int = 0) -> ChainPlan:
     """
     tree = node.id_data
     with link_index(tree):
-        return _plan_chain(below_input(node, pair), set(), tree.get_input_node())
+        return _plan_chain(below_input(node), set(), tree.get_input_node())
 
 
-def _plan_chain(socket, visited: set, group_input) -> ChainPlan:
-    positions = list(layers_down_from(socket, visited))
+def _plan_chain(socket, visited: set[str], group_input) -> ChainPlan:
+    nodes = list(layers_down_from(socket, visited))
     # The walk stops at anything that is not a layer, such as a group
     # layer, a hand-made link or a cycle. The compiler still composites
     # it, so without this check the plan would silently miss a layer.
@@ -139,22 +139,22 @@ def _plan_chain(socket, visited: set, group_input) -> ChainPlan:
     # lays the filtered result over that base, which matches the shader
     # for Mix layers. A blend mode such as Multiply directly on the base
     # acts on it only in the shader (PS-005, known gaps).
-    bottom = feeding_link(below_input(*positions[-1]) if positions else socket)
+    bottom = feeding_link(below_input(nodes[-1]) if nodes else socket)
     if bottom is not None and bottom.from_node != group_input:
         below = bottom.from_node
         raise Unsupported(f"'{below.name}' below is a {below.bl_label}, "
                           "which needs a render to draw")
-    positions.reverse()
-    indexes = {position: index for index, position in enumerate(positions)}
-    bases = {base for base in (clip_base(*position) for position in positions)
+    nodes.reverse()
+    positions = {layer.name: index for index, layer in enumerate(nodes)}
+    bases = {base.name for base in (clip_base(layer) for layer in nodes)
              if base is not None}
 
     steps = []
     images: list[bpy.types.Image] = []
     uv_maps: set[str] = set()
-    for position in positions:
-        step = _plan_layer(position, indexes, visited, group_input,
-                           holds_run=position in bases)
+    for layer in nodes:
+        step = _plan_layer(layer, positions, visited, group_input,
+                           holds_run=layer.name in bases)
         steps.append(step)
         if step.content is not None:
             images.extend(step.content.images)
@@ -165,8 +165,7 @@ def _plan_chain(socket, visited: set, group_input) -> ChainPlan:
     return ChainPlan(tuple(steps), tuple(images), frozenset(uv_maps))
 
 
-def _plan_layer(position, indexes, visited, group_input, *, holds_run: bool) -> LayerStep:
-    layer, pair = position
+def _plan_layer(layer, positions, visited, group_input, *, holds_run: bool) -> LayerStep:
     ps_type = getattr(layer, 'ps_type', '')
     if ps_type not in DRAWN_TYPES:
         raise Unsupported(f"Layer '{layer.name}' is a {layer.bl_label} layer, "
@@ -174,12 +173,12 @@ def _plan_layer(position, indexes, visited, group_input, *, holds_run: bool) -> 
     if feeding_link(layer.inputs['Mask']) is not None:
         raise Unsupported(f"Layer '{layer.name}' has a linked mask")
 
-    base = clip_base(layer, pair)
-    top_of_run = not feeds_clip_run(layer, pair)
+    base = clip_base(layer)
+    top_of_run = not feeds_clip_run(layer)
     base_index = -1
     if base is not None:
         placement = 'CLIP_TOP' if top_of_run else 'CLIP'
-        base_index = indexes.get(base, -1)
+        base_index = positions.get(base.name, -1)
         if base_index < 0:
             raise Unsupported(f"Layer '{layer.name}' clips to a layer outside its own stack")
     else:
@@ -203,14 +202,13 @@ def _plan_layer(position, indexes, visited, group_input, *, holds_run: bool) -> 
         # A filter layer replaces the stack below instead of compositing
         # over it. It is transparent until it is built.
         rule = blend_glsl.FILTER_MIX
-        strength = layer.amount(pair)
-        result = layer.pairs[pair].derived_image
-        if derived.is_built(result):
+        strength = layer.amount
+        if derived.is_built(layer.derived_image):
             # Skip `_source_image`. A built result was packed by the
             # build that stamped it, so there is nothing to check. Also,
             # reading the size of a result just committed would decode
             # the whole file (`filters.layer_build.commit`).
-            image = result
+            image = layer.derived_image
             uv_map = derived.stamped_uv_map(image)
 
     if rule == blend_glsl.BLEND and layer.blend_mode not in blend_glsl.ALLOWED_BLEND_MODES:

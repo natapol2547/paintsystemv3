@@ -72,11 +72,11 @@ try:
     lower = solid(tree, "Lower", GREEN, clip=True)
     upper = solid(tree, "Upper", BLUE, clip=True)
     top = solid(tree, "Top", GREY)
-    check(stack_ops.layer_below(base) == (bottom, 0) and stack_ops.layer_above(base) == (lower, 0),
+    check(stack_ops.layer_below(base) == bottom and stack_ops.layer_above(base) == lower,
           "layer_below and layer_above follow the stack")
     check(stack_ops.layer_below(bottom) is None and stack_ops.layer_above(top) is None,
           "no layer beyond the ends of the stack")
-    check(stack_ops.clip_base(lower) == (base, 0) and stack_ops.clip_base(upper) == (base, 0),
+    check(stack_ops.clip_base(lower) == base and stack_ops.clip_base(upper) == base,
           "clipped layers clip to the first unclipped layer below")
     check(stack_ops.clip_base(base) is None and stack_ops.clip_base(top) is None,
           "unclipped layers have no base")
@@ -171,8 +171,8 @@ try:
     base = solid(tree, "Base", HALF_RED)
     clipped = solid(tree, "Clipped", BLUE, clip=True)
     check_pixel("before the move", tree, over(GREEN, over(HALF_RED, BLUE, clip=True)))
-    check(tree.move_layer_node(base, 'DOWN', 'SKIP') == 'MOVED', "move the base below the bottom layer")
-    check(clipped.is_clip and stack_ops.clip_base(clipped) == (tree.nodes["Bottom"], 0),
+    check(tree.move_layer_node(base, 'DOWN', 'SKIP'), "move the base below the bottom layer")
+    check(clipped.is_clip and stack_ops.clip_base(clipped) == tree.nodes["Bottom"],
           "the clipped layer keeps is_clip and clips to the layer now below it")
     check_pixel("after the move", tree, over(HALF_RED, over(GREEN, BLUE, clip=True)))
 
@@ -193,9 +193,9 @@ try:
     clipped = solid(tree, "Clipped", BLUE, clip=True)
     cache = bpy.data.images.new("PS Test Clip Cache", 4, 4)
     for node in (base, clipped):
-        node.pairs[0].cache_image = cache
+        node.cache_image = cache
         node.cache_enabled = True
-        node.pairs[0].cache_hash = core.CompileContext(IR()).subtree_hash(node)
+        node.cache_hash = core.CompileContext(IR()).subtree_hash(node)
     ctx = core.CompileContext(IR())
     check(not ctx.is_cached(base), "a base's cache is not used: its outputs are the run")
     check(ctx.is_cached(clipped), "the top of a run uses its cache")

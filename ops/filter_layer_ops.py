@@ -51,20 +51,19 @@ def filter_layer(context, tree):
     return node if node is not None and node.ps_type == 'FILTER' else None
 
 
-def _resume_auto_refresh(node, pair):
-    """Clear the automatic refresh's message on *pair*, and turn Auto Refresh back on if the job turned it off.
+def _resume_auto_refresh(node):
+    """Clear the automatic refresh's message, and turn Auto Refresh back on if the job turned it off.
 
     Called after a successful Update. Only the job sets `derived_error`.
     With Auto Refresh still on, the message says why the job could not
-    build the pair. With it off, the job gave up and turned it off:
+    build the layer. With it off, the job gave up and turned it off:
     switching Auto Refresh off by hand clears the message, so a message
     never sits next to a choice the user made. Either way, a build that
     just worked means the message is out of date and Auto Refresh
     belongs on.
     """
-    state = node.pairs[pair]
-    if state.derived_error:
-        state.derived_error = ""
+    if node.derived_error:
+        node.derived_error = ""
         node.auto_refresh = True
 
 
@@ -90,8 +89,7 @@ class FilterLayerAction:
 class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
     bl_idname = "paint_system.rebuild_filter_layer"
     bl_label = "Update Filter"
-    bl_description = ("Rebuild this layer's filtered image from the layers below it. A linked layer "
-                      "rebuilds its image for the active channel")
+    bl_description = "Rebuild this layer's filtered image from the layers below it"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -105,14 +103,13 @@ class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
         """Build in one go, for a script or a keystroke with no window."""
         tree = get_active_tree(context)
         node = filter_layer(context, tree)
-        pair = tree.pair_in_stack(node)
         layer_job.cancel_all()
         try:
-            image = layer_build.build_layer(context, tree, node, pair)
+            image = layer_build.build_layer(context, tree, node)
         except Refused as refusal:
             self.report({'WARNING'}, str(refusal))
             return {'CANCELLED'}
-        _resume_auto_refresh(node, pair)
+        _resume_auto_refresh(node)
         self.report({'INFO'}, f"Built {image.name}")
         return {'FINISHED'}
 
@@ -124,8 +121,7 @@ class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
         layer_job.cancel_all()
         self._name = node.name
         self._node = node
-        self._pair = tree.pair_in_stack(node)
-        self._steps = layer_build.steps(context, tree, node, self._pair)
+        self._steps = layer_build.steps(context, tree, node)
         try:
             # The first step only resolves the inputs. So every refusal
             # that can come before any GPU memory is used is raised here,
@@ -154,7 +150,7 @@ class PAINTSYSTEM_OT_rebuild_filter_layer(FilterLayerAction, Operator):
                 label, fraction = next(self._steps)
             except StopIteration as done:
                 self._stop(context)
-                _resume_auto_refresh(self._node, self._pair)
+                _resume_auto_refresh(self._node)
                 self.report({'INFO'}, f"Built {done.value.name}")
                 return {'FINISHED'}
             except Refused as refusal:
@@ -218,23 +214,21 @@ class PAINTSYSTEM_OT_clear_filter_result(FilterLayerAction, Operator):
     bl_label = "Clear Result"
     bl_description = ("Drop this layer's filtered image and turn Auto Refresh off. The layer "
                       "stays where it is and passes the layers below through until it is "
-                      "built again. A linked layer drops only its image for the active channel")
+                      "built again")
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
         tree = get_active_tree(context)
         node = filter_layer(context, tree)
-        pair = tree.pair_in_stack(node)
-        state = node.pairs[pair]
-        image = state.derived_image
+        image = node.derived_image
         if image is None:
             return {'CANCELLED'}
-        if layer_job.running_on(node, pair):
+        if layer_job.running_on(node):
             layer_job.cancel_all()
-        # The job builds any pair with no pixels, so with Auto Refresh
+        # The job builds any layer with no pixels, so with Auto Refresh
         # left on the result would come straight back.
         node.auto_refresh = False
-        state.derived_image = None
+        node.derived_image = None
         if image.users == 0:
             bpy.data.images.remove(image)
         return {'FINISHED'}

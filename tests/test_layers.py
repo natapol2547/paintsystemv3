@@ -1,8 +1,6 @@
 """Layer list, moves and layer types (PS-011, PS-012, PS-029, PS-034)."""
 import os
-import shutil
 import sys
-import tempfile
 import traceback
 from types import SimpleNamespace
 
@@ -134,7 +132,7 @@ try:
         core.compile_tree(tree)
         compiles.clear()
         label = f"{name} {direction} {action}"
-        check(tree.move_layer_node(tree.nodes[name], direction, action) == 'MOVED', f"{label}: moved")
+        check(tree.move_layer_node(tree.nodes[name], direction, action), f"{label}: moved")
         check(layout(tree) == want, f"{label}: {layout(tree)}")
         check(compiles == [tree.name], f"{label}: compiled once {compiles}")
         check_current(tree, label)
@@ -142,13 +140,13 @@ try:
 
     tree = build("Leap")
     tree.move_layer_node(tree.nodes["B"], 'UP', 'SKIP')
-    check(tree.move_layer_node(tree.nodes["C"], 'DOWN', 'MOVE_ADJACENT') == 'MOVED', "leap moved")
+    check(tree.move_layer_node(tree.nodes["C"], 'DOWN', 'MOVE_ADJACENT'), "leap moved")
     check(layout(tree) == [("A", 0), ("F", 0), ("B", 1), ("G", 1), ("C", 0), ("H", 0), ("D", 0)],
           f"MOVE_ADJACENT down leaves both folders {layout(tree)}")
 
     tree = build("Refused")
-    check(tree.move_layer_node(tree.nodes["A"], 'UP', 'SKIP') == 'NOT_OFFERED', "a move not on offer is refused")
-    check(tree.move_layer_node(tree.nodes["C"], 'DOWN', 'SKIP') == 'NOT_OFFERED', "no SKIP without a next sibling")
+    check(not tree.move_layer_node(tree.nodes["A"], 'UP', 'SKIP'), "a move not on offer is refused")
+    check(not tree.move_layer_node(tree.nodes["C"], 'DOWN', 'SKIP'), "no SKIP without a next sibling")
     check(layout(tree) == FIXTURE, "a refused move changes nothing")
 
     tree = build("Reveal")
@@ -232,78 +230,23 @@ try:
     tree = build("Duplicate")
     original = tree.nodes["A"]
     cache_image = bpy.data.images.new("Cache For A", 8, 8)
-    original.pairs[0].cache_image = cache_image
+    original.cache_image = cache_image
     original.cache_enabled = True
-    original.pairs[0].cache_hash = "deadbeef"
+    original.cache_hash = "deadbeef"
     original.cache_uv_map = "UVMap"
     duplicate_tree = tree.copy()
     duplicate = duplicate_tree.nodes["A"]
     check(duplicate.uuid != original.uuid, "the copy gets its own uuid")
-    check(duplicate.pairs[0].cache_image is None and not duplicate.cache_enabled
-          and duplicate.pairs[0].cache_hash == "" and duplicate.cache_uv_map == "",
+    check(duplicate.cache_image is None and not duplicate.cache_enabled
+          and duplicate.cache_hash == "" and duplicate.cache_uv_map == "",
           "and no cache, so baking it cannot overwrite the original's pixels")
-    check(original.pairs[0].cache_image == cache_image and original.cache_enabled
-          and original.pairs[0].cache_hash == "deadbeef", "the original keeps its own")
+    check(original.cache_image == cache_image and original.cache_enabled
+          and original.cache_hash == "deadbeef", "the original keeps its own")
     plain = duplicate_tree.nodes["B"]
-    check(plain.pairs[0].cache_image is None and plain.uuid != tree.nodes["B"].uuid,
+    check(plain.cache_image is None and plain.uuid != tree.nodes["B"].uuid,
           "a layer that had no cache copies unchanged")
     bpy.data.node_groups.remove(duplicate_tree)
     bpy.data.images.remove(cache_image)
-
-    section("pair states")
-    tree = build("Pair States")
-    check(all(len(node.pairs) == stack_ops.pair_count(node) == 1
-              for node in tree.nodes if stack_ops.is_layer(node)),
-          "every new layer has one state for its one pair")
-    # A layer saved before pairs existed reads back with no state and no
-    # virtual input. So does one in a tree appended from such a file, and
-    # no file read handler runs then, so the next compile completes it.
-    with core.suspend_compile(tree):
-        for name in ("A", "F"):
-            node = tree.nodes[name]
-            node.pairs.clear()
-            node.inputs.remove(stack_ops.virtual_input(node))
-    check(len(tree.nodes["A"].pairs) == 1 and len(tree.nodes["F"].pairs) == 1,
-          "compiling gives such a layer a state for each pair")
-    check([socket.identifier for socket in tree.nodes["A"].inputs] == ["Color", "__extend__", "Mask"]
-          and [socket.identifier for socket in tree.nodes["F"].inputs]
-          == ["Color", "__extend__", "Content Color", "Mask"],
-          "and a virtual input below its pair inputs")
-    check_current(tree, "the completed tree")
-    stack_ops.complete_pairs(tree)
-    check(len(tree.nodes["A"].pairs) == 1 and len(tree.nodes["A"].inputs) == 3,
-          "and a second pass adds nothing")
-    with core.suspend_compile(tree):
-        node = tree.nodes["A"]
-        node.pairs.clear()
-        node.inputs.remove(stack_ops.virtual_input(node))
-        core.compile_tree(tree)
-        direct = len(node.pairs) == 1 and stack_ops.virtual_input(node) is not None
-    check(direct, "so does a compile that does not go through the scheduler, such as Recompile")
-    # A tree linked from such a file cannot be saved, so it is completed
-    # in memory. Otherwise it, and any tree wrapping it, could not compile.
-    library_path = os.path.join(tempfile.mkdtemp(), "ps_pre_pair_library.blend")
-    shared = build("Pre-Pair Library")
-    with core.suspend_compile(shared):
-        node = shared.nodes["A"]
-        node.pairs.clear()
-        node.inputs.remove(stack_ops.virtual_input(node))
-        bpy.data.libraries.write(library_path, {shared}, fake_user=True)
-    bpy.data.node_groups.remove(shared)
-    with bpy.data.libraries.load(library_path, link=True) as (_, linked):
-        linked.node_groups = ["Pre-Pair Library"]
-    shared = linked.node_groups[0]
-    library = shared.library
-    try:
-        check(not shared.is_editable and len(shared.nodes["A"].pairs) == 0, "a linked tree can lack pair states")
-        core.compile_tree(shared)
-        node = shared.nodes["A"]
-        check(len(node.pairs) == 1 and stack_ops.virtual_input(node) is not None,
-              "and a compile completes it all the same")
-        core.flush_now()
-    finally:
-        bpy.data.libraries.remove(library)
-        shutil.rmtree(os.path.dirname(library_path))
 
     section("layer type registry")
     types = registry.layer_types()

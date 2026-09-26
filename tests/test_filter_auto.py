@@ -32,7 +32,6 @@ layer_build = import_from("filters.layer_build")
 layer_job = import_from("filters.layer_job")
 undo_pixels = import_from("undo.pixels")
 create_managed_image = import_from("compiler.bake").create_managed_image
-pair_key = import_from("nodetree.stack_ops").pair_key
 
 SOLID = 'PaintSystemSolidColorLayerNode'
 IMAGE = 'PaintSystemImageLayerNode'
@@ -74,7 +73,7 @@ def quiet():
 
 
 def stamp(node):
-    image = node.pairs[0].derived_image
+    image = node.derived_image
     return image[derived.BUILD_KEY] if derived.is_built(image) else ""
 
 
@@ -95,34 +94,34 @@ if available():
             node = tree.insert_layer_node(FILTER)
             node.resolution = SIZE
         core.flush_now()
-        check(not derived.is_built(node.pairs[0].derived_image) and node.pairs[0].stale_reason == "",
+        check(not derived.is_built(node.derived_image) and node.stale_reason == "",
               "a new filter layer is unbuilt, which is not out of date")
         check(node.needs_build and bpy.app.timers.is_registered(layer_job._tick),
               "but it needs a build, and the compile that saw it scheduled one")
-        check(pump() and derived.is_built(node.pairs[0].derived_image), "the job builds it")
+        check(pump() and derived.is_built(node.derived_image), "the job builds it")
         core.flush_now()
-        check(not node.needs_build and node.pairs[0].derived_error == "",
-              f"and the layer is up to date: {node.pairs[0].stale_reason!r}")
+        check(not node.needs_build and node.derived_error == "",
+              f"and the layer is up to date: {node.stale_reason!r}")
 
         section("a stroke below it")
         was = stamp(node)
-        check(node.pairs[0].stale_reason == "" and node.auto_refresh,
+        check(node.stale_reason == "" and node.auto_refresh,
               "a built layer starts up to date, with Auto Refresh on")
 
         quiet()
         undo_pixels.write_pixels(picture.image, [0.8, 0.2, 0.1, 1.0] * 64)
         core.flush_now()
-        check(node.pairs[0].stale_reason == "the pixels below changed",
-              f"the write puts it out of date: {node.pairs[0].stale_reason!r}")
+        check(node.stale_reason == "the pixels below changed",
+              f"the write puts it out of date: {node.stale_reason!r}")
         check(bpy.app.timers.is_registered(layer_job._tick),
               "and the compile that saw it scheduled a refresh")
 
         check(pump(), "the refresh runs to the end")
         core.flush_now()
         check(stamp(node) != was, "it built new pixels")
-        check(node.pairs[0].stale_reason == "" and not node.pairs[0].derived_stale_pixels,
-              f"and the layer is up to date again: {node.pairs[0].stale_reason!r}")
-        check(node.pairs[0].derived_error == "", "with nothing to report")
+        check(node.stale_reason == "" and not node.derived_stale_pixels,
+              f"and the layer is up to date again: {node.stale_reason!r}")
+        check(node.derived_error == "", "with nothing to report")
 
         section("a layer that did not ask")
         was = stamp(node)
@@ -131,7 +130,7 @@ if available():
         core.flush_now()
         pump()
         check(stamp(node) == was, "Auto Refresh off leaves the pixels alone")
-        check(node.pairs[0].stale_reason == "the pixels below changed",
+        check(node.stale_reason == "the pixels below changed",
               "and the layer says it is out of date, waiting for Update")
 
         node.auto_refresh = True
@@ -153,8 +152,8 @@ if available():
         core.flush_now()
         pump()
         check(stamp(node) == was, "a stroke below it is not built while nothing can show it")
-        check(node.pairs[0].stale_reason == "the pixels below changed",
-              f"but it still knows it is out of date: {node.pairs[0].stale_reason!r}")
+        check(node.stale_reason == "the pixels below changed",
+              f"but it still knows it is out of date: {node.stale_reason!r}")
         check(node.auto_refresh, "and did not have to give up Auto Refresh to stay put")
 
         # The timer has to be taken down by hand before this can mean
@@ -204,8 +203,8 @@ if available():
             layer_job._deadline = 0.0
             check(layer_job._tick() is not None and not layer_job.running(),
                   "a refresh due with no context waits, with the timer kept")
-            check(node.auto_refresh and node.pairs[0].derived_error == "" and stamp(node) == was,
-                  f"and leaves the layer alone, Auto Refresh on: {node.pairs[0].derived_error!r}")
+            check(node.auto_refresh and node.derived_error == "" and stamp(node) == was,
+                  f"and leaves the layer alone, Auto Refresh on: {node.derived_error!r}")
 
             layer_job.context_active = real_active
             layer_job._tick()
@@ -219,8 +218,8 @@ if available():
         finally:
             layer_job.context_active = real_active
             layer_job.BUDGET = budget
-        check(pump() and stamp(node) != was and node.pairs[0].derived_error == "",
-              f"and it finishes once the context is back: {node.pairs[0].derived_error!r}")
+        check(pump() and stamp(node) != was and node.derived_error == "",
+              f"and it finishes once the context is back: {node.derived_error!r}")
         core.flush_now()
 
         section("cancelled part way")
@@ -228,7 +227,7 @@ if available():
         # after the first one. The commit is the last unit, which is what
         # makes stopping before it safe.
         budget, layer_job.BUDGET = layer_job.BUDGET, 0.0
-        was = (stamp(node), tuple(node.pairs[0].derived_image.pixels[:4]))
+        was = (stamp(node), tuple(node.derived_image.pixels[:4]))
         undo_pixels.write_pixels(picture.image, [0.9, 0.9, 0.1, 1.0] * 64)
         core.flush_now()
         layer_job._deadline = 0.0
@@ -237,7 +236,7 @@ if available():
               "one tick leaves a job in flight on this layer")
         layer_job.cancel_all()
         check(not layer_job.running(), "cancel_all stops it")
-        check((stamp(node), tuple(node.pairs[0].derived_image.pixels[:4])) == was,
+        check((stamp(node), tuple(node.derived_image.pixels[:4])) == was,
               "and the layer keeps the pixels and the stamp it already had")
         check(not bpy.app.timers.is_registered(layer_job._tick),
               "with no timer left behind")
@@ -273,11 +272,11 @@ if available():
         core.flush_now()
         layer_job._tick()
         check(not layer_job.running(), "a second stroke landing part way drops it")
-        check(layer_job._builds.get(pair_key(node, 0)) is None,
+        check(layer_job._builds.get(node.uuid) is None,
               "without counting it as a build that did not settle")
         check(pump(), "the refresh that follows runs to the end")
         core.flush_now()
-        check(node.pairs[0].stale_reason == "", f"and leaves the layer up to date: {node.pairs[0].stale_reason!r}")
+        check(node.stale_reason == "", f"and leaves the layer up to date: {node.stale_reason!r}")
         check(as_built_now(), "with the pixels of the second stroke")
 
         node.invert_alpha = True
@@ -287,8 +286,8 @@ if available():
         core.flush_now()
         layer_job._tick()
         check(not layer_job.running(), "turning it back part way drops it")
-        check(pump() and node.pairs[0].stale_reason == "",
-              f"and the layer is up to date again: {node.pairs[0].stale_reason!r}")
+        check(pump() and node.stale_reason == "",
+              f"and the layer is up to date again: {node.stale_reason!r}")
         check(as_built_now(), "with the setting it ended on")
 
         # A compile while a job runs pokes it to check what moved. That
@@ -312,12 +311,12 @@ if available():
               f"one poke is one look at what moved ({len(looks)} in {ticks} ticks)")
         node.invert_alpha = False
         core.flush_now()
-        check(pump() and node.pairs[0].stale_reason == "",
-              f"and the layer settles afterwards: {node.pairs[0].stale_reason!r}")
+        check(pump() and node.stale_reason == "",
+              f"and the layer settles afterwards: {node.stale_reason!r}")
 
         # Past the restart limit the build is let finish, which is where
         # the stamp has to be what was read rather than what is there.
-        layer_job._restarts[pair_key(node, 0)] = layer_job.RESTART_LIMIT
+        layer_job._restarts[node.uuid] = layer_job.RESTART_LIMIT
         undo_pixels.write_pixels(picture.image, [0.7, 0.7, 0.2, 1.0] * 64)
         core.flush_now()
         check(begin(), "a build past the restart limit starts")
@@ -326,14 +325,14 @@ if available():
         core.flush_now()
         while layer_job.running():
             layer_job._tick()
-        check(node.pairs[0].derived_stale_pixels,
+        check(node.derived_stale_pixels,
               "is let finish, and the stroke it missed still marks the layer")
-        check(node.pairs[0].stale_reason == "the filter settings changed",
-              f"while its stamp names the setting it read: {node.pairs[0].stale_reason!r}")
-        check(layer_job._builds.get(pair_key(node, 0)) is None,
+        check(node.stale_reason == "the filter settings changed",
+              f"while its stamp names the setting it read: {node.stale_reason!r}")
+        check(layer_job._builds.get(node.uuid) is None,
               "and it is not counted as a build that did not settle")
-        check(pump() and node.pairs[0].stale_reason == "" and not node.pairs[0].derived_stale_pixels,
-              f"the refresh after it catches up: {node.pairs[0].stale_reason!r}")
+        check(pump() and node.stale_reason == "" and not node.derived_stale_pixels,
+              f"the refresh after it catches up: {node.stale_reason!r}")
         check(as_built_now(), "with the stroke and the setting it missed")
 
         # The Update path: the same steps driven by hand, with no job to
@@ -345,8 +344,8 @@ if available():
         for _ in run:
             pass
         core.flush_now()
-        check(node.pairs[0].derived_stale_pixels and node.pairs[0].stale_reason == "the filter settings changed",
-              f"an Update overtaken part way leaves the layer out of date: {node.pairs[0].stale_reason!r}")
+        check(node.derived_stale_pixels and node.stale_reason == "the filter settings changed",
+              f"an Update overtaken part way leaves the layer out of date: {node.stale_reason!r}")
         # The settings are read with the stamp, not when the filter gets
         # to them a unit later: the pixels are those of the setting the
         # stamp names, which a build at that setting reproduces exactly.
@@ -374,10 +373,10 @@ if available():
             while layer_job.running():
                 layer_job._tick()
         check(started == rounds, f"every nudge started a refresh: {started} of {rounds}")
-        check(node.auto_refresh and node.pairs[0].derived_error == "",
+        check(node.auto_refresh and node.derived_error == "",
               f"being overtaken {rounds} times in a row is not a refresh that "
-              f"did not settle: {node.pairs[0].derived_error!r}")
-        check(pump() and node.pairs[0].stale_reason == "", "and the last refresh catches up")
+              f"did not settle: {node.derived_error!r}")
+        check(pump() and node.stale_reason == "", "and the last refresh catches up")
         check(as_built_now(), "with the stack it ended on")
         picture.opacity = 1.0
         core.flush_now()
@@ -397,23 +396,23 @@ if available():
         check(pump(), "the pass finishes rather than retrying")
         check(stamp(node) == was, "nothing was built")
         check(node.auto_refresh, "Auto Refresh stays on, for when the stack changes")
-        check("Cycles bake" in node.pairs[0].derived_error,
-              f"and the panel says why: {node.pairs[0].derived_error!r}")
+        check("Cycles bake" in node.derived_error,
+              f"and the panel says why: {node.derived_error!r}")
 
         node.auto_refresh = False
-        check(node.pairs[0].derived_error == "", "switching Auto Refresh off clears the message")
+        check(node.derived_error == "", "switching Auto Refresh off clears the message")
         node.auto_refresh = True
         core.flush_now()
-        check(pump() and "Cycles bake" in node.pairs[0].derived_error,
-              f"and switching it back on asks again: {node.pairs[0].derived_error!r}")
+        check(pump() and "Cycles bake" in node.derived_error,
+              f"and switching it back on asks again: {node.derived_error!r}")
 
         tree.links.remove(picture.inputs['Color'].links[0])
         tree.nodes.remove(group)
         core.flush_now()
         check(pump(), "taking the group away lets the job run")
         core.flush_now()
-        check(not node.needs_build and node.pairs[0].derived_error == "",
-              f"and clears the message: {node.pairs[0].derived_error!r}")
+        check(not node.needs_build and node.derived_error == "",
+              f"and clears the message: {node.derived_error!r}")
 
         section("a refusal about the scene")
         # A UV map the mesh does not have is about the mesh, not the
@@ -424,13 +423,13 @@ if available():
         node.uv_map = "Auto Map"
         core.flush_now()
         check(pump() and stamp(node) == was and node.auto_refresh
-              and "no UV map named 'Auto Map'" in node.pairs[0].derived_error,
-              f"a UV map the mesh lacks waits and says why: {node.pairs[0].derived_error!r}")
+              and "no UV map named 'Auto Map'" in node.derived_error,
+              f"a UV map the mesh lacks waits and says why: {node.derived_error!r}")
 
         node.uv_map = ""
         core.flush_now()
-        check(not node.needs_build and node.pairs[0].derived_error == "",
-              f"putting it back clears the message with no build: {node.pairs[0].derived_error!r}")
+        check(not node.needs_build and node.derived_error == "",
+              f"putting it back clears the message with no build: {node.derived_error!r}")
         check(pump() and stamp(node) == was, "and nothing is rebuilt")
 
         node.uv_map = "Auto Map"
@@ -444,8 +443,8 @@ if available():
                   "renaming the mesh's UV map to match asks again")
             check(pump(), "the refresh runs to the end")
             core.flush_now()
-            check(not node.needs_build and node.pairs[0].derived_error == "",
-                  f"and the layer is built: {node.pairs[0].stale_reason!r}, {node.pairs[0].derived_error!r}")
+            check(not node.needs_build and node.derived_error == "",
+                  f"and the layer is built: {node.stale_reason!r}, {node.derived_error!r}")
             check(node.surface_name == cube.name, "and the build stored the mesh it needed")
         finally:
             uv_maps["Auto Map"].name = "UVMap"
@@ -465,16 +464,16 @@ if available():
             core.flush_now()
             check(pump(), "the refresh runs with the camera active")
             core.flush_now()
-            check(not node.needs_build and node.pairs[0].derived_error == "",
-                  f"and builds against the layer's Object: {node.pairs[0].derived_error!r}")
+            check(not node.needs_build and node.derived_error == "",
+                  f"and builds against the layer's Object: {node.derived_error!r}")
 
             node.surface_name = ""
             core.flush_now()
-            check(node.pairs[0].stale_reason == "the object or its render UV map changed",
+            check(node.stale_reason == "the object or its render UV map changed",
                   f"clearing the Object puts a build that needed it out of date: "
-                  f"{node.pairs[0].stale_reason!r}")
-            check(pump() and node.auto_refresh and "'Camera' is not a mesh" in node.pairs[0].derived_error,
-                  f"and with only the camera to go on, the layer waits: {node.pairs[0].derived_error!r}")
+                  f"{node.stale_reason!r}")
+            check(pump() and node.auto_refresh and "'Camera' is not a mesh" in node.derived_error,
+                  f"and with only the camera to go on, the layer waits: {node.derived_error!r}")
 
             # Filling the Object in is a write during the build. Its
             # compile pokes the job, which must find that nothing the
@@ -495,7 +494,7 @@ if available():
                 layer_job.BUDGET = budget
             core.flush_now()
             check(not restarts and not node.needs_build,
-                  f"without restarting itself: {restarts}, {node.pairs[0].stale_reason!r}")
+                  f"without restarting itself: {restarts}, {node.stale_reason!r}")
         finally:
             view_layer.objects.active = cube
         node.uv_map = ""
@@ -527,7 +526,7 @@ if available():
                   "a linked filter layer that was never built")
             core.mark_dirty(shared)
             core.flush_now()
-            check(pump() and not derived.is_built(shared_filter.pairs[0].derived_image),
+            check(pump() and not derived.is_built(shared_filter.derived_image),
                   "is not built by the job")
         finally:
             bpy.data.libraries.remove(library)
@@ -543,20 +542,20 @@ if available():
             alone.resolution = SIZE
         core.flush_now()
         check(pump(), "the pass finishes rather than retrying")
-        check(not derived.is_built(alone.pairs[0].derived_image), "nothing was built")
+        check(not derived.is_built(alone.derived_image), "nothing was built")
         check(alone.auto_refresh, "Auto Refresh stays on")
-        check("nothing below" in alone.pairs[0].derived_error,
-              f"and the panel says why: {alone.pairs[0].derived_error!r}")
+        check("nothing below" in alone.derived_error,
+              f"and the panel says why: {alone.derived_error!r}")
 
         with core.suspend_compile(lonely):
             lonely.insert_layer_node(SOLID)
-            check(lonely.move_layer_node(alone, 'UP', 'SKIP') == 'MOVED',
+            check(lonely.move_layer_node(alone, 'UP', 'SKIP'),
                   "moving the filter layer above a new layer")
         core.flush_now()
-        check(pump() and derived.is_built(alone.pairs[0].derived_image), "is enough for the job to build it")
+        check(pump() and derived.is_built(alone.derived_image), "is enough for the job to build it")
         core.flush_now()
-        check(not alone.needs_build and alone.pairs[0].derived_error == "",
-              f"and the message goes: {alone.pairs[0].derived_error!r}")
+        check(not alone.needs_build and alone.derived_error == "",
+              f"and the message goes: {alone.derived_error!r}")
 
         section("Clear Result")
         # The job builds any layer with no pixels, so Clear has to switch
@@ -566,7 +565,7 @@ if available():
         check(bpy.ops.paint_system.clear_filter_result('EXEC_DEFAULT') == {'FINISHED'},
               "Clear Result drops the image")
         core.flush_now()
-        check(pump() and not derived.is_built(alone.pairs[0].derived_image) and not alone.auto_refresh,
+        check(pump() and not derived.is_built(alone.derived_image) and not alone.auto_refresh,
               "and turns Auto Refresh off, so the job leaves it cleared")
         bpy.data.node_groups.remove(lonely)
         core.flush_now()
@@ -617,31 +616,6 @@ if available():
             bpy.data.node_groups.remove(doomed)
             core.flush_now()
             check(tick_out(), "and removing its tree drops that one")
-
-            # The build holds its pair by position, which a pair removed
-            # before it changes.
-            shifted = bpy.data.node_groups.new("Auto Shifted", 'PaintSystemNodeTree')
-            shifted.initialize()
-            with core.suspend_compile(shifted):
-                shifted.insert_layer_node(SOLID)
-                layer = shifted.insert_layer_node(FILTER)
-                layer.resolution = SIZE
-                # The stack moves onto a second pair, leaving the first in no stack.
-                below = layer.inputs[0].links[0]
-                shifted.links.new(below.from_socket, layer.add_pair())
-                shifted.links.new(layer.outputs[1], layer.outputs[0].links[0].to_socket)
-                shifted.links.remove(below)
-            core.flush_now()
-            layer_job._deadline = 0.0
-            layer_job._tick()
-            layer_job._tick()
-            check(layer_job.running_on(layer, 1), "a refresh of a layer's second pair is in flight")
-            layer.remove_pair(0)
-            core.flush_now()
-            check(tick_out(), "removing the pair before it drops it at the next tick")
-            check(pump() and derived.is_built(layer.pairs[0].derived_image),
-                  "and the pair is built at its new position")
-            bpy.data.node_groups.remove(shifted)
         finally:
             layer_job.BUDGET = budget
         core.flush_now()
@@ -656,17 +630,17 @@ if available():
         pump()
         core.flush_now()
         was = stamp(node)
-        check(layer_job._builds.get(pair_key(node, 0)) is None,
+        check(layer_job._builds.get(node.uuid) is None,
               "a build followed by a compile that saw it leaves no count behind")
 
-        layer_job._builds[pair_key(node, 0)] = layer_job.BUILD_LIMIT
+        layer_job._builds[node.uuid] = layer_job.BUILD_LIMIT
         undo_pixels.write_pixels(picture.image, [0.4, 0.4, 0.4, 1.0] * 64)
         core.flush_now()
         check(pump(), "the pass finishes")
         check(stamp(node) == was, "without building again")
         check(not node.auto_refresh, "the layer stops refreshing itself")
-        check("did not settle" in node.pairs[0].derived_error,
-              f"and says so: {node.pairs[0].derived_error!r}")
+        check("did not settle" in node.derived_error,
+              f"and says so: {node.derived_error!r}")
 
         section("Update after the job gave up")
         # The message says to press Update, so an Update that works turns
@@ -675,8 +649,8 @@ if available():
         tree.nodes.active = node
         check(bpy.ops.paint_system.rebuild_filter_layer('EXEC_DEFAULT') == {'FINISHED'},
               "Update builds the layer")
-        check(node.auto_refresh and node.pairs[0].derived_error == "",
-              f"and turns Auto Refresh back on: {node.auto_refresh}, {node.pairs[0].derived_error!r}")
+        check(node.auto_refresh and node.derived_error == "",
+              f"and turns Auto Refresh back on: {node.auto_refresh}, {node.derived_error!r}")
 
         # A user who switched Auto Refresh off keeps it off.
         node.auto_refresh = False
@@ -708,28 +682,28 @@ if available():
         for _ in run:
             pass
         core.flush_now()
-        check(node.pairs[0].stale_reason == "", f"and the Update brings it up to date: {node.pairs[0].stale_reason!r}")
+        check(node.stale_reason == "", f"and the Update brings it up to date: {node.stale_reason!r}")
         check(pump(), "with nothing left for the job to do")
 
         section("a stroke undone before the refresh")
         # Nothing can tell that the pixels below went back without reading
         # them, so the refresh still runs. It finds the pixels the layer
         # already has, and leaves the image alone.
-        image = node.pairs[0].derived_image
+        image = node.derived_image
         was = stamp(node)
         image.pixels[0]
         check(image.has_data, "the result is decoded to begin with")
         undo_pixels.write_pixels(picture.image, [0.1, 0.1, 0.1, 1.0] * 64)
         undo_pixels.write_pixels(picture.image, [0.6, 0.6, 0.1, 1.0] * 64)
         core.flush_now()
-        check(node.pairs[0].stale_reason == "the pixels below changed",
-              f"a stroke and its reverse leave the layer marked: {node.pairs[0].stale_reason!r}")
+        check(node.stale_reason == "the pixels below changed",
+              f"a stroke and its reverse leave the layer marked: {node.stale_reason!r}")
         check(pump(), "the refresh runs to the end")
         core.flush_now()
-        check(node.pairs[0].stale_reason == "" and stamp(node) == was,
-              f"and finds the pixels it already had: {node.pairs[0].stale_reason!r}")
+        check(node.stale_reason == "" and stamp(node) == was,
+              f"and finds the pixels it already had: {node.stale_reason!r}")
         check(image.has_data, "without packing them again, which would free the decoded copy")
-        check(layer_job._builds.get(pair_key(node, 0)) is None,
+        check(layer_job._builds.get(node.uuid) is None,
               "and the compile after it still counts the layer as settled")
 
         section("undo after an automatic refresh")
@@ -744,7 +718,7 @@ if available():
             return tree, tree.nodes[names[1]], tree.nodes[names[2]]
 
         def result(node):
-            return stamp(node), tuple(node.pairs[0].derived_image.pixels[:4])
+            return stamp(node), tuple(node.derived_image.pixels[:4])
 
         before = result(node)
         bpy.ops.ed.undo_push(message="before the stroke")
@@ -765,8 +739,8 @@ if available():
                   f"after {label} the stamp and the pixels agree: {result(node)[0][:8]}")
             check(pump(), f"the refresh after {label} runs to the end")
             core.flush_now()
-            check(result(node) == want and node.pairs[0].stale_reason == "",
-                  f"and matches the stack below again: {node.pairs[0].stale_reason!r}")
+            check(result(node) == want and node.stale_reason == "",
+                  f"and matches the stack below again: {node.stale_reason!r}")
 
         section("saved and reopened")
         folder = tempfile.mkdtemp(prefix="ps_filter_auto_")
@@ -800,8 +774,8 @@ if available():
 
         was = stamp(node)
         tree, node, picture = reopen("fresh.blend")
-        check(node.pairs[0].stale_reason == "", f"a layer saved up to date reopens up to date: "
-                                       f"{node.pairs[0].stale_reason!r}")
+        check(node.stale_reason == "", f"a layer saved up to date reopens up to date: "
+                                       f"{node.stale_reason!r}")
         if context_lost():
             redraw()
             check(gpu_core.context_active(), "drawing the window binds the GPU context again")
@@ -820,18 +794,18 @@ if available():
         core.flush_now()
         layer_job.cancel_all()
         tree, node, picture = reopen("stale.blend")
-        check(node.pairs[0].stale_reason == "the pixels below changed",
-              f"a layer saved out of date reopens out of date: {node.pairs[0].stale_reason!r}")
+        check(node.stale_reason == "the pixels below changed",
+              f"a layer saved out of date reopens out of date: {node.stale_reason!r}")
         if context_lost():
             layer_job._deadline = 0.0
             check(layer_job._tick() is not None and not layer_job.running(),
                   "until a window draws, the job waits for a GPU context")
-            check(node.auto_refresh and node.pairs[0].derived_error == "",
-                  f"and keeps Auto Refresh on: {node.pairs[0].derived_error!r}")
+            check(node.auto_refresh and node.derived_error == "",
+                  f"and keeps Auto Refresh on: {node.derived_error!r}")
             redraw()
             check(gpu_core.context_active(), "drawing the window binds the GPU context again")
-        check(pump() and stamp(node) != was and node.pairs[0].stale_reason == "",
-              f"and the job brings it up to date: {node.pairs[0].stale_reason!r}")
+        check(pump() and stamp(node) != was and node.stale_reason == "",
+              f"and the job brings it up to date: {node.stale_reason!r}")
 
     except Exception:
         traceback.print_exc()

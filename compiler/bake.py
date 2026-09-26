@@ -1,21 +1,19 @@
-"""Bake a layer's output into its cache image.
+"""Bake a node's output into its cache image.
 
-A layer caches each of its pairs separately, since each pair's output
-depends on its own stack below. In the compiled tree, a cached pair and
-everything upstream of it are replaced by that pair's image. The rest of
-the tree stays live.
+In the compiled tree, a cached node and everything upstream of it are
+replaced by this image. The rest of the tree stays live.
 
 The compiler builds a temporary shader group whose Color and Alpha outputs
-are the two halves of the target pair's live output, ignoring the pair's
-own cache. A throwaway material sends that through an Emission shader.
-Cycles bakes it twice, once for colour and once for alpha, through the UV
-map the cache is read with, and numpy merges the two images.
+are the two halves of the target node's live Color output, ignoring the
+node's own cache. A throwaway
+material sends that through an Emission shader. Cycles bakes it twice,
+once for colour and once for alpha, and numpy merges the two images.
 
 Entry points:
 
 - ``bake_subtree`` runs the bake and writes into any image it is given.
 - ``bake_node_cache`` adds the cache bookkeeping. On success it sets the
-  pair's ``cache_hash`` to the subtree hash, so the next compile uses
+  node's ``cache_hash`` to the subtree hash, so the next compile uses
   the image in place of the live nodes.
 """
 from __future__ import annotations
@@ -25,8 +23,7 @@ import contextlib
 import bpy
 import numpy as np
 
-from ..gpu_passes.texel_map import resolve_uv_map
-from ..nodetree.stack_ops import Position, channel_of
+from ..nodetree.stack_ops import channel_of
 from ..props.channel import image_colorspace
 from .core import build_ir, mark_dirty
 
@@ -47,13 +44,13 @@ def create_managed_image(name: str, width: int, height: int, *,
     return image
 
 
-def build_bake_tree(tree, node, pair: int = 0) -> tuple[bpy.types.NodeTree, str]:
-    """Compile the live subtree of *node*'s *pair* into the shared bake group.
+def build_bake_tree(tree, node) -> tuple[bpy.types.NodeTree, str]:
+    """Compile *node*'s live subtree into the shared bake group.
 
     Returns the group and the subtree hash.
     """
-    ir = build_ir(tree, bake_target=Position(node, pair))
-    subtree_hash = ir.ctx.subtree_hash(node, pair)
+    ir = build_ir(tree, bake_target=node)
+    subtree_hash = ir.ctx.subtree_hash(node)
     bake_tree = bpy.data.node_groups.get(BAKE_TREE_NAME)
     if bake_tree is None or bake_tree.bl_idname != 'ShaderNodeTree':
         bake_tree = bpy.data.node_groups.new(BAKE_TREE_NAME, 'ShaderNodeTree')
@@ -156,24 +153,6 @@ def _borrowed_selection(view_layer, obj):
         view_layer.objects.active = previous_active
 
 
-@contextlib.contextmanager
-def _active_uv_map(mesh, name: str):
-    """Make the UV map *name* of *mesh* the active one, then restore the user's.
-
-    ``bpy.ops.object.bake`` writes through the active UV map, whatever
-    the target Image Texture's Vector input reads. Its ``uv_layer``
-    option would pick another map, but that string holds 63 bytes, fewer
-    than a UV map name can have.
-    """
-    uv_layers = mesh.uv_layers
-    previous = uv_layers.active_index
-    try:
-        uv_layers.active_index = uv_layers.find(name)
-        yield
-    finally:
-        uv_layers.active_index = previous
-
-
 def _merge_alpha(color_image, alpha_image) -> None:
     """Copy the red channel of *alpha_image* into the alpha of *color_image*.
 
@@ -190,28 +169,26 @@ def _merge_alpha(color_image, alpha_image) -> None:
     color_image.update()
 
 
-def check_bake_object(obj, uv_map: str = "") -> None:
-    """Raise if *obj* cannot be baked onto through *uv_map* ('' is the active render UV map)."""
+def check_bake_object(obj) -> None:
+    """Raise if *obj* cannot be baked onto."""
     if obj is None or obj.type != 'MESH':
         raise RuntimeError("Bake needs an active mesh object")
     if len(obj.data.uv_layers) == 0:
         raise RuntimeError(f"'{obj.name}' has no UV map")
-    if resolve_uv_map(obj, uv_map) is None:
-        raise RuntimeError(f"'{obj.name}' has no UV map named '{uv_map}'")
 
 
-def bake_subtree(context, tree, node, obj, image, *, pair: int = 0, margin: int = 8,
+def bake_subtree(context, tree, node, obj, image, *, margin: int = 8,
                  uv_map: str = "") -> str:
-    """Bake the live subtree of *node*'s *pair* on *obj* into *image*, and return its hash.
+    """Bake *node*'s live subtree on *obj* into *image*, and return its hash.
 
     *image* is written in place and not packed. The caller decides whether
     the result is saved inside the .blend file. The render settings, the
-    object's material slots, its active UV map and the selection are all
-    restored before this returns.
+    object's material slots and the selection are all restored before this
+    returns.
     """
-    check_bake_object(obj, uv_map)
+    check_bake_object(obj)
 
-    bake_tree, subtree_hash = build_bake_tree(tree, node, pair)
+    bake_tree, subtree_hash = build_bake_tree(tree, node)
     alpha_image = create_managed_image(BAKE_ALPHA_IMAGE_NAME, image.size[0], image.size[1],
                                        alpha=False, colorspace='Non-Color')
 
@@ -225,14 +202,15 @@ def bake_subtree(context, tree, node, obj, image, *, pair: int = 0, margin: int 
     output = nt.nodes.new('ShaderNodeOutputMaterial')
     nt.links.new(emission.outputs['Emission'], output.inputs['Surface'])
     target = nt.nodes.new('ShaderNodeTexImage')
+    if uv_map:
+        uv_node = nt.nodes.new('ShaderNodeUVMap')
+        uv_node.uv_map = uv_map
+        nt.links.new(uv_node.outputs['UV'], target.inputs['Vector'])
     nt.nodes.active = target
 
     try:
-        # The cache is read through *uv_map*, or the active render UV map
-        # for '', so the bake writes through that same map.
         with _temporary_material(context, obj, mat), _bake_settings(context.scene) as bake, \
-                _borrowed_selection(context.view_layer, obj), \
-                _active_uv_map(obj.data, resolve_uv_map(obj, uv_map)):
+                _borrowed_selection(context.view_layer, obj):
             bake.margin = margin
             with context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
                 # Pass 1: colour
@@ -252,45 +230,38 @@ def bake_subtree(context, tree, node, obj, image, *, pair: int = 0, margin: int 
     return subtree_hash
 
 
-def bake_node_cache(context, tree, node, obj, *, pair: int = 0, width: int = 2048,
-                    height: int = 2048, margin: int = 8, uv_map: str = "") -> bpy.types.Image:
+def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int = 2048,
+                    margin: int = 8, uv_map: str = "") -> bpy.types.Image:
     # Check before creating the image, so an object that cannot be baked
     # does not leave an unused image datablock behind.
-    check_bake_object(obj, uv_map)
+    check_bake_object(obj)
 
-    channel = channel_of(tree, node, pair)
+    channel = channel_of(tree, node)
     # A vector channel's values can be negative, which a byte image would
     # clamp to 0, and encoded normals keep more precision in float. They
     # are data, so they are stored as they are, whatever colour space the
     # channel's layers paint in.
     float_buffer = channel is not None and channel.type == 'VECTOR'
     colorspace = 'Non-Color' if float_buffer else image_colorspace(channel)
-    state = node.pairs[pair]
-    old = image = state.cache_image
+    old = image = node.cache_image
     if image is None or image.is_float != float_buffer:
         image = create_managed_image(f"{tree.name} {node.name} Cache", width, height,
                                      float_buffer=float_buffer, colorspace=colorspace)
     elif tuple(image.size) != (width, height):
         image.scale(width, height)
 
-    subtree_hash = bake_subtree(context, tree, node, obj, image, pair=pair,
+    subtree_hash = bake_subtree(context, tree, node, obj, image,
                                 margin=margin, uv_map=uv_map)
     image.pack()
 
-    state.cache_image = image
+    node.cache_image = image
     if old is not None and old != image and old.get(PS_IMAGE_KEY) and old.users == 0:
         # The cache from before the channel changed type, which nothing
         # else uses.
         bpy.data.images.remove(old)
-    state.cache_hash = subtree_hash
-    if node.cache_uv_map != uv_map:
-        # Every pair's cache is read with this one UV map. The other
-        # pairs were baked with the old one, so they must bake again
-        # before the compiler uses them.
+    node.cache_hash = subtree_hash
+    if uv_map:
         node.cache_uv_map = uv_map
-        for other, other_state in enumerate(node.pairs):
-            if other != pair:
-                other_state.cache_hash = ""
-    state.cache_stale = False
+    node.cache_stale = False
     mark_dirty(tree)
     return image

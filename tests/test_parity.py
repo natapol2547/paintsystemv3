@@ -308,7 +308,7 @@ try:
         options = stack_ops.movement_options(tree.stack(), node, direction)
         if action is not None:
             options = [option for option in options if option.action == action]
-        moved = bool(options) and tree.move_layer_node(node, direction, options[0].action) == 'MOVED'
+        moved = bool(options) and tree.move_layer_node(node, direction, options[0].action)
         check(moved, f"{node.name} moves {direction.lower()}"
                      f"{'' if action is None else ' (' + action + ')'}")
 

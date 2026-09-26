@@ -121,8 +121,7 @@ try:
 
     plan = expect_composite(FakeContext(), tree, node, "solid colours with no object selected")
     if plan is not None:
-        check(plan.source == (bottom, 0),
-              "the plan names the position feeding the filter's Color input")
+        check(plan.source == bottom, "the plan names the node feeding the filter's Color input")
         check(plan.uv_map == "" and plan.surface is None,
               "and leaves the UV map to the active render one, with no mesh")
 

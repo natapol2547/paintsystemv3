@@ -131,10 +131,9 @@ def cleanup_orphan_derived() -> int:
     the node editor, a channel removed while its layers still exist, and
     a file written by a crash or by an older version of the addon.
     """
-    live = {state.derived_image.session_uid
+    live = {node.derived_image.session_uid
             for tree in ps_trees() for node in tree.nodes
-            if getattr(node, 'ps_type', "") == 'FILTER'
-            for state in node.pairs if state.derived_image is not None}
+            if getattr(node, 'ps_type', "") == 'FILTER' and node.derived_image is not None}
     removed = 0
     for image in list(bpy.data.images):
         if image.get(OWNER_KEY) is None or image.session_uid in live:

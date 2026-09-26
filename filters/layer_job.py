@@ -30,14 +30,10 @@ result. It must never make Blender feel broken, so it has these limits.
   seconds on it. The viewport shows the previous pixels for the whole
   job. The commit is one atomic write, so no half-built state is ever
   visible.
-- **One pair at a time.** Each pair of a filter layer has its own result,
-  so each is its own job, and the counts below are kept per pair
-  (`nodetree.stack_ops.pair_key`). Auto Refresh is the node's, so giving
-  up on one pair switches it off for all of them.
-- **Bounded.** A pair that is out of date again right after its own
+- **Bounded.** A layer that is out of date again right after its own
   build stops refreshing itself and says why, instead of rebuilding
   forever. `settled` is the signal that a cycle ended properly: a
-  compile found the pair up to date.
+  compile found the layer up to date.
 - **Restarted when its input changes.** A setting dragged or a stroke
   finished during a build means the build is filtering old input.
   Finishing would still be correct, because `filters.layer_build` stamps
@@ -51,8 +47,8 @@ result. It must never make Blender feel broken, so it has these limits.
 Undo, redo and a file read call `cancel_all`. A job holds the tree and
 the node it started with, and those references do not survive a restore
 (PS-090), so no job may survive one either. For the same reason, a job
-whose pair, layer or tree was removed is dropped by the next tick before
-it runs another unit (`_drop`). A pixel write the timer made
+whose layer or tree was removed is dropped by the next tick before it
+runs another unit (`_drop`). A pixel write the timer made
 after an undo step was pushed is lost on Ctrl+Z together with its stamp.
 The layer is then out of date and schedules another refresh, so this
 heals itself. Keep it that way.
@@ -66,7 +62,6 @@ import bpy
 
 from ..compiler.core import ps_trees
 from ..gpu_passes.core import context_active, gpu_known
-from ..nodetree.stack_ops import Position, pair_key
 from . import freshness, layer_build, layer_plan
 from .core import Refused
 
@@ -78,11 +73,11 @@ DEBOUNCE = 0.4
 # Seconds of build work per tick. Shorter than the modal operator's
 # slice, because the modal shows a progress bar and this does not.
 BUDGET = 0.02
-# Most builds of one pair with no compile finding it up to date in
+# Most builds of one layer with no compile finding it up to date in
 # between. Normal editing always produces such a compile, so reaching
 # this means the build cannot satisfy the check that asked for it.
 BUILD_LIMIT = 3
-# Most builds of one pair dropped in a row because their input changed.
+# Most builds of one layer dropped in a row because their input changed.
 # The next one runs to the end whatever happens meanwhile.
 RESTART_LIMIT = 2
 
@@ -90,39 +85,31 @@ _deadline = 0.0
 _job = None
 # Whether `notify` has been called since the running job last checked.
 _poked = False
-# Pair key to auto builds started since a compile last found that pair
+# Node uuid to auto builds started since a compile last found that layer
 # up to date.
 _builds: dict[str, int] = {}
-# Pair key to builds of it dropped in a row, see RESTART_LIMIT.
+# Node uuid to builds of it dropped in a row, see RESTART_LIMIT.
 _restarts: dict[str, int] = {}
-# Whether a pair was refused and is waiting for a change that lets it
-# build. Only a pass that looked at every pair may lower it.
+# Whether a layer was refused and is waiting for a change that lets it
+# build. Only a pass that looked at every layer may lower it.
 _waiting = False
 
 
 class _Job:
-    """A build in flight, which pair it is for, and what it read.
+    """A build in flight, which layer it is for, and what it read."""
 
-    The pair is held by its output's identifier, which stays with it
-    when a pair before it is removed. Its position does not, and the
-    build holds the position it started with.
-    """
-
-    def __init__(self, tree, node, pair, plan):
+    def __init__(self, tree, node, plan):
         self.tree_name = tree.name
         self.node_name = node.name
         self.uuid = node.uuid
-        self.output = node.outputs[pair].identifier
-        self.pair = pair
-        self.key = pair_key(node, pair)
         # Taken in the same tick as the build's own `inputs_of` call,
         # which runs in the first unit `_run` drives, so the two agree.
-        self.read = layer_build.inputs_of(tree, node, pair, plan)
-        self.steps = layer_build.steps(bpy.context, tree, node, pair, plan=plan)
+        self.read = layer_build.inputs_of(tree, node, plan)
+        self.steps = layer_build.steps(bpy.context, tree, node, plan=plan)
 
     def painted_over(self) -> bool:
-        """Whether a stroke has landed below the pair since the build started."""
-        return freshness.changes(self.key) != self.read[1]
+        """Whether a stroke has landed below the layer since the build started."""
+        return freshness.changes(self.uuid) != self.read[1]
 
     def moved(self) -> bool:
         """Whether anything the build read has changed since it started.
@@ -130,16 +117,15 @@ class _Job:
         Costs about a millisecond: one resolve and one IR build, with no
         pixels read.
         """
-        position = _position_of(self)
-        if position is None:
+        node = _node_of(self)
+        if node is None:
             return True
-        node, pair = position
         tree = node.id_data
         try:
-            plan = layer_plan.resolve_input(bpy.context, tree, node, pair)
+            plan = layer_plan.resolve_input(bpy.context, tree, node)
         except Refused:
             return True
-        return layer_build.inputs_of(tree, node, pair, plan) != self.read
+        return layer_build.inputs_of(tree, node, plan) != self.read
 
     def close(self):
         # Raises GeneratorExit at the build's current yield, which frees
@@ -171,37 +157,23 @@ def notify() -> None:
         log.debug("could not schedule a filter refresh", exc_info=True)
 
 
-def settled(node, pair: int) -> None:
-    """Called when a compile finds *node*'s *pair* up to date. Resets its build count.
+def settled(node) -> None:
+    """Called when a compile finds *node* up to date. Resets its build count.
 
-    This is also how a running job learns that its pair went back to
+    This is also how a running job learns that its layer went back to
     what the job read, for example a setting nudged and then returned.
     Then nothing is out of date, so no `notify` call would tell the job.
 
-    A refusal message on a pair with Auto Refresh on is cleared here.
-    The pair no longer needs a build, so the reason it could not have
+    A refusal message on a layer with Auto Refresh on is cleared here.
+    The layer no longer needs a build, so the reason it could not have
     one no longer matters.
     """
     global _poked
-    _builds.pop(pair_key(node, pair), None)
+    _builds.pop(node.uuid, None)
     if node.auto_refresh:
-        _set_error(node.pairs[pair], "")
-    if running_on(node, pair):
+        _set_error(node, "")
+    if running_on(node):
         _poked = True
-
-
-def forget(node, pair: int) -> None:
-    """Drop the job and the counts of *node*'s *pair*, which is about to be removed.
-
-    Blender can give the next new pair the removed pair's output
-    identifier, and with it the same key. The new pair must not inherit
-    the old one's counts or its build.
-    """
-    key = pair_key(node, pair)
-    if _job is not None and _job.key == key:
-        _drop(_job)
-    _builds.pop(key, None)
-    _restarts.pop(key, None)
 
 
 def scene_changed() -> None:
@@ -222,10 +194,9 @@ def running() -> bool:
     return _job is not None
 
 
-def running_on(node, pair: int = 0) -> bool:
-    """True while a job is building *node*'s *pair*, for the panel and its Cancel button."""
-    return (_job is not None and _job.uuid == node.uuid
-            and _job.output == node.outputs[pair].identifier)
+def running_on(node) -> bool:
+    """True while a job is building *node*, for the panel and its Cancel button."""
+    return _job is not None and _job.uuid == node.uuid
 
 
 def cancel_all() -> None:
@@ -260,7 +231,7 @@ def _tick():
         # Nothing here touches the GPU in the meantime, not even closing
         # a job.
         return DEBOUNCE
-    if _job is not None and _moved_away(_job):
+    if _job is not None and _node_of(_job) is None:
         _drop(_job)
     if _job is not None and _overtaken(_job):
         _restart(_job)
@@ -286,7 +257,7 @@ def _overtaken(job) -> bool:
     """
     global _poked
     poked, _poked = _poked, False
-    if _restarts.get(job.key, 0) >= RESTART_LIMIT:
+    if _restarts.get(job.uuid, 0) >= RESTART_LIMIT:
         return False
     if job.painted_over():
         return True
@@ -312,53 +283,44 @@ def _restart(job) -> None:
     _deadline = max(_deadline, time.monotonic() + DEBOUNCE)
     job.close()
     _uncount(job)
-    _restarts[job.key] = _restarts.get(job.key, 0) + 1
+    _restarts[job.uuid] = _restarts.get(job.uuid, 0) + 1
     log.debug("restarting the refresh of %s: what it read has moved", job.node_name)
 
 
-def _moved_away(job) -> bool:
-    """Whether *job*'s pair, layer or tree is gone, or its pair has a new position."""
-    position = _position_of(job)
-    return position is None or position.pair != job.pair
-
-
 def _drop(job) -> None:
-    """Drop *job*, because its pair, its layer or its tree is gone, or its pair has moved.
+    """Drop *job*, because its layer or its tree is gone.
 
-    The build holds the node, the tree and the pair position it started
-    with. After the node or the tree is removed, the next unit, and above
-    all the commit, would write through a pointer to freed memory and
-    crash Blender. After its pair, or a pair before it, is removed, the
-    commit would write into another pair's state or past the last one.
-    Closing the build is safe, because that only frees its textures. A
-    renamed layer looks gone too. It still needs a build, and the pass
-    that follows finds it under its new name, as it finds a moved pair
-    at its new position.
+    The build holds the node and the tree it started with. After either
+    is removed, the next unit, and above all the commit, would write
+    through a pointer to freed memory and crash Blender. Closing the
+    build is safe, because that only frees its textures. A renamed layer
+    looks gone too. It still needs a build, and the pass that follows
+    finds it under its new name.
     """
     global _job
     _job = None
     job.close()
-    _builds.pop(job.key, None)
-    _restarts.pop(job.key, None)
-    log.debug("dropped the refresh of %s: its pair is gone or has moved", job.node_name)
+    _builds.pop(job.uuid, None)
+    _restarts.pop(job.uuid, None)
+    log.debug("dropped the refresh of %s: the layer is gone", job.node_name)
 
 
 def _uncount(job) -> None:
     """Undo *job*'s count in `_builds`.
 
-    The job was overtaken, which does not mean its pair failed to settle.
+    The job was overtaken, which does not mean its layer failed to settle.
     """
-    count = _builds.get(job.key, 0) - 1
+    count = _builds.get(job.uuid, 0) - 1
     if count > 0:
-        _builds[job.key] = count
+        _builds[job.uuid] = count
     else:
-        _builds.pop(job.key, None)
+        _builds.pop(job.uuid, None)
 
 
 def _start():
-    """The next pair to refresh, as a job, or None when there is none.
+    """The next layer to refresh, as a job, or None when there is none.
 
-    Resolving allocates nothing, so a pair that cannot be refreshed says
+    Resolving allocates nothing, so a layer that cannot be refreshed says
     so here and the pass moves on to the next one. It keeps Auto Refresh
     on and waits. A change to its tree compiles it, which asks again. A
     change in the scene reaches `scene_changed` instead. Resolving is
@@ -371,41 +333,37 @@ def _start():
         # worst place to find that out.
         return None
     waiting = False
-    for tree, node, pair in _candidates():
-        state = node.pairs[pair]
+    for tree, node in _candidates():
         try:
-            plan = layer_plan.resolve_input(bpy.context, tree, node, pair)
+            plan = layer_plan.resolve_input(bpy.context, tree, node)
         except Refused as refusal:
-            _set_error(state, str(refusal))
+            _set_error(node, str(refusal))
             waiting = True
             continue
         if not plan.is_composite:
-            _set_error(state, f"Update needed: filtering this needs a Cycles bake, "
-                              f"because {plan.reason}")
+            _set_error(node, f"Update needed: filtering this needs a Cycles bake, "
+                             f"because {plan.reason}")
             waiting = True
             continue
-        key = pair_key(node, pair)
-        if _builds.get(key, 0) >= BUILD_LIMIT:
-            _give_up(Position(node, pair),
-                     "Refreshing this layer did not settle; press Update to try again")
+        if _builds.get(node.uuid, 0) >= BUILD_LIMIT:
+            _give_up(node, "Refreshing this layer did not settle; press Update to try again")
             continue
-        _set_error(state, "")
+        _set_error(node, "")
         # Count at the start, not the end. The commit marks the tree, so
         # the compile that clears this count runs inside the build's own
         # last unit.
-        _builds[key] = _builds.get(key, 0) + 1
-        log.debug("refreshing %s (%s): %s", node.name, node.outputs[pair].name,
-                  state.stale_reason or "not built yet")
-        # This pass stops here, before it has seen every pair, so it can
+        _builds[node.uuid] = _builds.get(node.uuid, 0) + 1
+        log.debug("refreshing %s: %s", node.name, node.stale_reason or "not built yet")
+        # This pass stops here, before it has seen every layer, so it can
         # only raise the flag. The pass after this build lowers it.
         _waiting = _waiting or waiting
-        return _Job(tree, node, pair, plan)
+        return _Job(tree, node, plan)
     _waiting = waiting
     return None
 
 
 def _candidates():
-    """Filter pairs that are new or out of date, the bottom of each stack first.
+    """Filter layers that are new or out of date, the bottom of each stack first.
 
     Bottom first, because a filter layer below an out-of-date one must be
     rebuilt first. Otherwise the upper layer filters pixels that are
@@ -436,13 +394,12 @@ def _candidates():
             continue
         for channel in tree.channels:
             for item in reversed(tree.stack(channel.name)):
-                node, pair = item.node, item.pair
+                node = item.node
                 if getattr(node, 'ps_type', "") != 'FILTER':
                     continue
                 if (node.enabled and node.auto_refresh and not node.lock_layer
-                        and node.pairs[pair].needs_build
-                        and not freshness.building(pair_key(node, pair))):
-                    yield tree, node, pair
+                        and node.needs_build and not freshness.building(node.uuid)):
+                    yield tree, node
 
 
 def _run(job):
@@ -456,10 +413,10 @@ def _run(job):
             next(job.steps)
         except StopIteration as done:
             _job = None
-            _restarts.pop(job.key, None)
+            _restarts.pop(job.uuid, None)
             # If its input changed, the build either was allowed to
             # finish past RESTART_LIMIT or was overtaken in its last unit.
-            # It committed what it read, so the pair being out of date
+            # It committed what it read, so the layer being out of date
             # says nothing about whether it can settle.
             if job.moved():
                 _uncount(job)
@@ -467,55 +424,43 @@ def _run(job):
             return DEBOUNCE
         except Refused as refusal:
             _job = None
-            _restarts.pop(job.key, None)
-            _give_up(_position_of(job), str(refusal))
+            _restarts.pop(job.uuid, None)
+            _give_up(_node_of(job), str(refusal))
             return DEBOUNCE
         except Exception:
             # For example a driver that fails mid-build. Log and stop
             # instead of retrying, because the same build would fail the
-            # same way. The pair still shows its previous pixels.
+            # same way. The layer still shows its previous pixels.
             _job = None
-            _restarts.pop(job.key, None)
+            _restarts.pop(job.uuid, None)
             job.close()
             log.exception("could not refresh filter layer '%s'", job.node_name)
-            _give_up(_position_of(job), "Refreshing this layer failed; see the system console")
+            _give_up(_node_of(job), "Refreshing this layer failed; see the system console")
             return DEBOUNCE
         if time.perf_counter() >= deadline:
             return 0.0
 
 
-def _position_of(job) -> Position | None:
-    """*job*'s layer and pair looked up again, or None when either is gone (PS-090)."""
+def _node_of(job):
+    """*job*'s node looked up again, or None when it is gone (PS-090)."""
     tree = bpy.data.node_groups.get(job.tree_name)
     if tree is None:
         return None
     node = tree.nodes.get(job.node_name)
-    if node is None or getattr(node, 'uuid', "") != job.uuid:
-        return None
-    for pair, output in enumerate(node.outputs):
-        if output.identifier == job.output:
-            return Position(node, pair) if pair < len(node.pairs) else None
-    return None
+    return node if node is not None and getattr(node, 'uuid', "") == job.uuid else None
 
 
-def _give_up(position: Position | None, message: str) -> None:
-    """Stop refreshing the layer at *position* and say why, in the panel rather than a popup.
-
-    Auto Refresh is the node's, so it goes off for every pair. The
-    message goes on the pair that could not be refreshed.
-    """
-    if position is None:
+def _give_up(node, message: str) -> None:
+    """Stop refreshing *node* and say why, in the panel rather than a popup."""
+    if node is None:
         return
-    node, pair = position
-    # First, because switching Auto Refresh off clears every pair's message.
     node.auto_refresh = False
-    _set_error(node.pairs[pair], message)
+    _set_error(node, message)
     log.debug("auto refresh off for %s: %s", node.name, message)
 
 
-def _set_error(state, message: str) -> None:
-    """Show *message* on the pair *state*, or clear it with ""."""
+def _set_error(node, message: str) -> None:
     # Writing an RNA property tags the tree and the materials using it,
     # so only write when the value actually changes.
-    if state.derived_error != message:
-        state.derived_error = message
+    if node.derived_error != message:
+        node.derived_error = message

@@ -1,8 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Builds the derived image of one pair of a filter layer (PS-057).
-
-Each pair filters its own stack below, so each has its own result. The
-settings that choose the filter are the node's, shared by every pair.
+"""Builds a filter layer's derived image (PS-057).
 
 `steps` is the build, as a generator of short units:
 
@@ -13,7 +10,7 @@ settings that choose the filter are the node's, shared by every pair.
    where it has one. Then the result is encoded to sRGB.
 4. The result is read back as bytes, one band of rows at a time. Each
    band goes straight into a PNG (`filters.png`).
-5. `commit` packs that PNG into the pair's image and stamps it.
+5. `commit` packs that PNG into the layer's image and stamps it.
 
 The build is a generator because only the last unit writes anything,
 apart from the layer's Object, which the first unit fills in. So a build
@@ -50,7 +47,6 @@ from ..compiler.bake import create_managed_image
 from ..compiler.core import build_ir, mark_dirty
 from ..compiler.ir import hash_payload
 from ..gpu_passes.core import BAND_ROWS, read_color_bytes
-from ..nodetree.stack_ops import pair_key
 from . import composite, derived, freshness, layer_plan
 from .core import FilterSpec, Refused, new_texture, run_pass
 from .layer_specs import layer_filter_kind
@@ -65,13 +61,13 @@ log = logging.getLogger(__name__)
 READ_ROWS = BAND_ROWS
 
 
-def build_layer(context, tree, node, pair: int = 0) -> bpy.types.Image:
-    """Build the derived image of *node*'s *pair*, running `steps` to the end.
+def build_layer(context, tree, node) -> bpy.types.Image:
+    """Build *node*'s derived image, running `steps` to the end.
 
     For scripts and tests. An operator drives `steps` itself, so it can
     show progress and be cancelled.
     """
-    run = steps(context, tree, node, pair)
+    run = steps(context, tree, node)
     while True:
         try:
             next(run)
@@ -79,11 +75,11 @@ def build_layer(context, tree, node, pair: int = 0) -> bpy.types.Image:
             return done.value
 
 
-def steps(context, tree, node, pair: int = 0, *, plan=None):
+def steps(context, tree, node, *, plan=None):
     """The build as short units, yielding ``(label, fraction)`` after each.
 
     *plan* is a `filters.layer_plan.InputPlan` already resolved for this
-    pair, or None to resolve one here. Raises `filters.core.Refused` with
+    layer, or None to resolve one here. Raises `filters.core.Refused` with
     the message for the UI. Returns the built image.
 
     Nothing outside the layer changes until the last unit. A caller that
@@ -101,7 +97,7 @@ def steps(context, tree, node, pair: int = 0, *, plan=None):
     so the readback holds only that target.
     """
     if plan is None:
-        plan = layer_plan.resolve_input(context, tree, node, pair)
+        plan = layer_plan.resolve_input(context, tree, node)
     if not plan.is_composite:
         raise Refused(f"Filtering the layers below '{node.name}' needs a Cycles bake, "
                       f"because {plan.reason}")
@@ -121,9 +117,9 @@ def steps(context, tree, node, pair: int = 0, *, plan=None):
     # the build never saw. The node's settings are also read here, so the
     # stamp and the pixels agree on them. `plan` already holds the stack
     # below as values.
-    read = inputs_of(tree, node, pair, plan)
+    read = inputs_of(tree, node, plan)
     settings = kind.settings_of(node) if kind.build is not None else kind.passes_of(node)
-    with freshness.reading(pair_key(node, pair)):
+    with freshness.reading(node.uuid):
         yield f"{kind.label}: compositing the layers below", 0.0
 
         # Where filtering ends on the progress bar. A list of passes is
@@ -164,18 +160,18 @@ def steps(context, tree, node, pair: int = 0, *, plan=None):
             pool.close()
 
         yield f"{kind.label}: writing the result", 0.9
-        return commit(tree, node, pair, plan, png.finish(), digest.hexdigest(), size, read)
+        return commit(tree, node, plan, png.finish(), digest.hexdigest(), size, read)
 
 
-def inputs_of(tree, node, pair: int, plan) -> tuple[str, int]:
-    """What a build of *node*'s *pair* started now would read, to compare later.
+def inputs_of(tree, node, plan) -> tuple[str, int]:
+    """What a build of *node* started now would read, to compare later.
 
     Returns the structural fingerprint and the number of strokes noticed
-    below the pair so far (`filters.freshness.changes`). Two results
+    below the layer so far (`filters.freshness.changes`). Two results
     differ exactly when something the build depends on changed between
     them.
     """
-    return _fingerprint(tree, node, pair, plan), freshness.changes(pair_key(node, pair))
+    return _fingerprint(tree, node, plan), freshness.changes(node.uuid)
 
 
 def _filtered(kind, passes, current, pool, start, end):
@@ -244,8 +240,8 @@ def _encoded(texture, size):
     return run_pass(ENCODE_SRGB, texture, new_texture(size, 'RGBA8'), params={})
 
 
-def commit(tree, node, pair, plan, data, digest, size, read):
-    """Pack *data*, the result as a PNG, into the derived image of *node*'s *pair* and stamp it.
+def commit(tree, node, plan, data, digest, size, read):
+    """Pack *data*, the result as a PNG, into *node*'s derived image and stamp it.
 
     *digest* is a digest of the pixel bytes in the PNG. *read* is what
     `inputs_of` returned when the build started. The stamp uses *read*,
@@ -270,26 +266,25 @@ def commit(tree, node, pair, plan, data, digest, size, read):
         derived.UV_MAP_KEY: plan.uv_map,
         derived.BUILD_KEY: hash_payload([fingerprint, digest]),
     }
-    state = node.pairs[pair]
-    image = state.derived_image
+    image = node.derived_image
     unchanged = _holds(image, stamps)
     if not unchanged:
         image = _pack(tree, node, image, data)
         for key, value in stamps.items():
             image[key] = value
         derived.note_packed(image)
-        state.derived_image = image
+        node.derived_image = image
     # Clear the flag only when no stroke below has landed since the build
     # read the pixels. Earlier strokes are then in the result. It is
     # cleared after the write, not before, so a build abandoned partway
-    # leaves the pair still asking for a build.
-    if freshness.changes(pair_key(node, pair)) == changes:
-        state.derived_stale_pixels = False
+    # leaves the layer still asking for a build.
+    if freshness.changes(node.uuid) == changes:
+        node.derived_stale_pixels = False
     if not unchanged:
         # This image may be a source for a filter layer above, and the
         # depsgraph does not report this write.
         freshness.note_image_changed([image.session_uid])
-    # The datablock is reused, so the pair's pointer does not change and
+    # The datablock is reused, so the node's pointer does not change and
     # its update callback does not fire. Without this, the new stamps
     # would not trigger a recompile. An unchanged build compiles too,
     # because the compile is what tells the auto job the layer settled.
@@ -336,7 +331,7 @@ def _pack(tree, node, image, data) -> bpy.types.Image:
     return image
 
 
-def _fingerprint(tree, node, pair, plan) -> str:
+def _fingerprint(tree, node, plan) -> str:
     """What the build was asked for: the structural half of freshness.
 
     It records the build's inputs, not its result, so a later compile can
@@ -345,4 +340,4 @@ def _fingerprint(tree, node, pair, plan) -> str:
     `commit` asks for afterwards makes the same context and compares.
     """
     ctx = build_ir(tree).ctx
-    return freshness.stamp(freshness.fingerprint_parts(ctx, node, pair, plan.source, plan.surface))
+    return freshness.stamp(freshness.fingerprint_parts(ctx, node, plan.source, plan.surface))

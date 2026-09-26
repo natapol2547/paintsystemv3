@@ -1,13 +1,13 @@
 from math import pi, tau
 
 import bpy
-from bpy.types import Node, PropertyGroup
-from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProperty, IntProperty,
+from bpy.types import Node
+from bpy.props import (BoolProperty, EnumProperty, FloatProperty, IntProperty,
                        PointerProperty, StringProperty)
 from bpy.utils import register_classes_factory
 
-from .base_layer_node import (EMPTY_SOURCE, RESOLUTION_ITEMS, PairCache, PaintSystemLayerNode,
-                              draw_uv_map, emit_image_texture, emit_mix_group, update_painting)
+from .base_layer_node import (EMPTY_SOURCE, RESOLUTION_ITEMS, PaintSystemLayerNode, draw_uv_map,
+                              emit_image_texture, emit_mix_group, update_painting)
 from ..base_node import mark_tree_dirty
 from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
@@ -17,20 +17,19 @@ from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items, layer_filt
 from ...filters.painter.brushes import brush_items
 from ...filters.registry import BLUR_MAX_EFFECTIVE_SIGMA
 from ...filters import layer_job, layer_plan
-from ...nodetree.stack_ops import below_input, feeding_link, link_source, pair_role
+from ...nodetree.stack_ops import below_input, feeding_link
 
 
 def _auto_refresh_changed(self, context):
-    """Clear the job's messages, and ask for a refresh when Auto Refresh is turned on.
+    """Clear the job's message, and ask for a refresh when Auto Refresh is turned on.
 
     Turning it on is how a layer that the refresh job gave up on is
-    retried. Turning it off clears the messages too, so a message on a
+    retried. Turning it off clears the message too, so a message on a
     layer with Auto Refresh off always means the job switched it off.
     `ops.filter_layer_ops._resume_auto_refresh` relies on that.
     """
-    for state in self.pairs:
-        if state.derived_error:
-            state.derived_error = ""
+    if self.derived_error:
+        self.derived_error = ""
     if self.auto_refresh and self.enabled:
         layer_job.notify()
 
@@ -71,95 +70,24 @@ def _surface_search(self, context, edit_text):
 
 
 def _stale_pixels_changed(self, context):
-    """Ask for a refresh when painting below the pair makes it stale.
+    """Ask for a refresh when painting below the layer makes it stale.
 
     No compile runs for a stroke. ``filters.freshness`` sets this flag
     from the depsgraph and from the addon's own pixel writes. Neither
     marks the tree, so this write is the only notice the auto refresh
     gets.
     """
-    if not self.derived_stale_pixels:
-        return
-    node = self.node
-    if node.auto_refresh and node.enabled:
+    if self.derived_stale_pixels and self.auto_refresh and self.enabled:
         layer_job.notify()
-
-
-class PaintSystemFilterPair(PairCache, PropertyGroup):
-    """The filter result one pair of a filter layer builds for its stack.
-
-    Each stack the layer sits in is filtered on its own, so each pair has
-    its own image and its own freshness. The filter settings belong to the
-    layer and are shared.
-    """
-    # The filter's result. Stamps on the image describe its pixels, so the
-    # pair only needs to keep this pointer.
-    derived_image: PointerProperty(
-        type=bpy.types.Image, name="Result", update=mark_tree_dirty)
-    # Written only by ``emit_source``, on every compile. It has no update
-    # callback. It is the compiler's own result, and tagging the tree from
-    # inside a compile would schedule another compile.
-    derived_stale_reason: StringProperty(
-        name="Out Of Date", description="Why this layer's image no longer matches what is below it")
-    # Written outside the compile, by ``filters.freshness``. Every compile
-    # recomputes the reason above, but nothing recomputes this flag after
-    # a file loads. So its saved value matters. A file saved out of date
-    # must reopen out of date, not look fresh over stale pixels.
-    derived_stale_pixels: BoolProperty(
-        name="Pixels Changed", update=_stale_pixels_changed,
-        description="Painting below this layer has changed what it should show")
-    # Why the last automatic refresh stopped. It is shown until the next
-    # refresh is asked for. A timer has no other place to report a
-    # refusal, because a popup from a background job would interrupt the
-    # user.
-    derived_error: StringProperty(
-        name="Refresh Problem", description="Why this layer last failed to refresh itself")
-
-    @property
-    def node(self):
-        """The filter layer this state belongs to.
-
-        Found by searching the tree. ``path_from_id`` cannot make a path to
-        a property group stored on a node, so it cannot be resolved back.
-        Only the update callback of a rare write asks for it.
-        """
-        return next(node for node in self.id_data.nodes
-                    if any(state == self for state in getattr(node, 'pairs', ())))
-
-    @property
-    def stale_reason(self) -> str:
-        """Why the built image no longer matches, or "" when it does.
-
-        A structural change is checked first, because it names the more
-        specific cause. "The pixels below changed" is what is left when
-        nothing structural has changed. An unbuilt pair is never out of
-        date.
-        """
-        if not is_built(self.derived_image):
-            return ""
-        if self.derived_stale_reason:
-            return self.derived_stale_reason
-        return PIXEL_REASON if self.derived_stale_pixels else ""
-
-    @property
-    def needs_build(self) -> bool:
-        """Whether the pair is out of date or has never been built.
-
-        Auto Refresh builds both. A new filter layer is not out of date,
-        because it shows nothing it could be wrong about, but it still has
-        no pixels until something builds it.
-        """
-        return not is_built(self.derived_image) or bool(self.stale_reason)
 
 
 class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     """A filter over the layers below, kept as a layer instead of applied.
 
-    Each pair of the layer owns a derived image that holds the filtered
-    result of its stack (``PaintSystemFilterPair``). It is not a cache of
-    the stack below. The compiler puts it *in place of* that stack through
-    the Filter Mix group. So the layer's Opacity fades between the two
-    without rebuilding anything.
+    The layer owns a derived image that holds the filtered result. It is
+    not a cache of the stack below. The compiler puts it *in place of*
+    that stack through the Filter Mix group. So the layer's Opacity fades
+    between the two without rebuilding anything.
 
     Design: docs/tickets/PS-057-filter-layer.md.
     """
@@ -180,15 +108,13 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # so a blend mode would mean nothing.
     ps_shows_blend_mode = False
     ps_opacity_label = "Amount"
-    # Each pair shows the result built from its own stack.
-    ps_source_per_pair = True
 
-    # The compiler's fingerprints leave out the filter settings and the
-    # build settings. Neither changes the compiled artifact until a build
-    # runs, and a build shows up through ``hash_parts`` instead. Without
-    # this, dragging a blur slider would invalidate every node cache and
-    # channel bake above the layer before any pixel changed. The build
-    # results live in ``pairs``, which no fingerprint reads.
+    # The compiler's fingerprints leave out the filter settings, the build
+    # settings and the build results. None of them changes the compiled
+    # artifact until a build runs, and a build shows up through
+    # ``hash_parts`` instead. Without this, dragging a blur slider would
+    # invalidate every node cache and channel bake above the layer before
+    # any pixel changed.
     ps_unhashed_props = (
         'filter_type', 'invert_alpha', 'blur_sigma', 'sharpen_radius', 'sharpen_strength',
         'painter_brush', 'painter_largest_stroke', 'painter_smallest_stroke', 'painter_passes',
@@ -197,6 +123,7 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         'painter_random_rotation', 'painter_hue', 'painter_saturation', 'painter_value',
         'painter_seed',
         'resolution', 'uv_map', 'auto_refresh',
+        'derived_image', 'derived_stale_reason', 'derived_stale_pixels', 'derived_error',
         # Which mesh answers changes no compiled node, and hashing its
         # name would invalidate every cache above the layer on a rename.
         # When the mesh matters, `filters.freshness` records what matters
@@ -334,17 +261,37 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         name="Lock Layer", default=False, update=_lock_changed,
         description="Prevent changes to this layer's settings")
 
-    pairs: CollectionProperty(type=PaintSystemFilterPair)
+    # The filter's result. Stamps on the image describe its pixels, so the
+    # node only needs to keep this pointer.
+    derived_image: PointerProperty(
+        type=bpy.types.Image, name="Result", update=mark_tree_dirty)
+    # Written only by ``emit_source``, on every compile. It has no update
+    # callback. It is the compiler's own result, and tagging the tree from
+    # inside a compile would schedule another compile.
+    derived_stale_reason: StringProperty(
+        name="Out Of Date", description="Why this layer's image no longer matches what is below it")
+    # Written outside the compile, by ``filters.freshness``. Every compile
+    # recomputes the reason above, but nothing recomputes this flag after
+    # a file loads. So its saved value matters. A file saved out of date
+    # must reopen out of date, not look fresh over stale pixels.
+    derived_stale_pixels: BoolProperty(
+        name="Pixels Changed", update=_stale_pixels_changed,
+        description="Painting below this layer has changed what it should show")
+    # Why the last automatic refresh stopped. It is shown until the next
+    # refresh is asked for. A timer has no other place to report a
+    # refusal, because a popup from a background job would interrupt the
+    # user.
+    derived_error: StringProperty(
+        name="Refresh Problem", description="Why this layer last failed to refresh itself")
 
     def copy(self, node):
         super().copy(node)
-        # A derived image counts as this layer's content, not as an
-        # artifact to rebuild like a cache. So the copy gets its own images
-        # instead of sharing the original's pixels. They are packed, so the
-        # copy has the pixels and renders straight away.
-        for state in self.pairs:
-            if state.derived_image is not None:
-                state.derived_image = state.derived_image.copy()
+        # The derived image counts as this layer's content, not as an
+        # artifact to rebuild like a cache. So the copy gets its own image
+        # instead of sharing the original's pixels. The image is packed, so
+        # the copy has the pixels and renders straight away.
+        if self.derived_image is not None:
+            self.derived_image = self.derived_image.copy()
         # The copy shares the Object on purpose. A copy in the same tree
         # is shown on the same meshes. A copy pasted into another tree is
         # checked like any Object, and passed over if it does not fit.
@@ -359,20 +306,35 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             node.surface_name = ps_object.name
         return node
 
-    def remove_pair(self, pair):
-        # Before the sockets go, while the pair still has its key.
-        layer_job.forget(self, pair)
-        super().remove_pair(pair)
-
     @property
     def surface_object(self):
         """The object ``surface_name`` names, or None."""
         return bpy.data.objects.get(self.surface_name) if self.surface_name else None
 
     @property
+    def stale_reason(self) -> str:
+        """Why the built image no longer matches, or "" when it does.
+
+        A structural change is checked first, because it names the more
+        specific cause. "The pixels below changed" is what is left when
+        nothing structural has changed. An unbuilt layer is never out of
+        date.
+        """
+        if not is_built(self.derived_image):
+            return ""
+        if self.derived_stale_reason:
+            return self.derived_stale_reason
+        return PIXEL_REASON if self.derived_stale_pixels else ""
+
+    @property
     def needs_build(self) -> bool:
-        """Whether any pair is out of date or has never been built."""
-        return any(state.needs_build for state in self.pairs)
+        """Whether the layer is out of date or has never been built.
+
+        Auto Refresh builds both. A new filter layer is not out of date,
+        because it shows nothing it could be wrong about, but it still has
+        no pixels until something builds it.
+        """
+        return not is_built(self.derived_image) or bool(self.stale_reason)
 
     # -- ui ---------------------------------------------------------------------
 
@@ -381,16 +343,16 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         spec = LAYER_FILTERS.get(self.filter_type)
         return spec.label if spec is not None else self.bl_label
 
-    def draw_row_state(self, layout, pair):
+    def draw_row_state(self, layout):
         """Show a refreshing or out-of-date badge on the layer row.
 
         Out of date is the one layer state the viewport cannot show. Every
         other layer renders what it is. This one renders what it was built
         from. So the list row is the only place the difference can appear.
         """
-        if layer_job.running_on(self, pair):
+        if layer_job.running_on(self):
             layout.label(text="", **icon_kwargs('FILE_REFRESH'))
-        elif self.pairs[pair].stale_reason:
+        elif self.stale_reason:
             layout.label(text="", **icon_kwargs('ERROR'))
 
     def draw_source_settings(self, context, layout):
@@ -412,17 +374,13 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     def draw_result_settings(self, context, layout):
         """Draw the derived image as a label and two buttons.
 
-        That is the image of the pair in the active channel's stack, which
-        the buttons act on too. There is no ``template_ID``. The slot holds
-        only what this layer built. A picker would let the user drop
-        artwork in, with nothing to show it is read-only. The next Update
-        would then overwrite it.
+        There is no ``template_ID``. The slot holds only what this layer
+        built. A picker would let the user drop artwork in, with nothing to
+        show it is read-only. The next Update would then overwrite it.
         """
-        pair = self.id_data.pair_in_stack(self)
-        state = self.pairs[pair]
-        image = state.derived_image
-        stale = state.stale_reason
-        running = layer_job.running_on(self, pair)
+        image = self.derived_image
+        stale = self.stale_reason
+        running = layer_job.running_on(self)
         box = layout.box()
         row = box.row(align=True)
         if running:
@@ -443,9 +401,9 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             clear.enabled = image is not None
             clear.operator("paint_system.clear_filter_result", text="", **icon_kwargs('X'))
         box.prop(self, "auto_refresh")
-        if state.derived_error:
-            box.label(text=state.derived_error, **icon_kwargs('ERROR'))
-        elif state.needs_build and self.auto_refresh and not (self.enabled and not self.lock_layer):
+        if self.derived_error:
+            box.label(text=self.derived_error, **icon_kwargs('ERROR'))
+        elif self.needs_build and self.auto_refresh and not (self.enabled and not self.lock_layer):
             # Without this, the layer sits out of date with Auto Refresh on
             # and nothing happening. That looks broken, but it is a
             # deliberate saving. Check both conditions, because
@@ -461,77 +419,73 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
 
     # -- compiler -----------------------------------------------------------------
 
-    def amount(self, pair: int) -> float:
-        """Opacity, but 0 until *pair* has pixels.
+    @property
+    def amount(self) -> float:
+        """Opacity, but 0 until the filter has pixels.
 
         So an unbuilt filter layer passes the stack through unchanged in
         every arrangement, including as a clip base. Adding one changes
         nothing on screen until it is built. Losing its image gives back
         the original, not a black band.
         """
-        if not self.enabled or not is_built(self.pairs[pair].derived_image):
+        if not self.enabled or not is_built(self.derived_image):
             return 0.0
         return self.opacity
 
-    def hash_parts(self, ctx, pair=0):
+    def hash_parts(self, ctx):
         # The derived image hashes by name, like any other datablock. Add
         # the build stamp of its pixels, so a cache above this layer sees
         # a rebuild.
-        return [build_stamp(self.pairs[pair].derived_image)]
+        return [build_stamp(self.derived_image)]
 
-    def emit_source(self, ctx, pair):
-        state = self.pairs[pair]
-        image = state.derived_image
-        self._note_stale(ctx, pair, state)
+    def emit_source(self, ctx):
+        image = self.derived_image
+        self._note_stale(ctx, image)
         if not is_built(image):
             return EMPTY_SOURCE
         # Use the UV map stamped on the image, not the authored one.
         # Changing the setting moves nothing until the rebuild runs.
-        return emit_image_texture(ctx, self, pair_role('result', self, pair), image,
-                                  stamped_uv_map(image))
+        return emit_image_texture(ctx, self, 'result', image, stamped_uv_map(image))
 
-    def _note_stale(self, ctx, pair, state):
-        """Compare the stack below *pair* with what its image was built from.
+    def _note_stale(self, ctx, image):
+        """Compare the stack below with what the image was built from.
 
         The compile is the one moment that has both a context to hash
         against and a reason to look. So the answer is worked out here and
-        stored in the pair's *state* for the panel to read.
+        stored on the node for the panel to read.
         """
-        image = state.derived_image
         if not is_built(image):
             reason = ""
         else:
-            link = feeding_link(below_input(self, pair))
+            link = feeding_link(below_input(self))
             stored = str(image.get(FINGERPRINT_KEY, ""))
             # A build that needed a mesh took it from the Object, which it
             # filled in. A build that did not is compared without one.
             surface = self.surface_object if built_on_surface(stored) else None
-            parts = fingerprint_parts(ctx, self, pair, link_source(link) if link else None,
-                                      surface)
+            parts = fingerprint_parts(ctx, self, link.from_node if link else None, surface)
             reason = structure_reason(stored, parts)
         # Writing an RNA property tags the tree and the materials that
         # use it for an update, so only write when the value changes.
-        if state.derived_stale_reason != reason:
-            state.derived_stale_reason = reason
+        if self.derived_stale_reason != reason:
+            self.derived_stale_reason = reason
         # The compile is also where the auto refresh learns there is work.
         # Every way a filter layer goes out of date ends up here, whether
         # structural or painted. That includes work it already had, and a
         # new layer that has never been built. Switching the layer back on
         # marks the tree, so this runs and asks for the refresh that was
         # held back while the layer was off.
-        if state.needs_build:
+        if self.needs_build:
             if self.auto_refresh and self.enabled:
                 layer_job.notify()
         else:
-            layer_job.settled(self, pair)
+            layer_job.settled(self)
 
-    def emit_blend(self, ctx, pair, color, alpha, *, clip=False):
-        return emit_mix_group(ctx, self, pair, 'fmix', filter_mix_group(), 'Amount',
-                              self.amount(pair), color, alpha, clip=clip)
+    def emit_blend(self, ctx, color, alpha, *, clip=False):
+        return emit_mix_group(ctx, self, 'fmix', filter_mix_group(), 'Amount', self.amount,
+                              color, alpha, clip=clip)
 
 
 classes = (
-    PaintSystemFilterPair,
     PaintSystemFilterLayerNode,
 )
 

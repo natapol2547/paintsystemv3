@@ -4,10 +4,9 @@ from bpy.types import Menu, Panel, UIList
 from bpy.utils import register_classes_factory
 
 from ..common import icon_kwargs
-from ..context import button_layer, get_active_tree, node_editor_tree, parse_context
+from ..context import get_active_tree, node_editor_tree, parse_context
 from ..nodes.layers.registry import layer_types
-from ..nodetree.stack_ops import is_layer, output_channel, pair_count
-from ..props.channel import SOCKET_ICONS
+from ..nodetree.stack_ops import is_layer
 
 
 @dataclass(frozen=True)
@@ -15,8 +14,6 @@ class LayerRow:
     """How the layer list shows one layer of the stack."""
     order: int
     level: int
-    # The pair the layer sits in this stack through.
-    pair: int
     # No folder around the layer is collapsed.
     visible: bool
     # Every folder around the layer is enabled.
@@ -24,15 +21,9 @@ class LayerRow:
 
 
 def layer_rows(tree) -> dict[str, LayerRow]:
-    """Rows of the active channel's stack by node name, top first.
-
-    A layer wired into the stack twice by hand gets the row of its first
-    place. The orders stay 0, 1, 2 and so on, as ``filter_items`` needs.
-    """
+    """Rows of the active channel's stack by node name, top first."""
     rows: dict[str, LayerRow] = {}
-    for item in tree.stack():
-        if item.node.name in rows:
-            continue
+    for order, item in enumerate(tree.stack()):
         visible = parent_enabled = True
         if item.parent is not None:
             folder = item.parent.node
@@ -40,7 +31,7 @@ def layer_rows(tree) -> dict[str, LayerRow]:
             visible = parent.visible and folder.is_expanded
             parent_enabled = parent.parent_enabled and folder.enabled
         rows[item.node.name] = LayerRow(
-            len(rows), item.level, item.pair, visible, parent_enabled)
+            order, item.level, visible, parent_enabled)
     return rows
 
 
@@ -99,29 +90,11 @@ class PAINTSYSTEM_UL_layers(UIList):
 
         row = main_row.row(align=True)
         row.alignment = 'RIGHT'
-        # Placeholder icon. The layer has pairs for other stacks, so
-        # changing its settings changes those stacks too.
-        if pair_count(item) > 1:
-            row.label(text="", **icon_kwargs('LINKED'))
-        item.draw_row_state(row, row_state.pair)
+        item.draw_row_state(row)
         if item.lock_layer:
             row.label(text="", **icon_kwargs('VIEW_LOCKED', 'LOCKED'))
         row.prop(item, "enabled", text="", emboss=False,
                  **icon_kwargs('HIDE_OFF' if item.enabled else 'HIDE_ON'))
-
-
-class PAINTSYSTEM_UL_pairs(UIList):
-    """The pairs of a layer, each with the channel its stack reaches (PS-098)."""
-    bl_idname = "PAINTSYSTEM_UL_pairs"
-
-    def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
-        row = layout.row()
-        row.label(text=item.name)
-        channel = output_channel(data.id_data, item)
-        if channel is None:
-            row.label(text="In no stack", **icon_kwargs('UNLINKED'))
-        else:
-            row.label(text=channel.name, **icon_kwargs(SOCKET_ICONS.get(channel.type, 'NONE')))
 
 
 class PAINTSYSTEM_MT_add_layer(Menu):
@@ -250,39 +223,11 @@ class PAINTSYSTEM_PT_layers_node_editor(LayersPanel, Panel):
         return tree is not None and tree.active_channel is not None
 
 
-class PAINTSYSTEM_PT_layer_pairs(Panel):
-    """The pairs of the active layer, one for each stack it can sit in.
-
-    Only in the node editor, where a new pair can be linked by hand.
-    """
-    bl_idname = "PAINTSYSTEM_PT_layer_pairs"
-    bl_label = "Pairs"
-    bl_space_type = 'NODE_EDITOR'
-    bl_region_type = 'UI'
-    bl_category = "Paint System"
-    bl_parent_id = PAINTSYSTEM_PT_layers_node_editor.bl_idname
-
-    @classmethod
-    def poll(cls, context):
-        return button_layer(context, node_editor_tree(context)) is not None
-
-    def draw(self, context):
-        node = button_layer(context, node_editor_tree(context))
-        row = self.layout.row()
-        row.template_list(PAINTSYSTEM_UL_pairs.bl_idname, "", node, "outputs", node, "active_pair_index",
-                          rows=2)
-        col = row.column(align=True)
-        col.operator("paint_system.add_pair", text="", **icon_kwargs('ADD'))
-        col.operator("paint_system.remove_pair", text="", **icon_kwargs('REMOVE'))
-
-
 classes = (
     PAINTSYSTEM_UL_layers,
-    PAINTSYSTEM_UL_pairs,
     PAINTSYSTEM_MT_add_layer,
     PAINTSYSTEM_PT_layers_3dview,
     PAINTSYSTEM_PT_layers_node_editor,
-    PAINTSYSTEM_PT_layer_pairs,
 )
 
 
