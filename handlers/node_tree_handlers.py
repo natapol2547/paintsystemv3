@@ -130,6 +130,30 @@ def on_restore_pre(*args):
     layer_job.cancel_all()
 
 
+def _forget_runtime_caches():
+    """Drop what the addon keeps in memory about the file open before a read.
+
+    Runs after a read, whether it worked or failed.
+    """
+    # Reading a file frees the undo stack and everything the addon pushed
+    # onto it.
+    pixels.forget_undo_state()
+    # Cached maps and surface keys belong to the objects of the previous
+    # file.
+    texel_map.invalidate()
+    surface.forget()
+    # Masks are keyed by content and would still be valid, but the new
+    # file is unlikely to need them. Free the memory.
+    selection_raster.invalidate()
+    # The overlay's batches and buffers belong to the old file's objects
+    # and regions.
+    selection_overlay.invalidate_all()
+    # The file brings its own selection and active layer. Sync everything
+    # derived from them, and retry masks that failed before.
+    selection_session.forget_failures()
+    selection_session.notify(force=True)
+
+
 @bpy.app.handlers.persistent
 def on_load_post(*args):
     unblock_compile()
@@ -139,27 +163,13 @@ def on_load_post(*args):
     # read is the one moment with no undo stack that a removal could
     # break.
     derived.cleanup_orphan_derived()
-    # Reading a file frees the undo stack and everything the addon pushed
-    # onto it.
-    pixels.forget_undo_state()
+    # The table of packed builds is keyed by session_uid, which the read
+    # renews for every image.
     derived.forget_packed()
-    # Cached maps and surface keys belong to the objects of the previous
-    # file.
-    texel_map.invalidate()
-    surface.forget()
-    # Masks are keyed by content and would still be valid, but the new
-    # file is unlikely to need them. Free the memory.
-    selection_raster.invalidate()
     # A file saved without `on_save_pre`, such as an autosave, can still
     # point the stencil at the previous session's mask file.
     selection_stencil.on_file_loaded()
-    # The overlay's batches and buffers belong to the old file's objects
-    # and regions.
-    selection_overlay.invalidate_all()
-    # The file brings its own selection and active layer. Sync everything
-    # derived from them, and retry masks that failed before.
-    selection_session.forget_failures()
-    selection_session.notify(force=True)
+    _forget_runtime_caches()
     # Runs before Blender records the file's initial undo step, so the
     # compile result is part of it.
     mark_dirty()
@@ -168,13 +178,7 @@ def on_load_post(*args):
 @bpy.app.handlers.persistent
 def on_load_post_fail(*args):
     unblock_compile()
-    pixels.forget_undo_state()
-    texel_map.invalidate()
-    surface.forget()
-    selection_raster.invalidate()
-    selection_overlay.invalidate_all()
-    selection_session.forget_failures()
-    selection_session.notify(force=True)
+    _forget_runtime_caches()
 
 
 @bpy.app.handlers.persistent

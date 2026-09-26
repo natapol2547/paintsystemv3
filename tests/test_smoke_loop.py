@@ -145,6 +145,21 @@ try:
     check_artifact("after reload")
     check_bake("after reload", BLUE, RED)
 
+    section("a read that fails")
+    # Blender runs load_pre, which blocks compiles, then load_post_fail,
+    # and keeps the open file.
+    try:
+        bpy.ops.wm.open_mainfile(filepath=os.path.join(os.path.dirname(path), "missing.blend"))
+    except RuntimeError:
+        pass
+    solid = next(item.node for item in active_tree().stack()
+                 if item.node.bl_idname == 'PaintSystemSolidColorLayerNode')
+    fingerprint = core.artifact_fingerprint(active_tree())
+    solid.opacity = 0.5
+    check(core.artifact_fingerprint(active_tree()) != fingerprint, "edits compile again after a read that failed")
+    solid.opacity = 1.0
+    del solid
+
     section("undo and redo add layer")
     bpy.context.view_layer.objects.active = cube()
     init_undo()
