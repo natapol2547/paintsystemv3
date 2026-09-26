@@ -55,11 +55,9 @@ def test_ops_are_ordered_and_replace_truncates():
           f"a replace leaves only itself {[op.kind for op in sel.ops]}")
     check(sel.ops[0].mode == 'REPLACE', "and it keeps its own mode")
 
-    for kind in ('INVERT', 'TRANSFORM'):
-        op = sel.add_op(kind, 'REPLACE')
-        check(len(sel.ops) == 2 and op.mode == 'ADD',
-              f"{kind} with REPLACE keeps what came before and is stored as ADD ({len(sel.ops)}, {op.mode})")
-        sel.ops.remove(1)
+    op = sel.add_op('INVERT', 'REPLACE')
+    check(len(sel.ops) == 2 and op.mode == 'ADD',
+          f"INVERT with REPLACE keeps what came before and is stored as ADD ({len(sel.ops)}, {op.mode})")
 
 
 def test_invert_toggles():
@@ -349,6 +347,27 @@ def test_pinned_digests():
         check(got == want, f"{name}: {got}")
 
 
+def test_stored_kind_numbers():
+    section("the number a file stores for each kind is pinned")
+    sel = fresh_selection()
+    op = sel.ops.add()
+    for number, kind in ((0, 'BOX'), (1, 'ELLIPSE'), (2, 'LASSO'), (6, 'INVERT'), (7, 'ALL')):
+        op['kind'] = number
+        check(op.kind == kind, f"{number} reads back as {kind} ({op.kind!r})")
+
+    # A file from a newer version can hold a kind this version lacks.
+    op['kind'] = 0
+    box = sel.prefix_digests(64, 64, 1001)
+    op['kind'] = 3
+    check(op.kind == "", f"a number no kind has reads back as no kind ({op.kind!r})")
+    try:
+        unknown = sel.prefix_digests(64, 64, 1001)
+    except Exception as error:
+        fail(f"prefix_digests raised {error!r} for an unknown kind")
+        return
+    check(unknown != box, "and it still digests, differently from a box with the same values")
+
+
 def test_order_matters_to_the_hash():
     section("two orderings of the same ops hash differently")
     sel = fresh_selection()
@@ -433,6 +452,7 @@ for test in (test_ops_are_ordered_and_replace_truncates,
              test_digests_are_exact,
              test_points_written_directly,
              test_pinned_digests,
+             test_stored_kind_numbers,
              test_order_matters_to_the_hash,
              test_undo_restores_the_ops,
              test_save_and_reload_keeps_the_ops):

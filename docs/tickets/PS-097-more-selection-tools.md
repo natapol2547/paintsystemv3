@@ -71,9 +71,11 @@ digest provider as `VIEW` ops.
 
 ### Rasterising `FACES` and `RASTER` ops
 
-`FACES` and `RASTER` ops still raise `UNSUPPORTED` (`TRANSFORM` ops
-belong to PS-094). PS-091's self-test does not reach their passes, so it
-cannot catch a driver that draws them wrongly.
+PS-091 removed the `FACES` and `RASTER` kinds because no tool created
+them (`TRANSFORM` belongs to PS-094). This ticket adds them back to
+`SELECTION_OP_KINDS` with their passes. Numbers 3 and 4 are free, and
+both kinds go in `REPLACING_KINDS`. PS-091's self-test does not reach
+their passes, so it cannot catch a driver that draws them wrongly.
 
 - `FACES` stores the object, the UV map name and the selected face
   indices, and draws the UV triangles of the evaluated mesh, like the
@@ -82,8 +84,13 @@ cannot catch a driver that draws them wrongly.
   after the write: a packed float image with alpha 0.5 came back
   premultiplied after an undo past its creation and a redo. They are
   uploaded through `foreach_get` into a `Buffer`-backed texture, never
-  `gpu.texture.from_image`, which segfaults a background 5.2. Their
-  `session_uid` survives undo and redo and is part of the digest.
+  `gpu.texture.from_image`, which segfaults a background 5.2. The op
+  points at its image, which is never modified, so undo only needs the
+  pointer. An unpacked generated image comes back black after an undo
+  past its creation and a redo (PS-096), hence the packing. The image's
+  `session_uid` survives undo and redo and is part of the digest, so an
+  image deleted and replaced by another of the same name gives a new
+  mask.
 
 ### Image editor clipping
 

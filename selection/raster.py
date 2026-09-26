@@ -75,7 +75,7 @@ from ..props.selection import FEATHER_MAX, OUTLINELESS_KINDS, POINTS_KEY, SPACEL
 from . import outline, view_raster
 from .raster_glsl import (LASSO_FRAGMENT_SOURCE, QUANTISE_FRAGMENT_SOURCE, QUANTISE_VERTEX_SOURCE,
                           SHAPE_FRAGMENT_SOURCE)
-from .reasons import MALFORMED_POINTS, TEXTS, UNSUPPORTED_KIND_MESSAGES
+from .reasons import MALFORMED_POINTS, TEXTS
 
 log = logging.getLogger(__name__)
 
@@ -92,8 +92,9 @@ MIN_RADIUS = 1e-3
 """Ellipse radius in texels below which the ellipse covers nothing."""
 
 SUPPORTED_KINDS = frozenset(('BOX', 'ELLIPSE', 'LASSO', 'ALL', 'INVERT'))
-"""Op kinds this module can rasterise. `FACES`, `RASTER` and `TRANSFORM`
-will be added with the tools that create them (PS-093, PS-094)."""
+"""Op kinds this module can rasterise. Any other op is refused as
+`UNSUPPORTED`. That includes one saved by a newer version with a kind
+this version does not know, whose kind reads back as ""."""
 
 _MODE_UNIFORMS = {'REPLACE': 0, 'ADD': 1, 'SUBTRACT': 2, 'INTERSECT': 3}
 _SHAPE_ALL, _SHAPE_BOX, _SHAPE_ELLIPSE, _SHAPE_INVERT, _SHAPE_NOTHING = range(5)
@@ -497,8 +498,7 @@ def render(specs, width: int, height: int, tile: int = 1001) -> np.ndarray:
         raise MaskUnavailable(problem, TEXTS[problem].message)
     for index, spec in enumerate(specs):
         if spec.kind not in SUPPORTED_KINDS:
-            message = UNSUPPORTED_KIND_MESSAGES.get(spec.kind, TEXTS['UNSUPPORTED'].message)
-            raise MaskUnavailable('UNSUPPORTED', message, index)
+            raise MaskUnavailable('UNSUPPORTED', TEXTS['UNSUPPORTED'].message, index)
     specs = list(specs)
     if not specs:
         return np.zeros((height, width), dtype=np.float32)
@@ -635,7 +635,7 @@ def _problem(selection, width: int, height: int, probe: bool = True,
     for index in range(selection.chain_start(), len(ops)):
         op = ops[index]
         if op.kind not in SUPPORTED_KINDS:
-            return 'UNSUPPORTED', UNSUPPORTED_KIND_MESSAGES[op.kind], index
+            return 'UNSUPPORTED', TEXTS['UNSUPPORTED'].message, index
         if op.kind not in OUTLINELESS_KINDS:
             raw = op.get(POINTS_KEY)
             if raw is not None and points_view(raw) is None:

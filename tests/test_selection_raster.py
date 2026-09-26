@@ -63,6 +63,18 @@ def add(selection, op):
     return selection.add_op(op['kind'], op.get('mode', 'REPLACE'), **values)
 
 
+def add_newer_op(selection, mode):
+    """Append an op the way a file from a newer version holds one of a kind this version lacks.
+
+    The file stores the kind as a number, and 99 is no kind's number, so
+    the kind reads back as "".
+    """
+    op = selection.ops.add()
+    op['kind'] = 99
+    op.mode = mode
+    return op
+
+
 def spec(op):
     return raster.OpSpec(op['kind'], op.get('mode', 'REPLACE'), op.get('feather', 0.0),
                          op.get('antialias', True), op.get('points', ()))
@@ -825,15 +837,14 @@ def test_problems():
         return
     raster.invalidate()
     sel = fresh_selection()
-    faces = sel.ops.add()
-    faces.kind = 'FACES'
+    add_newer_op(sel, 'REPLACE')
     sel.add_op('BOX', 'ADD', points=[(0.1, 0.1), (0.4, 0.4)])
     sel.ops[1].mode = 'REPLACE'
     check(raster.availability(sel, size=SIZE) == "" and raster.get_mask(sel, size=SIZE) is not None,
           "an unsupported op before the chain start is never read")
 
-    sel.add_op('FACES', 'SUBTRACT')
-    message = "Selections with a faces operation cannot be built yet"
+    add_newer_op(sel, 'SUBTRACT')
+    message = "This selection operation cannot be built"
     check(raster.availability(sel, size=SIZE) == message,
           f"availability names it: {raster.availability(sel, size=SIZE)!r}")
     check(raster.peek_mask(sel, size=SIZE) is None, "peek_mask returns None rather than raising")
@@ -867,11 +878,6 @@ def test_problems():
     check(reasons.TEXTS['VIEW'].message == "This selection's view is invalid"
           and raster.GEOMETRY_REASONS == {'SURFACE', 'VIEW', 'EDIT_MODE'},
           "VIEW has its own message, and the reasons that depend on objects are listed")
-    sel = fresh_selection()
-    sel.add_op('ALL')
-    sel.add_op('RASTER', 'SUBTRACT')
-    check(raster.availability(sel, size=SIZE) == "Selections with a raster operation cannot be built yet",
-          f"RASTER is still unsupported: {raster.availability(sel, size=SIZE)!r}")
 
     message = "A selection operation has malformed points"
     for label, points in (("a list of pairs", [(0.1, 0.1), (0.5, 0.2), (0.3, 0.6)]),

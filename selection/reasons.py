@@ -41,11 +41,4 @@ TEXTS = {
     'EDIT_MODE': Text("Leave Edit Mode to use this selection", "Leave Edit Mode to use the selection"),
 }
 
-# `UNSUPPORTED` says what cannot be built when it knows. Its label stays
-# the one in `TEXTS`.
-UNSUPPORTED_KIND_MESSAGES = {
-    'FACES': "Selections with a faces operation cannot be built yet",
-    'RASTER': "Selections with a raster operation cannot be built yet",
-    'TRANSFORM': "Selections with a transform operation cannot be built yet",
-}
 MALFORMED_POINTS = "A selection operation has malformed points"

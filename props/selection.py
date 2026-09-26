@@ -26,15 +26,16 @@ import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProperty,
                        FloatVectorProperty, IntVectorProperty, PointerProperty, StringProperty)
 
+# The numbers are what a .blend file stores for each kind, so they never
+# change. 3 to 5 are unused. They belonged to kinds that no tool could
+# create, so no file holds them. A number this version does not know,
+# such as a kind from a newer version, reads back as "".
 SELECTION_OP_KINDS = [
-    ('BOX', "Box", "Rectangle"),
-    ('ELLIPSE', "Ellipse", "Ellipse"),
-    ('LASSO', "Lasso", "Free-hand outline"),
-    ('FACES', "Faces", "The faces selected on the mesh"),
-    ('RASTER', "Raster", "Coverage read from an image, such as a magic wand result"),
-    ('TRANSFORM', "Transform", "Carries the selection along with content a transform moved"),
-    ('INVERT', "Invert", "Inverts everything before it"),
-    ('ALL', "All", "The whole image"),
+    ('BOX', "Box", "Rectangle", 0),
+    ('ELLIPSE', "Ellipse", "Ellipse", 1),
+    ('LASSO', "Lasso", "Free-hand outline", 2),
+    ('INVERT', "Invert", "Inverts everything before it", 6),
+    ('ALL', "All", "The whole image", 7),
 ]
 
 SELECTION_MODES = [
@@ -55,23 +56,29 @@ POINTS_KEY = "points"
 FEATHER_MAX = 1024.0
 """Widest soft edge an op can carry, in pixels. The rasteriser clamps to it too."""
 
-REPLACING_KINDS = frozenset(('BOX', 'ELLIPSE', 'LASSO', 'FACES', 'RASTER', 'ALL'))
+REPLACING_KINDS = frozenset(('BOX', 'ELLIPSE', 'LASSO', 'ALL'))
 """Kinds that hide every op before them when their mode is `REPLACE`."""
 
-MODELESS_KINDS = frozenset(('INVERT', 'TRANSFORM'))
+MODELESS_KINDS = frozenset(('INVERT',))
 """Kinds that change the mask before them instead of combining a shape
 with it. Their mode is ignored, and `add_op` stores `ADD`."""
 
 SPACELESS_KINDS = frozenset(('ALL', 'INVERT'))
 """Kinds whose result does not depend on the space they were made in."""
 
-OUTLINELESS_KINDS = frozenset(('ALL', 'INVERT', 'TRANSFORM'))
+OUTLINELESS_KINDS = frozenset(('ALL', 'INVERT'))
 """Kinds with no outline, so points, feather and anti-alias mean nothing."""
 
-KIND_CODES = {item[0]: index for index, item in enumerate(SELECTION_OP_KINDS)}
+KIND_CODES = {item[0]: item[3] for item in SELECTION_OP_KINDS}
 MODE_CODES = {item[0]: index for index, item in enumerate(SELECTION_MODES)}
 SPACE_CODES = {item[0]: index for index, item in enumerate(SELECTION_SPACES)}
 """Stable small integers for the enum items, packed into digests."""
+
+UNKNOWN_KIND_CODE = 0xFF
+"""Kind code of an op whose kind reads back as "". `selection/raster.py`
+refuses to build such an op, but its digest must still be taken. No kind
+has this code, so the op never shares a digest, and with it a cached
+mask, with an op of a known kind."""
 
 DIGEST_TAG = b"PS-091 selection mask 2"
 """Version of the digest format. Changing it gives every selection new cache keys."""
@@ -158,17 +165,6 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
     object: PointerProperty(name="Object", type=bpy.types.Object)
     uv_map: StringProperty(name="UV Map")
 
-    # RASTER: a greyscale image written once and never changed, so undo
-    # only needs the pointer. It is packed right after it is written. An
-    # unpacked generated image comes back black after undoing past its
-    # creation and then redoing (PS-096).
-    raster_image: PointerProperty(name="Raster", type=bpy.types.Image)
-
-    # TRANSFORM: the matrix a committed move applied, so the selection
-    # follows the content without any pixel being copied (PS-094).
-    transform: FloatVectorProperty(
-        name="Transform", size=16, subtype='MATRIX', default=_IDENTITY)
-
     def set_points(self, points) -> None:
         """Store an iterable of (x, y) pairs as the op's outline."""
         flat = []
@@ -182,11 +178,9 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
 
         Values are packed at full precision with `struct`. The point list
         is added as its float64 buffer, without a copy. Values that cannot
-        change the mask are left out. These are the mode of `INVERT` and
-        `TRANSFORM`, the space of `ALL` and `INVERT`, the outline, feather
-        and anti-alias of kinds without an outline, and the view of a `UV`
-        op. A `RASTER` op adds its image's `session_uid`, so an image
-        deleted and replaced by another of the same name gives a new mask.
+        change the mask are left out. These are the mode of `INVERT`, the
+        space of `ALL` and `INVERT`, the outline, feather and anti-alias of
+        kinds without an outline, and the view of a `UV` op.
 
         An outlined `VIEW` op also depends on the surface it was drawn on.
         It adds its UV map name and the key *surface_key* gives for it, or
@@ -198,7 +192,7 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
         outlined = kind not in OUTLINELESS_KINDS
         digest.update(struct.pack(
             '<BBBdB',
-            KIND_CODES[kind],
+            KIND_CODES.get(kind, UNKNOWN_KIND_CODE),
             0 if kind in MODELESS_KINDS else MODE_CODES[self.mode],
             0 if kind in SPACELESS_KINDS else SPACE_CODES[self.space],
             self.feather if outlined else 0.0,
@@ -224,13 +218,6 @@ class PaintSystemSelectionOp(bpy.types.PropertyGroup):
             digest.update(uv_map)
             key = surface_key(self) if surface_key is not None else None
             digest.update(key if key is not None else NO_SURFACE_KEY)
-        if kind == 'RASTER':
-            image = self.raster_image
-            name = image.name_full.encode('utf-8') if image is not None else b""
-            digest.update(struct.pack('<IQ', len(name), image.session_uid if image is not None else 0))
-            digest.update(name)
-        if kind == 'TRANSFORM':
-            digest.update(struct.pack('<16d', *_matrix_values(self.transform)))
 
 
 class PaintSystemSelection(bpy.types.PropertyGroup):
@@ -252,9 +239,9 @@ class PaintSystemSelection(bpy.types.PropertyGroup):
 
         A `REPLACE` of a kind in `REPLACING_KINDS` removes every op before
         it. Nothing earlier can show through, so keeping them would only
-        slow down the rebuild. `INVERT` and `TRANSFORM` act on the ops
-        before them, so they never remove anything. They are stored with
-        mode `ADD` whatever *mode* says.
+        slow down the rebuild. `INVERT` acts on the ops before it, so it
+        never removes anything. It is stored with mode `ADD` whatever
+        *mode* says.
         """
         if kind in MODELESS_KINDS:
             mode = 'ADD'

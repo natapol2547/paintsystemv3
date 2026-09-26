@@ -29,8 +29,8 @@ Built in slices, since the four halves of this ticket are independent.
    to OpenGL. CI runs that lavapipe step from 5.2, because the OpenGL
    jobs miss Vulkan-only faults such as an `R32F` texture read back as
    bytes. Outlined `VIEW` ops raised `UNSUPPORTED` until PS-093 added
-   them; `FACES`, `RASTER` and `TRANSFORM` ops still do until PS-097 and
-   PS-094 add them. `gpu.init()` turned out to arrive in 5.2, not 5.0,
+   them. The `FACES`, `RASTER` and `TRANSFORM` kinds were removed until
+   PS-097 and PS-094 add them with their tools. `gpu.init()` turned out to arrive in 5.2, not 5.0,
    and to crash Blender instead of raising when EGL cannot start.
 3. **Clipping native strokes. Done.** `props/stencil.py`,
    `selection/stencil.py`, `tests/test_selection_stencil.py` (70 checks)
@@ -114,8 +114,14 @@ way the artifact is derived from the tree.
   UV map (`texel_map.resolve_uv_map`: the map the layer names, else the
   active render map). A stored image pointer would go stale on a layer
   switch and need a sync of its own. The operations:
-  - `kind`: `BOX`, `ELLIPSE`, `LASSO`, `FACES`, `RASTER`, `TRANSFORM`,
-    `INVERT`, `ALL`.
+  - `kind`: `BOX`, `ELLIPSE`, `LASSO`, `INVERT`, `ALL`. The file stores
+    each kind as a number, pinned in `SELECTION_OP_KINDS`: `BOX` 0,
+    `ELLIPSE` 1, `LASSO` 2, `INVERT` 6, `ALL` 7. Numbers 3 to 5 were
+    `FACES`, `RASTER` and `TRANSFORM`, removed with their fields because
+    no tool created them. No file holds them, so PS-097 and PS-094 can
+    take those numbers when they add the kinds back. A number this
+    version does not know, such as a kind from a newer version, reads
+    back as "" and is refused as `UNSUPPORTED`.
   - `mode`: `REPLACE`, `ADD`, `SUBTRACT`, `INTERSECT`.
   - `space`: `UV` (image editor) or `VIEW` (3D view).
   - Shape data: `points` (region or UV coordinates), and for `VIEW` the
@@ -125,20 +131,11 @@ way the artifact is derived from the tree.
     feather looks the same on the canvas at any layer resolution),
     `antialias`, `through` (ignore occlusion, like X-ray in mesh
     selection).
-  - `feather` is limited to 1024 pixels. `INVERT` and `TRANSFORM` act on
-    the mask before them, so their mode means nothing and `add_op` stores
-    `ADD`.
-  - `RASTER` points at a write-once greyscale `Image` (magic wand and
-    other pixel-derived results). It is never modified, so undo only
-    needs the pointer. It is packed right after the write: PS-096 found
-    that an unpacked generated image comes back black after an undo past
-    its creation and a redo.
-  - `TRANSFORM` carries the matrix of a committed move (PS-094) so the
-    selection follows the content without copying pixels.
+  - `feather` is limited to 1024 pixels. `INVERT` acts on the mask
+    before it, so its mode means nothing and `add_op` stores `ADD`.
 - Because the ops are document data, selection undo is Blender's undo,
   and the selection is saved with the file like mesh selection. A
-  `REPLACE` of a box, ellipse, lasso, faces, raster or all op drops the
-  ops before it. The mask is cached under a digest of the ops, the size
+  `REPLACE` of a box, ellipse, lasso or all op drops the ops before it. The mask is cached under a digest of the ops, the size
   and the UDIM tile, so after undo, redo or a reload the restored ops
   find their mask or build it, and no stored hash can go stale. Memfile
   undo never restores pixels (PS-096), so the stencil image reads a file
@@ -207,13 +204,11 @@ GPU passes build the mask at the image's size, or at a UDIM tile's.
   map name, its view as object-to-view so the selection stays on the
   same texels when the object moves, and its digest includes the
   surface's content key.
-- `FACES` draws the UV triangles of the mesh's selected faces
-  (`use_paint_mask` face selection) in texel space.
-- Until PS-097 and PS-094 add them, `FACES`, `RASTER` and `TRANSFORM`
-  ops make `get_mask` raise `MaskUnavailable` with reason `UNSUPPORTED`;
-  a limited edit never runs as if there were no selection. The digests
-  already include the `RASTER` image's `session_uid` and the `TRANSFORM`
-  matrix.
+- An op whose kind this version does not know makes `get_mask` raise
+  `MaskUnavailable` with reason `UNSUPPORTED`, so a limited edit never
+  runs as if there were no selection. Its digest is still taken, with
+  kind code `UNKNOWN_KIND_CODE`, because the stencil and the session
+  take digests before they ask why a mask cannot be built.
 - A `VIEW` op whose surface cannot be used raises one of
   `GEOMETRY_REASONS`: `SURFACE` when its object or UV map is gone (the
   object deleted or not in the view layer, not a mesh, the UV map
