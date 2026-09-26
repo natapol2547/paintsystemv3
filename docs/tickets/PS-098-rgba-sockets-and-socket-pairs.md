@@ -175,12 +175,20 @@ During slice 2 the user also chose:
   none of its other pairs feeds anything: another stack, a mask or any
   other node. A folder's content goes only when the folder itself is
   deleted, on the same rule, and links into nodes deleted in the same
-  removal do not count. `stack_ops.removal` works this out first, as a
-  fixed point: it assumes everything it reaches goes, keeps each layer
-  that still feeds something staying, and repeats until nothing changes.
-  So the stack order does not change the result, and layers that only
-  feed each other or their own folder go together. `stack_ops.remove`
-  carries out exactly that plan. The dialog says which other channels
+  removal do not count. A link into a pair the removal takes out counts
+  for the slot that pair fed, since closing the gap moves the value on
+  there. A muted link is not moved on, so it does not count.
+  `stack_ops.removal` works this out first, as a fixed point: it assumes
+  everything it reaches goes, keeps each layer that still feeds something
+  staying, and repeats until nothing changes. So the stack order does not
+  change the result, and layers that only feed each other or their own
+  folder go together. The walk shares one visited set, as `stack` does,
+  so a folder wired into its own content is opened once.
+  `stack_ops.remove` carries out exactly that plan. A deleted layer
+  detaches the pairs the plan takes out before anything else, so the gaps
+  close the way the plan assumed. The first row below the removed ones
+  that is still there becomes active, or else the nearest row above. The
+  dialog says which other channels
   the layer stays in, or that it stays in the tree because a pair still
   feeds something. A deleted filter layer takes the results of all its
   pairs with it, linked or not.
@@ -195,10 +203,12 @@ During slice 2 the user also chose:
   the layer and are shared, Auto Refresh and the cache's UV map included.
   A bake that changes the UV map sends the other pairs' caches back to
   baking, since they were baked with the old one. The bake dialog starts
-  from the layer's UV map. The bake is given that UV map, or the active
-  render one for '', because `bpy.ops.object.bake` otherwise writes
-  through the active UV map, whatever the target node's Vector input
-  reads.
+  from the layer's UV map. `bpy.ops.object.bake` writes through the
+  active UV map, whatever the target node's Vector input reads, so the
+  bake makes the cache's UV map active, or the active render one for '',
+  and restores the user's after. Its `uv_layer` option would name the map
+  instead, but that string holds 63 bytes, fewer than a UV map name can
+  have.
 - Bake Cache, Update Filter and Clear Result act on the pair in the
   active channel's stack (`pair_in_stack`).
 - An automatic filter refresh remembers the position of the pair it
@@ -230,10 +240,11 @@ During slice 2 the user also chose:
 
 ### File compatibility
 
-- No migration. `complete_pairs` gives every layer in the editable trees
-  a virtual input and a state per pair. It runs when a file is read, in
-  `normalize_tree` before every compile, and on every flush for all
-  trees, which covers a tree appended from an older file.
+- No migration. `complete_pairs` gives every layer a virtual input and a
+  state per pair. It runs when a file is read, in `normalize_tree` before
+  every compile, and on every flush for all trees, which covers a tree
+  appended from an older file. A tree linked from an older file is
+  completed in memory only, so that happens again in each session.
   A layer saved before pairs existed bakes its cache and builds its
   filter result again.
 
@@ -286,7 +297,8 @@ During slice 2 the user also chose:
   - Moves never put a layer in one channel twice, allow opposite orders
     in two channels and refuse a pair loop (`tests/test_pairs.py`).
   - A layer saved before pairs gets its virtual input and pair states
-    before the tree compiles (`tests/test_layers.py`).
+    before the tree compiles, in a local or a linked tree
+    (`tests/test_layers.py`).
   - The pair list draws in the node editor sidebar
     (`tests/test_ui_draw.py`, CI only).
   - Dragging a link onto the virtual socket in the node editor, and the
