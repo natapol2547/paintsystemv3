@@ -7,7 +7,7 @@ from ..compiler.core import (block_compile, cleanup_orphan_artifacts, mark_dirty
                              unblock_compile)
 from ..filters import derived, freshness, layer_job
 from ..gpu_passes import surface, texel_map
-from ..nodes.layers.base_layer_node import complete_pairs
+from ..nodetree.stack_ops import complete_pairs
 from ..nodetree.tree import subscribe_name_changes
 from ..selection import overlay as selection_overlay
 from ..selection import raster as selection_raster
@@ -138,7 +138,8 @@ def on_load_post(*args):
     unblock_compile()
     # Before anything reads a layer's pair states, including the cleanup
     # below that looks for the filter results they point at.
-    complete_pairs()
+    for tree in ps_trees():
+        complete_pairs(tree)
     subscribe_name_changes()
     cleanup_orphan_artifacts()
     # Orphaned filter results are deleted here and nowhere else. A file

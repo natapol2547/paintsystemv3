@@ -13,7 +13,6 @@ register_addon()
 core = import_from("compiler.core")
 stack_ops = import_from("nodetree.stack_ops")
 registry = import_from("nodes.layers.registry")
-base_layer_node = import_from("nodes.layers.base_layer_node")
 layer_ops = import_from("ops.layer_ops")
 layers_panels = import_from("panels.layers_panels")
 icon_kwargs = import_from("common").icon_kwargs
@@ -255,22 +254,23 @@ try:
               for node in tree.nodes if stack_ops.is_layer(node)),
           "every new layer has one state for its one pair")
     # A layer saved before pairs existed reads back with no state and no
-    # virtual input.
-    for name in ("A", "F"):
-        node = tree.nodes[name]
-        node.pairs.clear()
-        node.inputs.remove(stack_ops.virtual_input(node))
-    base_layer_node.complete_pairs()
+    # virtual input. So does one in a tree appended from such a file, and
+    # no file read handler runs then, so the next compile completes it.
+    with core.suspend_compile(tree):
+        for name in ("A", "F"):
+            node = tree.nodes[name]
+            node.pairs.clear()
+            node.inputs.remove(stack_ops.virtual_input(node))
     check(len(tree.nodes["A"].pairs) == 1 and len(tree.nodes["F"].pairs) == 1,
-          "reading a file gives such a layer a state for each pair")
+          "compiling gives such a layer a state for each pair")
     check([socket.identifier for socket in tree.nodes["A"].inputs] == ["Color", "__extend__", "Mask"]
           and [socket.identifier for socket in tree.nodes["F"].inputs]
           == ["Color", "__extend__", "Content Color", "Mask"],
           "and a virtual input below its pair inputs")
-    base_layer_node.complete_pairs()
+    check_current(tree, "the completed tree")
+    stack_ops.complete_pairs(tree)
     check(len(tree.nodes["A"].pairs) == 1 and len(tree.nodes["A"].inputs) == 3,
           "and a second pass adds nothing")
-    check(core.compile_tree(tree), "so it compiles")
 
     section("layer type registry")
     types = registry.layer_types()

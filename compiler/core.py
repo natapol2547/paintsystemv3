@@ -29,8 +29,8 @@ from .library import MIX_IN_A_COLOR, MIX_IN_B_COLOR, MIX_IN_FACTOR, MIX_OUT_COLO
 from .profile import phase
 from .vector import input_value
 from ..context import MATERIAL_GROUP_KEY
-from ..nodetree.stack_ops import (Position, feeding_link, feeds_clip_run, is_layer, link_index,
-                                  link_source, pair_reads, producing_link, stack_output)
+from ..nodetree.stack_ops import (Position, complete_pairs, feeding_link, feeds_clip_run, is_layer,
+                                  link_index, link_source, pair_reads, producing_link, stack_output)
 from ..props.channel import PREVIEW_OUTPUT, channel_alpha_name, interface_socket_specs
 
 log = logging.getLogger(__name__)
@@ -110,6 +110,7 @@ def normalize_tree(tree) -> None:
 def normalize_all_trees() -> None:
     seen: set[str] = set()
     for tree in ps_trees():
+        complete_pairs(tree)
         ensure_tree_uuid(tree)
         if tree.uuid in seen:
             old_uuid = tree.uuid

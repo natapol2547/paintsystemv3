@@ -277,8 +277,40 @@ def pair_of_output(socket) -> int:
 
 
 def virtual_input(node):
-    """The layer's virtual input, or None while ``init`` or a file read has not added it yet."""
+    """The layer's virtual input, or None while ``init`` or ``complete_pairs`` has not added it yet."""
     return next((socket for socket in node.inputs if is_virtual(socket)), None)
+
+
+def after_pairs(node) -> int:
+    """The index just below the layer *node*'s last pair input, where its virtual input goes."""
+    last = pair_inputs(node)[-1]
+    return next(index for index, socket in enumerate(node.inputs) if socket == last) + 1
+
+
+def add_virtual_input(node) -> None:
+    """Give the layer *node* its virtual input, just below its pair inputs."""
+    node.inputs.new(VIRTUAL_SOCKET, "", identifier=VIRTUAL_ID)
+    node.inputs.move(len(node.inputs) - 1, after_pairs(node))
+
+
+def complete_pairs(tree) -> None:
+    """Give every layer in *tree* a virtual input and a state per pair.
+
+    A layer saved before pairs existed has neither. It comes in when a
+    file is read, and when a tree is appended from an older file, which
+    no file read handler sees, so the compiler calls this too. The old
+    cache and filter result are not carried over, because v3 is
+    unreleased: the layer bakes and builds again instead (PS-098).
+    """
+    if not tree.is_editable:
+        return
+    for node in tree.nodes:
+        if not is_layer(node):
+            continue
+        if virtual_input(node) is None:
+            add_virtual_input(node)
+        for _missing in range(pair_count(node) - len(node.pairs)):
+            node.pairs.add()
 
 
 def link_source(link) -> Position:
