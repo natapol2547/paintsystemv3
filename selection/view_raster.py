@@ -51,6 +51,7 @@ from gpu_extras.batch import batch_for_shader
 
 from ..gpu_passes import core, texel_map
 from . import raster
+from .raster_glsl import COMMON_SOURCE
 
 REACH_PAD = 1.5
 """Pixels of signed distance kept beyond the soft edge, so the bilinear
@@ -321,7 +322,7 @@ def _shaders() -> dict:
         info.vertex_out(interface)
         info.fragment_out(0, 'FLOAT', "out_mask")
         info.vertex_source(core.BAND_VERTEX_SOURCE)
-        info.fragment_source(raster.COMMON_SOURCE + _TEXEL_FRAGMENT_SOURCE)
+        info.fragment_source(COMMON_SOURCE + _TEXEL_FRAGMENT_SOURCE)
         texel = gpu.shader.create_from_info(info)
         _gpu.update(depth=depth, texel=(texel, batch_for_shader(texel, 'TRIS', core.UNIT_QUAD)))
     return _gpu
