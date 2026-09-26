@@ -215,6 +215,14 @@ MOVE_ACTION_ITEMS = [
 ]
 
 
+# Why ``move_layer_node`` left the stack as it was, by the reason it returns.
+MOVE_REFUSALS = {
+    'NOT_OFFERED': "This move is not possible here",
+    'LOOP': "This move would make a loop through a mask link",
+    'REPEAT': "This move would put the layer in one channel twice",
+}
+
+
 def move_label(option) -> str:
     if option.action == 'SKIP':
         return f"Skip over '{option.target.name}'"
@@ -254,9 +262,9 @@ class LayerMoveOperator:
             action = options[0].action
         if action not in {option.action for option in options}:
             return {'CANCELLED'}
-        if not ps.tree.move_layer_node(ps.layer, self.direction, action):
-            # The move was on offer, so only the mask loop check refused it.
-            self.report({'WARNING'}, "This move would make a loop through a mask link")
+        result = ps.tree.move_layer_node(ps.layer, self.direction, action)
+        if result != 'MOVED':
+            self.report({'WARNING'}, MOVE_REFUSALS[result])
             return {'CANCELLED'}
         return {'FINISHED'}
 

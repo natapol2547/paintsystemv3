@@ -550,7 +550,7 @@ if available():
 
         with core.suspend_compile(lonely):
             lonely.insert_layer_node(SOLID)
-            check(lonely.move_layer_node(alone, 'UP', 'SKIP'),
+            check(lonely.move_layer_node(alone, 'UP', 'SKIP') == 'MOVED',
                   "moving the filter layer above a new layer")
         core.flush_now()
         check(pump() and derived.is_built(alone.pairs[0].derived_image), "is enough for the job to build it")

@@ -171,7 +171,7 @@ try:
     base = solid(tree, "Base", HALF_RED)
     clipped = solid(tree, "Clipped", BLUE, clip=True)
     check_pixel("before the move", tree, over(GREEN, over(HALF_RED, BLUE, clip=True)))
-    check(tree.move_layer_node(base, 'DOWN', 'SKIP'), "move the base below the bottom layer")
+    check(tree.move_layer_node(base, 'DOWN', 'SKIP') == 'MOVED', "move the base below the bottom layer")
     check(clipped.is_clip and stack_ops.clip_base(clipped) == (tree.nodes["Bottom"], 0),
           "the clipped layer keeps is_clip and clips to the layer now below it")
     check_pixel("after the move", tree, over(HALF_RED, over(GREEN, BLUE, clip=True)))

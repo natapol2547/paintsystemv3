@@ -133,7 +133,7 @@ try:
         core.compile_tree(tree)
         compiles.clear()
         label = f"{name} {direction} {action}"
-        check(tree.move_layer_node(tree.nodes[name], direction, action), f"{label}: moved")
+        check(tree.move_layer_node(tree.nodes[name], direction, action) == 'MOVED', f"{label}: moved")
         check(layout(tree) == want, f"{label}: {layout(tree)}")
         check(compiles == [tree.name], f"{label}: compiled once {compiles}")
         check_current(tree, label)
@@ -141,13 +141,13 @@ try:
 
     tree = build("Leap")
     tree.move_layer_node(tree.nodes["B"], 'UP', 'SKIP')
-    check(tree.move_layer_node(tree.nodes["C"], 'DOWN', 'MOVE_ADJACENT'), "leap moved")
+    check(tree.move_layer_node(tree.nodes["C"], 'DOWN', 'MOVE_ADJACENT') == 'MOVED', "leap moved")
     check(layout(tree) == [("A", 0), ("F", 0), ("B", 1), ("G", 1), ("C", 0), ("H", 0), ("D", 0)],
           f"MOVE_ADJACENT down leaves both folders {layout(tree)}")
 
     tree = build("Refused")
-    check(not tree.move_layer_node(tree.nodes["A"], 'UP', 'SKIP'), "a move not on offer is refused")
-    check(not tree.move_layer_node(tree.nodes["C"], 'DOWN', 'SKIP'), "no SKIP without a next sibling")
+    check(tree.move_layer_node(tree.nodes["A"], 'UP', 'SKIP') == 'NOT_OFFERED', "a move not on offer is refused")
+    check(tree.move_layer_node(tree.nodes["C"], 'DOWN', 'SKIP') == 'NOT_OFFERED', "no SKIP without a next sibling")
     check(layout(tree) == FIXTURE, "a refused move changes nothing")
 
     tree = build("Reveal")

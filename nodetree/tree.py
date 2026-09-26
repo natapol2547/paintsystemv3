@@ -333,24 +333,24 @@ class PaintSystemNodeTree(NodeTree):
         return next((item.pair for item in self.stack(channel_name) if item.node == node), 0)
 
     def move_layer_node(self, node: bpy.types.Node, direction: str, action: str,
-                        channel_name: str | None = None) -> bool:
+                        channel_name: str | None = None) -> str:
         """Move a layer one row up or down, using a ``movement_options`` move.
 
         *direction* is ``'UP'`` or ``'DOWN'``. *action* picks one of the
         moves ``stack_ops.movement_options`` offers. A folder takes its
-        content along. Returns False, and changes nothing, when the move is
-        not offered, would loop a mask link or would put a layer in one
-        channel twice (see ``stack_ops.move``).
+        content along. Returns ``'MOVED'``, or why nothing changed: the
+        move is not offered, would loop a mask link or would put a layer in
+        one channel twice (see ``stack_ops.move``).
         """
         channel_name = self._channel_name(channel_name)
         if channel_name is None:
-            return False
+            return 'NOT_OFFERED'
         with suspend_compile(self):
-            moved = stack_ops.move(self, channel_name, node, direction, action)
-            if moved:
+            result = stack_ops.move(self, channel_name, node, direction, action)
+            if result == 'MOVED':
                 stack_ops.arrange_stack(self, channel_name)
                 self.reveal_layer_node(node, channel_name)
-        return moved
+        return result
 
     def activate_layer_node(self, node: bpy.types.Node) -> None:
         """Make *node* the active and only selected node."""

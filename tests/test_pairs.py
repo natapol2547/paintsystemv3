@@ -221,9 +221,32 @@ try:
     share_top(tree, mover, "Second")
     before = (rows(tree, "Color"), rows(tree, "Second"))
     check(stack_ops.repeats(tree) == 0, "no channel repeats a layer yet")
-    moved = tree.move_layer_node(mover, 'DOWN', 'MOVE_INTO_TOP', "Color")
-    check(not moved and (rows(tree, "Color"), rows(tree, "Second")) == before,
+    result = tree.move_layer_node(mover, 'DOWN', 'MOVE_INTO_TOP', "Color")
+    check(result == 'REPEAT' and (rows(tree, "Color"), rows(tree, "Second")) == before,
           "moving a layer into a folder that also sits in its other channel is refused")
+
+    section("two channels can stack the same layers in opposite orders")
+    tree = new_tree("Orders")
+    add(tree, SOLID, "Under", "Color", GREEN)
+    add(tree, SOLID, "Ground", "Second", GREEN)
+    lower = add(tree, SOLID, "Lower", "Color", RED)
+    upper = add(tree, SOLID, "Upper", "Color", BLUE)
+    lower.opacity = upper.opacity = 0.5
+    share_top(tree, lower, "Second")
+    share_top(tree, upper, "Second")
+    result = tree.move_layer_node(lower, 'UP', 'SKIP', "Second")
+    check(result == 'MOVED' and rows(tree, "Second") == [("Lower", 1, 0), ("Upper", 1, 0), ("Ground", 0, 0)],
+          f"Blender sees a cycle between the two nodes, but no pair is made from itself {result}")
+    got, want = channel_pixel(tree, "Color"), over(over(GREEN, RED, 0.5), BLUE, 0.5)
+    check(close(got, want), f"each channel blends its own order {fmt(got)}")
+    got, want = channel_pixel(tree, "Second"), over(over(GREEN, BLUE, 0.5), RED, 0.5)
+    check(close(got, want), f"in both of them {fmt(got)}")
+    masked = add(tree, SOLID, "Masked", "Color")
+    tree.links.new(upper.outputs[0], masked.inputs["Mask"])
+    before = rows(tree, "Color")
+    result = tree.move_layer_node(upper, 'UP', 'SKIP', "Color")
+    check(result == 'LOOP' and rows(tree, "Color") == before,
+          f"a move that makes a pair read its own output is still refused {result}")
 
     section("a filter layer keeps a result per pair")
     tree = new_tree("Filter Pairs")

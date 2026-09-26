@@ -178,24 +178,24 @@ try:
     check(stack_ops.consumer_input(bottom) == top.inputs['Color'], "the stack skips a link into a mask")
     mid = solid(masked, "Mid", target=bottom)
     check([name for name, *_ in layout(masked)] == ["Top", "Mid", "Bottom"], "a layer inserts above the masking layer")
-    check(masked.move_layer_node(mid, 'DOWN', 'SKIP'), "the layer above it moves down")
+    check(masked.move_layer_node(mid, 'DOWN', 'SKIP') == 'MOVED', "the layer above it moves down")
     check([name for name, *_ in layout(masked)] == ["Top", "Bottom", "Mid"], f"past it {layout(masked)}")
     check(top.inputs['Mask'].is_linked and top.inputs['Mask'].links[0].from_node == bottom,
           "the mask link survives the insert and the move")
-    check(masked.move_layer_node(bottom, 'DOWN', 'SKIP'), "the layer feeding the mask moves down")
+    check(masked.move_layer_node(bottom, 'DOWN', 'SKIP') == 'MOVED', "the layer feeding the mask moves down")
     check([name for name, *_ in layout(masked)] == ["Top", "Mid", "Bottom"], f"past Mid {layout(masked)}")
     check(top.inputs['Mask'].is_linked and top.inputs['Mask'].links[0].from_node == bottom,
           "moving the layer that feeds a mask keeps the mask link")
-    check(masked.move_layer_node(bottom, 'UP', 'SKIP'), "and moves back up")
+    check(masked.move_layer_node(bottom, 'UP', 'SKIP') == 'MOVED', "and moves back up")
 
     def bottom_feeds():
         return sorted((link.to_node.name, link.to_socket.identifier)
                       for link in stack_ops.stack_output(bottom).links)
 
     fed = bottom_feeds()
-    check(not masked.move_layer_node(bottom, 'UP', 'SKIP'),
+    check(masked.move_layer_node(bottom, 'UP', 'SKIP') == 'LOOP',
           "a layer cannot move above the layer it masks, which would loop the mask link")
-    check(not masked.move_layer_node(top, 'DOWN', 'SKIP'),
+    check(masked.move_layer_node(top, 'DOWN', 'SKIP') == 'LOOP',
           "nor can the masked layer move below the layer that masks it")
     check([name for name, *_ in layout(masked)] == ["Top", "Bottom", "Mid"] and bottom_feeds() == fed,
           f"the refused moves leave the stack and the links as they were {layout(masked)}")
@@ -210,7 +210,7 @@ try:
     check(not stack_ops.is_slot(reroute.inputs[0]), "a reroute is never a stack slot")
     # Down and back up leaves the reroute link first on the output, so the
     # insert below has to skip it to find the stack.
-    check(masked.move_layer_node(bottom, 'DOWN', 'SKIP') and masked.move_layer_node(bottom, 'UP', 'SKIP'),
+    check(masked.move_layer_node(bottom, 'DOWN', 'SKIP') == masked.move_layer_node(bottom, 'UP', 'SKIP') == 'MOVED',
           "the layer feeding the reroute moves down and back")
     check(reroute.inputs[0].is_linked and reroute.inputs[0].links[0].from_node == bottom,
           "a move keeps the reroute link")

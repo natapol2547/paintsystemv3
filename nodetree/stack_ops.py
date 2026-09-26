@@ -793,24 +793,31 @@ def movement_options(items: list[StackItem], node, direction: str) -> list[MoveO
     return options
 
 
-def reads_from(node, source) -> bool:
-    """Whether *node* reads *source* through any of its inputs, masks included.
+def loops_back(node, pair: int = 0) -> bool:
+    """Whether the output of *node*'s *pair* is made from itself, through any chain of links.
 
-    Follows every link upstream, through reroutes, until it runs out.
+    Follows the inputs each pair is made from (``pair_reads``), masks
+    included, through reroutes. Blender checks for cycles node by node,
+    so it draws a link red when a layer sits above another layer in one
+    channel and below it in another. Each pair compiles on its own, so
+    that is not a loop here.
     """
-    seen: set[str] = set()
-    pending = [node]
+    start = (node.name, pair)
+    seen: set[tuple[str, int]] = set()
+    pending = [Position(node, pair)]
     with link_index(node.id_data):
         while pending:
-            for socket in pending.pop().inputs:
+            for socket in pair_reads(*pending.pop()):
                 link = producing_link(socket)
                 if link is None:
                     continue
-                if link.from_node == source:
+                source = link_source(link)
+                key = (source.node.name, source.pair)
+                if key == start:
                     return True
-                if link.from_node.name not in seen:
-                    seen.add(link.from_node.name)
-                    pending.append(link.from_node)
+                if key not in seen:
+                    seen.add(key)
+                    pending.append(source)
     return False
 
 
@@ -829,12 +836,13 @@ def repeats(tree) -> int:
     return count
 
 
-def move(tree, channel_name: str, node, direction: str, action: str) -> bool:
+def move(tree, channel_name: str, node, direction: str, action: str) -> str:
     """Make the *action* move that ``movement_options`` offers *node* in *channel_name*.
 
-    Only the pair that sits in that channel's stack moves. Returns False
-    if no such move is offered, or if the move would loop a link into a
-    mask back into *node*, or put a layer in one channel twice.
+    Only the pair that sits in that channel's stack moves. Returns
+    ``'MOVED'``, or why nothing changed: ``'NOT_OFFERED'`` when no such
+    move is offered, ``'LOOP'`` when the pair would be made from its own
+    output, and ``'REPEAT'`` when a layer would sit in one channel twice.
 
     A loop happens when a layer moves above a layer it masks: it would
     read the masked layer's result and feed its mask at the same time. The
@@ -846,13 +854,15 @@ def move(tree, channel_name: str, node, direction: str, action: str) -> bool:
     option = next((option for option in movement_options(items, node, direction)
                    if option.action == action), None)
     if option is None:
-        return False
+        return 'NOT_OFFERED'
     pair = next(item.pair for item in items if item.node == node)
     target = Position(option.target, option.target_pair)
     # Checking after the move sees the real links. Predicting either
-    # problem would mean simulating every kind of placement.
+    # problem would mean simulating every kind of placement. Any new loop
+    # runs through the moved pair, so checking that pair is enough. A
+    # loop made by hand in the node editor is left alone.
     home = consumer_input(node, pair)
-    looped = reads_from(node, node)
+    looped = loops_back(node, pair)
     repeated = repeats(tree)
     detach(tree, node, pair)
     if option.placement == 'ABOVE':
@@ -861,11 +871,15 @@ def move(tree, channel_name: str, node, direction: str, action: str) -> bool:
         insert_below(tree, node, target, pair)
     else:
         insert_into(tree, option.target, node, at_top=option.placement == 'INTO_TOP', pair=pair)
-    if (looped or not reads_from(node, node)) and repeats(tree) <= repeated:
-        return True
+    if not looped and loops_back(node, pair):
+        refusal = 'LOOP'
+    elif repeats(tree) > repeated:
+        refusal = 'REPEAT'
+    else:
+        return 'MOVED'
     detach(tree, node, pair)
     attach(tree, node, home, pair)
-    return False
+    return refusal
 
 
 def _move_node(node, x: float, y: float) -> None:
