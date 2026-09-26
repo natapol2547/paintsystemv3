@@ -53,8 +53,13 @@ class PaintSystemBaseNode:
 
     def copy(self, node):
         # Blender calls this on the new node, with the source node as
-        # *node*. The copy needs its own uuid.
-        self.uuid = str(uuid.uuid4())
+        # *node*. The copy needs its own uuid. Since 5.1, Ctrl+C in the
+        # node editor copies into a clipboard tree outside bpy.data. That
+        # copy keeps the source's uuid, which the paste is compared by
+        # (see ``PaintSystemLayerNode.copy``). It is never compiled.
+        tree = self.id_data
+        if bpy.data.node_groups.get(tree.name) == tree:
+            self.uuid = str(uuid.uuid4())
 
     def draw_label(self):
         draw_header(self)

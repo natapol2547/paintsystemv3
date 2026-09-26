@@ -268,6 +268,41 @@ def test_unlink_and_copies():
     copy = tree.nodes.active
     check(copy != a and copy.bl_idname == SOLID and copy.link_id == "", f"Shift+D makes an unlinked copy ({copy.name})")
     check(a.link_id == b.link_id != "", "the original stays linked")
+    tree.nodes.remove(copy)
+
+    # The node editor's clipboard, which copies with Node.copy too. The
+    # source is found by its uuid, so an edit between Ctrl+C and Ctrl+V
+    # does not fool it.
+    def node_paste(source, edit):
+        with node_editor(tree):
+            select_only(tree, source)
+            bpy.ops.node.clipboard_copy()
+            edit()
+            bpy.ops.node.clipboard_paste()
+        pasted = next(node for node in tree.nodes if node.select)
+        return pasted
+
+    pasted = node_paste(a, lambda: setattr(a, 'name', "A Renamed"))
+    check(pasted.link_id == "" and a.link_id == b.link_id != "",
+          f"Ctrl+V after the source was renamed makes an unlinked copy ({pasted.name})")
+    tree.nodes.remove(pasted)
+    a.name = "A"
+
+    def unlink_a():
+        links.unlink(a)
+        b.opacity = 0.25
+    pasted = node_paste(a, unlink_a)
+    check(pasted.link_id == "", "and after the source was unlinked")
+    tree.nodes.remove(pasted)
+    links.link([b], a)
+
+    def delete_a():
+        tree.nodes.remove(a)
+        b.opacity = 0.75
+    pasted = node_paste(a, delete_a)
+    check(pasted.link_id == b.link_id != "" and abs(pasted.opacity - 0.75) < 1e-6,
+          f"after the source was deleted the copy takes its place, with the group's settings ({pasted.opacity:.2f})")
+    a = pasted
 
     tree_copy = tree.copy()
     a2, b2 = tree_copy.nodes["A"], tree_copy.nodes["B"]

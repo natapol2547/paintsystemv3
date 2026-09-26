@@ -1,7 +1,7 @@
 import bpy
 from bpy.props import BoolProperty, FloatProperty, EnumProperty, PointerProperty, StringProperty
 
-from .links import link_settings
+from .links import copy_settings, link_settings, linked_layers
 from ..base_node import PaintSystemBaseNode, mark_tree_dirty
 from ...common import icon_kwargs
 from ...compiler.library import layer_blend_group
@@ -194,13 +194,19 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         super().copy(node)
         # A copy in the same tree, such as Shift+D or Ctrl+V there, is a
         # new layer and starts unlinked. A copy of a whole tree keeps the
-        # links among its own nodes. Blender passes no tree for *node*, so
-        # the source is found by name: a copy in the same tree gets a new
-        # name, while a copy in another tree keeps it.
+        # links among its own nodes. Blender passes no tree for *node*,
+        # but it passes the source's uuid, so a copy in the same tree
+        # finds its source by it, renamed or not.
         if self.link_id:
-            source = self.id_data.nodes.get(node.name)
-            if source is not None and source != self and getattr(source, 'link_id', "") == self.link_id:
+            if any(getattr(other, 'uuid', "") == node.uuid for other in self.id_data.nodes if other != self):
                 self.link_id = ""
+            else:
+                # A Ctrl+V after the source was deleted keeps the link.
+                # The group may have changed since the Ctrl+C, so the copy
+                # takes its settings.
+                members = linked_layers(self)
+                if members:
+                    copy_settings(members[0], [self])
         # Blender copies the pointer, so both layers would share one cache
         # image. ``bake_node_cache`` reuses whatever ``cache_image`` holds,
         # so baking either copy would silently overwrite the other's
