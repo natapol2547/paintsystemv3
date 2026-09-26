@@ -275,7 +275,10 @@ if available():
               f"the plan gathers the UV map of every image below, folders included: {sorted(plan.uv_maps)}")
         check(len(plan.images) == 2,
               f"and the images themselves: {[image.name for image in plan.images]}")
-        check(all(step.node.name != inner_bottom.name for step in plan.layers),
+        inner_fill = tuple(inner_bottom.fill_color)
+        folder_step = next(step for step in plan.layers if step.content is not None)
+        check(all(step.fill != inner_fill for step in plan.layers)
+              and any(step.fill == inner_fill for step in folder_step.content.layers),
               "a folder's content is a chain of its own, not part of the outer one")
 
     except Exception:

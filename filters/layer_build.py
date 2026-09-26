@@ -55,12 +55,6 @@ from .registry import ENCODE_SRGB
 
 log = logging.getLogger(__name__)
 
-# Rows per readback. Reading 4096 rows at once stalls for about a second
-# on the test machine, far too long between modal events. This is the
-# same band size that `run_pass` draws in.
-READ_ROWS = BAND_ROWS
-
-
 def build_layer(context, tree, node) -> bpy.types.Image:
     """Build *node*'s derived image, running `steps` to the end.
 
@@ -149,9 +143,12 @@ def steps(context, tree, node, *, plan=None):
             # every time.
             png = RGBAStream(width, height)
             digest = hashlib.blake2b(digest_size=16)
-            firsts = range(0, height, READ_ROWS)
+            # Reading 4096 rows at once stalls for about a second on the
+            # test machine, far too long between modal events. So the
+            # readback goes in the bands `run_pass` draws in.
+            firsts = range(0, height, BAND_ROWS)
             for index, first in enumerate(reversed(firsts)):
-                band = read_color_bytes(framebuffer, width, first, min(height, first + READ_ROWS))
+                band = read_color_bytes(framebuffer, width, first, min(height, first + BAND_ROWS))
                 digest.update(band)
                 png.add(band[::-1])
                 yield (f"{kind.label}: reading the result back",

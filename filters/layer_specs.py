@@ -85,13 +85,6 @@ class LayerFilterSpec:
             return self.fingerprint_of(node)
         return [[spec.name, params] for spec, params in self.passes_of(node)]
 
-    def param_names(self) -> tuple[str, ...]:
-        """Every node property this kind reads, groups flattened."""
-        names = []
-        for entry in self.params:
-            names.extend((entry,) if isinstance(entry, str) else entry[1])
-        return tuple(names)
-
 
 def _invert_passes(node) -> list[tuple[FilterSpec, dict]]:
     return [(registry.INVERT, {

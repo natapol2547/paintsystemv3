@@ -133,7 +133,9 @@ try:
     unhashed = set(type(node).ps_unhashed_props)
     properties = set(node.bl_rna.properties.keys())
     for kind in layer_specs.LAYER_FILTERS.values():
-        names = set(kind.param_names())
+        # An entry is a name or a (heading, names) group.
+        names = {name for entry in kind.params
+                 for name in ((entry,) if isinstance(entry, str) else entry[1])}
         check(names <= properties and names <= unhashed,
               f"{kind.label}'s settings exist and are outside the hash "
               f"(missing {sorted(names - unhashed)})")

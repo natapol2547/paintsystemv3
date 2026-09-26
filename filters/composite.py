@@ -85,7 +85,6 @@ class LayerStep:
     for a disabled layer. *content* is a folder's chain. *image* and
     *fill* hold the pixels of every other layer type.
     """
-    node: bpy.types.Node
     placement: str
     rule: str
     blend_mode: str
@@ -215,7 +214,7 @@ def _plan_layer(layer, positions, visited, group_input, *, holds_run: bool) -> L
         raise Unsupported(f"Layer '{layer.name}' blends with {layer.blend_mode}, "
                           "which has no GPU parity test")
 
-    return LayerStep(node=layer, placement=placement, rule=rule,
+    return LayerStep(placement=placement, rule=rule,
                      blend_mode=layer.blend_mode, strength=strength,
                      mask=layer.inputs['Mask'].default_value, image=image,
                      fill=fill, content=content, uv_map=uv_map,
