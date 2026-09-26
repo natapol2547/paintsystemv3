@@ -27,7 +27,6 @@ library = import_from("compiler.library")
 bake_node_cache = import_from("compiler.bake").bake_node_cache
 socket_named = import_from("nodetree.stack_ops").socket_named
 compile_tree = core.compile_tree
-build_ir = core.build_ir
 
 BAKE_UV = "Bake"
 TANGENT_UV = "Mirrored"
@@ -447,9 +446,9 @@ def test_group_layer():
 
     section("the group layer's hash follows the conversions")
     parent.links.remove(link_in)
-    before = build_ir(parent).ctx.subtree_hash(group)
+    before = core.subtree_hash(parent, group)
     parent.channels["Normal"].paint_space = 'WORLD'
-    check(build_ir(parent).ctx.subtree_hash(group) != before,
+    check(core.subtree_hash(parent, group) != before,
           "with nothing linked in, this tree's paint space still changes what the group layer gives")
 
     section("a group layer converts for the stack it sits in, not the channel of its sockets' name")
@@ -549,7 +548,7 @@ def test_patching():
     layer = tree.insert_layer_node('PaintSystemSolidColorLayerNode', "Normal")
 
     def layer_hash():
-        return build_ir(tree).ctx.subtree_hash(layer)
+        return core.subtree_hash(tree, layer)
     hashes = {layer_hash()}
     channel.tangent_uv_map = BAKE_UV
     hashes.add(layer_hash())

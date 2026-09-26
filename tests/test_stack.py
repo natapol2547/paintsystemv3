@@ -221,13 +221,12 @@ try:
     section("editing state stays out of the shader")
     base = nested.nodes["Base"]
     fingerprint = core.compile_tree(nested)
-    ir = core.build_ir(nested)
-    subtree = ir.ctx.subtree_hash(base)
+    subtree = core.subtree_hash(nested, base)
     base.lock_layer = True
     base.lock_alpha = True
     box.is_expanded = False
     check(core.compile_tree(nested) == fingerprint, "lock flags and folder expansion keep the fingerprint")
-    check(core.build_ir(nested).ctx.subtree_hash(base) == subtree, "lock flags keep the cache hash")
+    check(core.subtree_hash(nested, base) == subtree, "lock flags keep the cache hash")
 
     section("PSContext")
     view_layer = bpy.context.view_layer

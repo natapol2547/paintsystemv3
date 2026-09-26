@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import uuid as _uuid
+from contextlib import contextmanager
 from typing import Any, Iterable
 
 import bpy
@@ -470,9 +471,25 @@ def _build_ir(tree, *, bake_target=None) -> IR:
             color, alpha = pair
             ir.link(color, out_id, 'Color')
             ir.link(alpha, out_id, 'Alpha')
-    # Not part of the fingerprint. The bake reads subtree hashes from it.
-    ir.ctx = ctx
     return ir
+
+
+@contextmanager
+def hash_context(tree):
+    """A context to hash *tree*'s subtrees with, outside a compile.
+
+    ``CompileContext.subtree_hash`` reads only the tree, never what
+    ``emit`` recorded. So a context with an empty IR gives the hashes a
+    compile would, without building one.
+    """
+    with link_index(tree):
+        yield CompileContext(IR())
+
+
+def subtree_hash(tree, node) -> str:
+    """*node*'s subtree hash, outside a compile. See ``hash_context``."""
+    with hash_context(tree) as ctx:
+        return ctx.subtree_hash(node)
 
 
 # ── Artifact management ──────────────────────────────────────────────

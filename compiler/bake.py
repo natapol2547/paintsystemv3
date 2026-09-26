@@ -28,7 +28,7 @@ import numpy as np
 from ..gpu_passes.texel_map import resolve_uv_map
 from ..nodetree.stack_ops import channel_of
 from ..props.channel import image_colorspace
-from .core import build_ir, mark_dirty
+from .core import build_ir, mark_dirty, subtree_hash
 
 log = logging.getLogger(__name__)
 
@@ -76,12 +76,12 @@ def build_bake_tree(tree, node) -> tuple[bpy.types.NodeTree, str]:
     Returns the group and the subtree hash.
     """
     ir = build_ir(tree, bake_target=node)
-    subtree_hash = ir.ctx.subtree_hash(node)
+    node_hash = subtree_hash(tree, node)
     bake_tree = bpy.data.node_groups.get(BAKE_TREE_NAME)
     if bake_tree is None or bake_tree.bl_idname != 'ShaderNodeTree':
         bake_tree = bpy.data.node_groups.new(BAKE_TREE_NAME, 'ShaderNodeTree')
     ir.apply(bake_tree, arrange=False)
-    return bake_tree, subtree_hash
+    return bake_tree, node_hash
 
 
 @contextlib.contextmanager
@@ -234,7 +234,7 @@ def bake_subtree(context, tree, node, obj, image, *, margin: int = 8,
     """
     check_bake_object(obj, uv_map)
 
-    bake_tree, subtree_hash = build_bake_tree(tree, node)
+    bake_tree, node_hash = build_bake_tree(tree, node)
     alpha_image = create_managed_image(BAKE_ALPHA_IMAGE_NAME, image.size[0], image.size[1],
                                        alpha=False, colorspace='Non-Color')
 
@@ -272,7 +272,7 @@ def bake_subtree(context, tree, node, obj, image, *, margin: int = 8,
     finally:
         bpy.data.materials.remove(mat)
         bpy.data.images.remove(alpha_image)
-    return subtree_hash
+    return node_hash
 
 
 def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int = 2048,
@@ -295,8 +295,8 @@ def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int 
     elif tuple(image.size) != (width, height):
         image.scale(width, height)
 
-    subtree_hash = bake_subtree(context, tree, node, obj, image,
-                                margin=margin, uv_map=uv_map)
+    node_hash = bake_subtree(context, tree, node, obj, image,
+                             margin=margin, uv_map=uv_map)
     image.pack()
 
     node.cache_image = image
@@ -304,7 +304,7 @@ def bake_node_cache(context, tree, node, obj, *, width: int = 2048, height: int 
         # The cache from before the channel changed type, which nothing
         # else uses.
         bpy.data.images.remove(old)
-    node.cache_hash = subtree_hash
+    node.cache_hash = node_hash
     # The compiled cache is read through this map, so it must be the one
     # this bake wrote through, '' included.
     node.cache_uv_map = uv_map

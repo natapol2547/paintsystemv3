@@ -117,8 +117,9 @@ whole tree, so a walk down a stack is quadratic in its link count. The
 `link_index` context manager maps a tree's links by socket in one pass and
 `socket_links` reads that map, falling back to the property for any tree
 without one. An index may only cover a read-only stretch — `build_ir`
-installs one for the length of a build, and no code edits links inside
-one — because a stale map is a wrong graph, not a slow one. Indexes are keyed by tree pointer, so a
+installs one for the length of a build and `hash_context` for the length
+of a hash, and no code edits links inside one — because a stale map is a
+wrong graph, not a slow one. Indexes are keyed by tree pointer, so a
 compile of a child tree during a parent's build cannot clobber the
 parent's.
 
@@ -366,7 +367,10 @@ Any layer node can be cached. `CompileContext.subtree_hash(node)` hashes the
 node's properties, unlinked socket values and, recursively, its upstream.
 When `cache_enabled` and `cache_hash == subtree_hash`, the compiler emits a
 single Image Texture for the node and does not walk its upstream. When the
-hash mismatches the live graph is emitted and `cache_stale` is set.
+hash mismatches the live graph is emitted and `cache_stale` is set. The
+hash reads only the tree, so outside a compile `core.subtree_hash(tree,
+node)` gets it from a context with an empty IR, and `core.hash_context`
+gives such a context for several hashes.
 
 Baking builds a temporary group whose Color and Alpha outputs are the two
 halves of the node's live `Color` output,

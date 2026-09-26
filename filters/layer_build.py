@@ -44,7 +44,7 @@ import logging
 import bpy
 
 from ..compiler.bake import create_managed_image
-from ..compiler.core import build_ir, mark_dirty
+from ..compiler.core import hash_context, mark_dirty
 from ..compiler.ir import hash_payload
 from ..gpu_passes.core import BAND_ROWS, read_color_bytes
 from . import composite, derived, freshness, layer_plan
@@ -336,8 +336,8 @@ def _fingerprint(tree, node, plan) -> str:
 
     It records the build's inputs, not its result, so a later compile can
     tell that nothing structural has changed without reading a pixel. The
-    IR is built only to get a context to hash with. The compile that
-    `commit` asks for afterwards makes the same context and compares.
+    compile that `commit` asks for afterwards hashes the same parts with
+    its own context and compares.
     """
-    ctx = build_ir(tree).ctx
-    return freshness.stamp(freshness.fingerprint_parts(ctx, node, plan.source, plan.surface))
+    with hash_context(tree) as ctx:
+        return freshness.stamp(freshness.fingerprint_parts(ctx, node, plan.source, plan.surface))

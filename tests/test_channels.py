@@ -20,7 +20,7 @@ from harness import (bake_group, check, close, finish, fmt, guarded, import_from
 register_addon()
 ops = bpy.ops.paint_system
 compile_tree = import_from("compiler.core").compile_tree
-build_ir = import_from("compiler.core").build_ir
+subtree_hash = import_from("compiler.core").subtree_hash
 link_tree_to_material = import_from("ops.node_tree_ops").link_tree_to_material
 
 
@@ -279,7 +279,7 @@ def test_cache_hash():
     layer = tree.insert_layer_node('PaintSystemSolidColorLayerNode', "Color")
 
     def layer_hash():
-        return build_ir(tree).ctx.subtree_hash(layer)
+        return subtree_hash(tree, layer)
 
     before = layer_hash()
     tree.channels["Color"].use_alpha = False

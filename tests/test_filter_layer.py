@@ -107,23 +107,23 @@ try:
     core.flush_now()
 
     section("what the compiler's fingerprints see")
-    before = core.build_ir(tree).ctx.subtree_hash(node)
+    before = core.subtree_hash(tree, node)
     node.invert_alpha = True
     node.resolution = '4096'
     node.uv_map = "SomeOtherMap"
     node.surface_name = "Filter Holder"
-    check(core.build_ir(tree).ctx.subtree_hash(node) == before,
+    check(core.subtree_hash(tree, node) == before,
           "asking for a different filter changes no hash before the rebuild")
     spare = built_image("Filter Result Spare", (0.0, 0.0, 1.0, 1.0))
     node.derived_image = spare
-    check(core.build_ir(tree).ctx.subtree_hash(node) != before,
+    check(core.subtree_hash(tree, node) != before,
           "but different pixels do, so a cache above cannot go on showing the old ones")
     node.derived_image = image
-    check(core.build_ir(tree).ctx.subtree_hash(node) == before, "and swapping back restores it")
+    check(core.subtree_hash(tree, node) == before, "and swapping back restores it")
     bpy.data.images.remove(spare)
 
     image[derived.BUILD_KEY] = "rebuilt"
-    check(core.build_ir(tree).ctx.subtree_hash(node) != before,
+    check(core.subtree_hash(tree, node) != before,
           "a rebuild of the same image invalidates it too")
     image[derived.BUILD_KEY] = "build-of-Filter Result"
 
@@ -140,7 +140,7 @@ try:
     node.filter_type = 'PAINTERLY'
     node.painter_seed = 7
     node.painter_coverage = 30.0
-    check(core.build_ir(tree).ctx.subtree_hash(node) == before,
+    check(core.subtree_hash(tree, node) == before,
           "so changing Painterly's changes no hash before the rebuild either")
     node.painter_seed, node.painter_coverage = 42, 70.0
     node.filter_type = 'INVERT'

@@ -49,13 +49,18 @@ def below_of(node):
     return link.from_node if link is not None else None
 
 
-def current_stamp(tree, node, surface=None):
-    """What a build of *node* right now would stamp its image with.
+def current_parts(tree, node, surface=None):
+    """What a build of *node* right now would be asked for.
 
     *surface* is the mesh the build needed, as in `InputPlan.surface`.
     """
-    ctx = core.build_ir(tree).ctx
-    return freshness.stamp(freshness.fingerprint_parts(ctx, node, below_of(node), surface))
+    with core.hash_context(tree) as ctx:
+        return freshness.fingerprint_parts(ctx, node, below_of(node), surface)
+
+
+def current_stamp(tree, node, surface=None):
+    """What a build of *node* right now would stamp its image with."""
+    return freshness.stamp(current_parts(tree, node, surface))
 
 
 def restamp(tree, node, surface=None):
@@ -182,7 +187,7 @@ try:
     # The part is left out rather than stamped False, so a stamp written
     # before it existed still matches for the unclipped layer it was
     # already right about, and only a clipped one asks to be rebuilt.
-    parts = freshness.fingerprint_parts(core.build_ir(tree).ctx, node, below_of(node))
+    parts = current_parts(tree, node)
     check("clip" not in parts, "an unclipped layer stamps what it always did")
 
     section("the mesh a build needed")
@@ -243,7 +248,7 @@ try:
           f"missing altogether: {reason(tree, node)!r}")
 
     restamp(tree, node)
-    parts = freshness.fingerprint_parts(core.build_ir(tree).ctx, node, below_of(node))
+    parts = current_parts(tree, node)
     parts["version"] = derived.FILTER_VERSION + 1
     result[derived.FINGERPRINT_KEY] = freshness.stamp(parts)
     check(reason(tree, node) == "Paint System was updated",

@@ -218,8 +218,8 @@ def built_result(tree, node):
     image[derived.BUILD_KEY] = "perf"
     image[derived.UV_MAP_KEY] = ""
     link = stack_ops.feeding_link(node.inputs['Color'])
-    ctx = core.build_ir(tree).ctx
-    parts = freshness.fingerprint_parts(ctx, node, link.from_node if link else None)
+    with core.hash_context(tree) as ctx:
+        parts = freshness.fingerprint_parts(ctx, node, link.from_node if link else None)
     image[derived.FINGERPRINT_KEY] = freshness.stamp(parts)
     return image
 
