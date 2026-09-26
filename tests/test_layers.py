@@ -1,6 +1,8 @@
 """Layer list, moves and layer types (PS-011, PS-012, PS-029, PS-034)."""
 import os
+import shutil
 import sys
+import tempfile
 import traceback
 from types import SimpleNamespace
 
@@ -278,6 +280,30 @@ try:
         core.compile_tree(tree)
         direct = len(node.pairs) == 1 and stack_ops.virtual_input(node) is not None
     check(direct, "so does a compile that does not go through the scheduler, such as Recompile")
+    # A tree linked from such a file cannot be saved, so it is completed
+    # in memory. Otherwise it, and any tree wrapping it, could not compile.
+    library_path = os.path.join(tempfile.mkdtemp(), "ps_pre_pair_library.blend")
+    shared = build("Pre-Pair Library")
+    with core.suspend_compile(shared):
+        node = shared.nodes["A"]
+        node.pairs.clear()
+        node.inputs.remove(stack_ops.virtual_input(node))
+        bpy.data.libraries.write(library_path, {shared}, fake_user=True)
+    bpy.data.node_groups.remove(shared)
+    with bpy.data.libraries.load(library_path, link=True) as (_, linked):
+        linked.node_groups = ["Pre-Pair Library"]
+    shared = linked.node_groups[0]
+    library = shared.library
+    try:
+        check(not shared.is_editable and len(shared.nodes["A"].pairs) == 0, "a linked tree can lack pair states")
+        core.compile_tree(shared)
+        node = shared.nodes["A"]
+        check(len(node.pairs) == 1 and stack_ops.virtual_input(node) is not None,
+              "and a compile completes it all the same")
+        core.flush_now()
+    finally:
+        bpy.data.libraries.remove(library)
+        shutil.rmtree(os.path.dirname(library_path))
 
     section("layer type registry")
     types = registry.layer_types()

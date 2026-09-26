@@ -300,12 +300,11 @@ def complete_pairs(tree) -> None:
     file is read, and when a tree is appended from an older file, which
     no file read handler sees. So every compile calls this too, and so
     does every flush for all trees, since the panels can draw a tree
-    that nothing has compiled yet. The old
+    that nothing has compiled yet. A linked tree is completed too, in
+    memory only, so this runs again for it in every session. The old
     cache and filter result are not carried over, because v3 is
     unreleased: the layer bakes and builds again instead (PS-098).
     """
-    if not tree.is_editable:
-        return
     for node in tree.nodes:
         if not is_layer(node):
             continue
