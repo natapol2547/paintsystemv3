@@ -7,9 +7,11 @@ layer, or paint under one, stop, and a moment later the filter shows the
 result. It must never make Blender feel broken, so it has these limits.
 
 - **Composite path only.** A layer whose input needs a Cycles bake is
-  left alone, with a message saying so. A background render would lock
-  the window for seconds with no way to cancel it. This is decided
-  before anything is allocated.
+  refused by `filters.layer_plan.resolve_input` before anything is
+  allocated, and waits like any other refusal. The bake is not built
+  yet, and when it is, this path must still never start one. A
+  background render would lock the window for seconds with no way to
+  cancel it.
 - **Refusals wait.** A layer that cannot be built right now, such as one
   with nothing below it or with no mesh to resolve its UV map on, shows
   the reason and keeps Auto Refresh on. The next change to the tree or
@@ -338,11 +340,6 @@ def _start():
             plan = layer_plan.resolve_input(bpy.context, tree, node)
         except Refused as refusal:
             _set_error(node, str(refusal))
-            waiting = True
-            continue
-        if not plan.is_composite:
-            _set_error(node, f"Update needed: filtering this needs a Cycles bake, "
-                             f"because {plan.reason}")
             waiting = True
             continue
         if _builds.get(node.uuid, 0) >= BUILD_LIMIT:

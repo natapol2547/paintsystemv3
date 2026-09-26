@@ -1,21 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Chooses how a filter layer gets the picture below it (PS-057).
 
-There are two paths. The GPU composite (`filters.composite`) draws the
-stack in a few passes, and is the only path the auto refresh may run.
-The Cycles bake (`compiler.bake.bake_subtree`) renders it. The bake is
-exact for anything, including group layers, layers that evaluate
-surface data, and blend modes with no parity test, but takes seconds.
+The GPU composite (`filters.composite`) draws the stack in a few
+passes. It is the only path built so far. A stack it cannot draw, such
+as one with a group layer, a layer that evaluates surface data or a
+blend mode with no parity test, would need a Cycles bake (Path B in
+PS-057). That is not built yet, so such a stack is refused with the
+reason, and the message says a bake is what it needs.
 
-`resolve_input` picks the path and allocates nothing while doing it, so
-a layer that cannot be built says why before any video memory is spent.
-It has two different outcomes on purpose:
-
-- An `InputPlan` on the ``BAKE`` path, with the cause in `reason`. Only
-  the bake could build it. The bake path is not implemented yet, so
-  `filters.layer_build.steps` refuses it with that reason for now.
-- `filters.core.Refused`, which means neither path can build it. The
-  message is shown to the user as written.
+`resolve_input` allocates nothing while it decides, so a layer that
+cannot be built says why before any video memory is spent. It returns
+an `InputPlan`, or raises `filters.core.Refused` with a message that is
+shown to the user as written.
 
 UV maps need care. The composite samples every source image by
 normalised coordinate, which is only correct while the whole stack below
@@ -51,18 +47,14 @@ from .core import Refused
 
 log = logging.getLogger(__name__)
 
-COMPOSITE, BAKE = 'COMPOSITE', 'BAKE'
-
 
 @dataclass(frozen=True)
 class InputPlan:
     """How to get the picture below a filter layer.
 
-    *source* is the node feeding the layer's ``Color`` input, which
-    `compiler.core.build_ir` takes as its `bake_target`. For a clipped
-    filter layer it is the base's own content, which is what such a layer
-    filters. *chain* is the composite plan on the composite path. On the
-    bake path it is None, and *reason* says why.
+    *source* is the node feeding the layer's ``Color`` input. For a
+    clipped filter layer it is the base's own content, which is what such
+    a layer filters. *chain* is the composite plan.
 
     *uv_map* is the map the result is laid out in. It is "" only when
     nothing names a map, so the result uses the active render map too.
@@ -70,23 +62,17 @@ class InputPlan:
     *surface* is the mesh the plan was resolved against, or None when it
     needed none. A build stores it on the layer (`keep_surface`).
     """
-    path: str
     source: bpy.types.Node
-    chain: composite.ChainPlan | None
+    chain: composite.ChainPlan
     uv_map: str
-    reason: str
     surface: bpy.types.Object | None
-
-    @property
-    def is_composite(self) -> bool:
-        return self.path == COMPOSITE
 
 
 def resolve_input(context, tree, node) -> InputPlan:
     """Decide how the stack below *node* is turned into pixels.
 
-    Raises `filters.core.Refused` when neither path can run, naming the
-    layer or image at fault.
+    Raises `filters.core.Refused` when the composite cannot draw it,
+    naming the layer or image at fault.
     """
     channel = channel_of(tree, node)
     if channel is not None and channel.type != 'COLOR':
@@ -100,14 +86,23 @@ def resolve_input(context, tree, node) -> InputPlan:
     try:
         chain = composite.plan_below(node)
     except composite.Unsupported as error:
-        return _bake_plan(context, tree, node, source, str(error))
+        raise _needs_bake(node, str(error)) from error
 
     if not chain.layers:
         raise Refused(f"There is nothing below '{node.name}' to filter")
     if gpu_known() is False:
-        return _bake_plan(context, tree, node, source,
-                          "this Blender has no GPU context to composite in")
+        raise _needs_bake(node, "this Blender has no GPU context to composite in")
     return _composite_plan(context, tree, node, source, chain)
+
+
+def _needs_bake(node, reason: str) -> Refused:
+    """The refusal of a stack only a Cycles bake could draw.
+
+    It asks for no mesh, although a bake would render one, because
+    selecting a mesh cannot help until the bake is built.
+    """
+    return Refused(f"Filtering the layers below '{node.name}' needs a Cycles bake, "
+                   f"because {reason}")
 
 
 def _composite_plan(context, tree, node, source, chain) -> InputPlan:
@@ -128,13 +123,13 @@ def _composite_plan(context, tree, node, source, chain) -> InputPlan:
         raise Refused(f"'{node.name}' is set to UV map {node.uv_map!r}, but the layers below "
                       f"use {below_named[0]!r}. {_FOLLOW_BELOW}")
     if not named:
-        return InputPlan(COMPOSITE, source, chain, "", "", None)
+        return InputPlan(source, chain, "", None)
     name = named[0]
     if "" not in below:
         # The mesh is not asked whether it has this map. That would make
         # the answer depend on the selection, and on a mesh without the
         # map the layers below show wrong anyway.
-        return InputPlan(COMPOSITE, source, chain, name, "", None)
+        return InputPlan(source, chain, name, None)
 
     obj, problem = surface_of(context, tree, node)
     if obj is None:
@@ -152,25 +147,7 @@ def _composite_plan(context, tree, node, source, chain) -> InputPlan:
         raise Refused(f"Layers below '{node.name}' use different UV maps on '{obj.name}' "
                       f"({name!r} and the render map {render!r}), "
                       "so filtering them needs a Cycles bake")
-    return InputPlan(COMPOSITE, source, chain, name, "", obj)
-
-
-def _bake_plan(context, tree, node, source, reason: str) -> InputPlan:
-    """The bake plan, after checking the bake's own requirements.
-
-    A bake renders the mesh, so it always needs one. It renders each
-    layer through its own UV map, so only the filter layer's own map
-    has to exist.
-    """
-    obj, problem = surface_of(context, tree, node)
-    if obj is None:
-        raise Refused(f"Filtering the layers below '{node.name}' needs a mesh to bake on, "
-                      f"because {reason}, but {problem}. {_PICK_MESH}")
-    resolved = resolve_uv_map(obj, node.uv_map)
-    if resolved is None:
-        raise Refused(f"Filtering the layers below '{node.name}' needs a Cycles bake, "
-                      f"and '{obj.name}' has no UV map named {node.uv_map!r}")
-    return InputPlan(BAKE, source, None, resolved, reason, obj)
+    return InputPlan(source, chain, name, obj)
 
 
 # ── The mesh a layer resolves against ────────────────────────────────

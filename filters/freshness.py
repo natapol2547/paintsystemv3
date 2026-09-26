@@ -116,7 +116,7 @@ def fingerprint_parts(ctx, node, below, surface=None) -> dict:
     # The part is only present when the layer is clipped. So a stamp
     # written without this part still matches for an unclipped layer. A
     # clipped layer with such a stamp reads as out of date. Its pixels
-    # are probably right, because both build paths honour the clip. But
+    # are probably right, because the build honours the clip. But
     # the stamp cannot say whether the layer was clipped before or after
     # the build, and clipping after the build is the case this part
     # exists to catch. One rebuild is the price.

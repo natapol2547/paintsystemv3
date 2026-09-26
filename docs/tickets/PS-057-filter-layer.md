@@ -413,8 +413,9 @@ An allocation failure is caught and reported by name.
 Conditions, each checked by name: every node below is Image, Solid,
 Folder or a valid filter layer; the blend mode is in
 `ALLOWED_BLEND_MODES`; no linked Mask input (PS-015); no clip reaching
-outside its own stack. A layer that fails one of these gets a plan on
-the bake path, with the reason. Every `uv_map` must also resolve to the
+outside its own stack. A layer that fails one of these needs the bake
+path, which is not built yet, so it is refused with the reason
+(`layer_plan._needs_bake`). Every `uv_map` must also resolve to the
 same UV layer, and no source may be UDIM; those two are refused
 outright. The names decide first, because they need no mesh:
 
@@ -440,20 +441,22 @@ used as the Object once it goes ahead (`layer_plan.keep_surface`), in
 its first unit. That is the one write before the commit, so a cancelled
 Update keeps it, outside any undo step; it names the mesh the next build
 would store anyway. On a linked tree the name lasts for the session,
-like the result the Update button builds beside it. The Cycles bake
-always needs a mesh, from the same place.
+like the result the Update button builds beside it. Once Path B is
+built, the Cycles bake will always need a mesh, from the same place.
 
 `ALLOWED_BLEND_MODES` is an allow-list a mode joins only once its
 per-texel parity test against a real Cycles bake of the library group
-passes (`tests/test_filter_blend.py`). A mode outside it is not a
-refusal; it goes to the bake path.
+passes (`tests/test_filter_blend.py`). A mode outside it needs the bake
+path, so today it is refused as needing a Cycles bake.
 
-**Path B, Cycles fallback (`compiler/bake.py`). Not built yet.** Today a
-plan on the bake path is refused by `layer_build.steps`, and the auto job
-stops on it with the same reason. The design, for when it lands: group
-layers, un-parity-tested blend modes, linked masks, and the layer types
-that genuinely evaluate surface data (PS-022 to PS-028) bake their input
-with Cycles. `bake_subtree(context, tree, node, obj, image, *, margin,
+**Path B, Cycles fallback (`compiler/bake.py`). Not built yet.** Today
+`layer_plan.resolve_input` refuses a stack that needs it, with the
+reason, so the Update button and the auto job show the same message.
+The bake plan that used to be prepared for it, only to be refused
+later, was removed until the bake is built. The design, for when it
+lands: group layers, un-parity-tested blend modes, linked masks, and the
+layer types that genuinely evaluate surface data (PS-022 to PS-028) bake
+their input with Cycles. `bake_subtree(context, tree, node, obj, image, *, margin,
 uv_map)` already exists as `bake_node_cache`'s body, extracted with the
 cache bookkeeping left behind in `bake_node_cache`.
 
@@ -741,10 +744,8 @@ job would interrupt whatever the user was doing.
   Clear its UV Map to follow them", or "… use the render map 'UVMap' on
   'Obj'. …" — the layers below agree, and only the filter layer's own UV
   Map differs
-- "Filtering the layers below 'X' needs a mesh to bake on, because …,
-  but …" — a bake plan with no mesh, with the same endings as above
-- "Filtering the layers below 'X' needs a Cycles bake, because …" — any
-  plan on the bake path, until Path B is built
+- "Filtering the layers below 'X' needs a Cycles bake, because …" — a
+  stack only the bake path could draw, until Path B is built
 - "The GPU does not have enough memory for an image this size"
 - "'X' asks for a filter this build does not have (KIND)" — a file from a
   newer build
@@ -966,8 +967,7 @@ values differently from the float readback it replaced, by one step in
 
 - The Cycles fallback (Path B) is not built. A filter layer over a group
   layer, a surface-data layer, a linked mask or a blend mode without a
-  parity test is refused. The auto job's message for it still starts
-  "Update needed", which Update cannot satisfy yet. When it is built, it
+  parity test is refused. When it is built, it
   must bake what feeds the filter (`feeding_link(below_input(node))`),
   not the filter itself: `build_ir`'s bake branch reads
   `ctx.output(stack_output(bake_target))`, which is the target's own
@@ -1027,8 +1027,8 @@ values differently from the float readback it replaced, by one step in
   the bake's tolerance.
 - `tests/test_filter_blend.py`: for every mode in `ALLOWED_BLEND_MODES`,
   the GPU blend matches a Cycles bake of the library group within 2/255.
-  A mode that fails is not in the list and goes to the bake path
-  instead.
+  A mode that fails is not in the list and is refused as needing a
+  bake instead.
 - A clipped layer above a filter layer composites onto the filter's
   pixels, and the stack below the filter is still emitted — the artifact
   has the lower layer's blend group and `Prev Color` linked.

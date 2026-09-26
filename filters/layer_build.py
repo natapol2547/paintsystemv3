@@ -49,7 +49,7 @@ from ..compiler.ir import hash_payload
 from ..gpu_passes.core import BAND_ROWS, read_color_bytes
 from ..png import RGBAStream
 from . import composite, derived, freshness, layer_plan
-from .core import FilterSpec, Refused, new_texture, run_pass
+from .core import FilterSpec, new_texture, run_pass
 from .layer_specs import layer_filter_kind
 from .registry import ENCODE_SRGB
 
@@ -92,9 +92,6 @@ def steps(context, tree, node, *, plan=None):
     """
     if plan is None:
         plan = layer_plan.resolve_input(context, tree, node)
-    if not plan.is_composite:
-        raise Refused(f"Filtering the layers below '{node.name}' needs a Cycles bake, "
-                      f"because {plan.reason}")
     kind = layer_filter_kind(node)
     # The build goes ahead, so the layer remembers the mesh it needed.
     # This is the one write before the commit. It is made here, not in

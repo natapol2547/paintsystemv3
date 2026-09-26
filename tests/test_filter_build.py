@@ -336,8 +336,8 @@ if available():
             lambda: layer_build.build_layer(bpy.context, alone, lonely)),
             "a filter layer with nothing under it")
 
-        # A bake renders a mesh. The cube shows the tree since the buttons
-        # above, so the plan gets as far as naming the bake.
+        # Only a Cycles bake could draw a group layer, and that is not
+        # built yet, so the build is refused with the reason.
         inner = bpy.data.node_groups.new("Build Inner", 'PaintSystemNodeTree')
         inner.initialize()
         group = tree.nodes.new('PaintSystemGroupLayerNode')

@@ -1,9 +1,9 @@
 """Which path a filter layer's input comes down (PS-057).
 
-`filters.layer_plan.resolve_input` decides between the GPU composite and
-a Cycles bake, and refuses when neither can run. It allocates nothing, so
-these need no GPU context and run everywhere -- what they check is the
-decision, not the pixels. `tests/test_filter_composite.py` checks the
+`filters.layer_plan.resolve_input` decides whether the GPU composite can
+draw the stack below a filter layer, and refuses with the reason when it
+cannot. It allocates nothing, so these need no GPU context and run
+everywhere -- what they check is the decision, not the pixels. `tests/test_filter_composite.py` checks the
 pixels.
 
 A composite samples every source image by normalised coordinate, so the
@@ -38,8 +38,8 @@ FOLDER = 'PaintSystemFolderLayerNode'
 FILTER = 'PaintSystemFilterLayerNode'
 
 # Background 4.2 to 5.1 have no way to reach a GPU context, so every
-# composite decision there ends at the bake instead. The decision is
-# still worth checking: what changes is only which side it lands on.
+# stack there is refused as needing a bake. The rules on which mesh
+# answers are still checked there, on `surface_of` directly.
 HAS_GPU = gpu_core.gpu_known() is not False
 
 
@@ -67,23 +67,24 @@ def mesh_with_uvs(name, uv_names, active_render=0, tree=None):
 def expect_composite(context, tree, node, label, mesh=None):
     """Resolve a stack that should composite, and return its plan.
 
-    With no GPU context here the same stack goes to the bake instead, and
-    None comes back. The bake needs a mesh, so it is refused unless the
-    caller names the *mesh* it should find.
+    With no GPU context here the same stack is refused as needing a bake,
+    and None comes back. `surface_of` is then asked whether it finds the
+    *mesh* the caller names.
     """
-    if HAS_GPU:
-        plan = layer_plan.resolve_input(context, tree, node)
-        check(plan.is_composite, f"{label}: {plan.path} {plan.reason}")
-        return plan
-    if mesh is None:
+    if not HAS_GPU:
         message = refusal(context, tree, node)
-        check("needs a mesh to bake on" in message and "GPU context" in message,
+        check("Cycles bake" in message and "GPU context" in message,
               f"{label}: no GPU context here, so refused: {message}")
+        if mesh is not None:
+            found, problem = layer_plan.surface_of(context, tree, node)
+            check(found == mesh, f"{label}: the mesh found is {found} {problem}")
         return None
-    plan = layer_plan.resolve_input(context, tree, node)
-    check(plan.path == layer_plan.BAKE and "GPU context" in plan.reason and plan.surface == mesh,
-          f"{label}: no GPU context here, so {plan.path} on {plan.surface} -- {plan.reason}")
-    return None
+    try:
+        plan, message = layer_plan.resolve_input(context, tree, node), ""
+    except filters_core.Refused as error:
+        plan, message = None, str(error)
+    check(plan is not None, f"{label}: {message or 'composites'}")
+    return plan
 
 
 def refusal(context, tree, node):
@@ -98,14 +99,17 @@ def refusal(context, tree, node):
 def expect_refusal(context, tree, node, wanted, label, composite_only=False):
     """Check that resolving refuses with a message holding *wanted*.
 
-    The rules on which mesh answers come from `surface_of` and hold for
-    the bake too. The rules on UV maps agreeing are *composite_only*.
-    With no GPU context the stack goes to the bake, which renders each
-    layer through its own map, so those have nothing to check there.
+    With no GPU context every stack is refused as needing a bake. The
+    rules on which mesh answers come from `surface_of`, so there they are
+    checked on the problem it reports. The rules on UV maps agreeing are
+    *composite_only*, and have nothing to check there.
     """
-    if HAS_GPU or not composite_only:
+    if HAS_GPU:
         message = refusal(context, tree, node)
         check(wanted in message, f"{label}: {message}")
+    elif not composite_only:
+        found, problem = layer_plan.surface_of(context, tree, node)
+        check(found is None and wanted in problem, f"{label}: {problem}")
 
 
 try:
@@ -283,7 +287,7 @@ try:
     expect_composite(FakeContext(), tree, node, "while a stack that needs none still resolves")
 
     section("keeping the mesh")
-    # Composite plans only: a bake plan always carries its mesh.
+    # Without a GPU context every stack is refused, so there is no plan.
     node.surface_name = ""
     if HAS_GPU:
         none_needed = layer_plan.resolve_input(FakeContext(plane), tree, node)
@@ -317,8 +321,7 @@ try:
         # tree. A pointer would have brought the library's copy along.
         check(len(bpy.data.objects) == objects, "loading a tree brings no mesh with it")
         shared_filter = next(n for n in shared.nodes if n.bl_idname == FILTER)
-        linked_plan = layer_plan.InputPlan(layer_plan.COMPOSITE, shared_filter, None,
-                                           "UVMap", "", plane)
+        linked_plan = layer_plan.InputPlan(shared_filter, None, "UVMap", plane)
         layer_plan.keep_surface(shared_filter, linked_plan)
         # The write marks the linked tree for a compile, which must run
         # before the library goes away.
@@ -352,7 +355,7 @@ try:
     if plan is not None:
         check(plan.surface == outer_mesh, f"resolves the inner tree's layer ({plan.surface})")
 
-    section("what falls back to a bake")
+    section("what needs a bake")
     node.surface_name = ""
     named.uv_map = ""
     core.flush_now()
@@ -361,18 +364,11 @@ try:
     group = tree.nodes.new('PaintSystemGroupLayerNode')
     group.node_tree = group_inner
     tree.links.new(group.outputs['Color'], bottom.inputs['Color'])
-    plan = layer_plan.resolve_input(FakeContext(plane), tree, node)
-    check(plan.path == layer_plan.BAKE and group.name in plan.reason,
-          f"a group layer below: {plan.path} -- {plan.reason}")
-    check(plan.uv_map == "UVMap" and plan.surface == plane,
-          f"the bake plan carries the mesh and its UV map ({plan.uv_map!r}, {plan.surface})")
-
-    message = refusal(FakeContext(), tree, node)
-    check("needs a mesh to bake on" in message,
-          f"and with nothing selected there is nowhere to bake: {message}")
-    message = refusal(FakeContext(stranger), tree, node)
-    check("needs a mesh to bake on" in message,
-          f"nor on a mesh that does not show the tree: {message}")
+    message = refusal(FakeContext(plane), tree, node)
+    check("Cycles bake" in message and group.name in message,
+          f"a group layer below is refused as needing a bake: {message}")
+    check(refusal(FakeContext(), tree, node) == refusal(FakeContext(stranger), tree, node) == message,
+          "whatever is selected, because no mesh can help until the bake is built")
     tree.links.remove(bottom.inputs['Color'].links[0])
     tree.nodes.remove(group)
     core.flush_now()
