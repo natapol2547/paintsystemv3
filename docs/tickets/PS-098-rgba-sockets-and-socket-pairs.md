@@ -46,7 +46,9 @@ During slice 2 the user also chose:
   result's freshness and the automatic refresh's error.
 - Remove Layer removes only the pair in the active channel's stack. The
   layer is deleted with its last pair, and the dialog says how many other
-  stacks it stays in.
+  stacks it stays in. The code review refined "last pair": a pair that
+  feeds nothing, such as a new one from Add Pair, does not keep the layer
+  (see "Adding and removing pairs").
 - The editing operators never put a layer in one channel twice. A repeat
   wired by hand still compiles, and the layer list shows its first row.
 
@@ -101,9 +103,9 @@ During slice 2 the user also chose:
 - Because a mask link now survives a move, a move can close a loop: a
   layer moved above the layer it masks would read that layer's result
   while feeding its mask. `move` checks for a loop through the moved
-  layer after placing it, and puts the layer back and returns False when
-  it finds a new one (found by the code review; the old `detach` cut the
-  mask link instead).
+  layer after placing it, and puts the layer back when it finds a new one
+  (found by the code review; the old `detach` cut the mask link instead).
+  Slice 2 checks pair by pair.
 - Apart from the nodes that create them, `below_input`, `stack_output`,
   `content_input` and `channel_input` in `nodetree/stack_ops.py` are the
   only code that names the sockets a stack runs through; `Mask` is read
@@ -158,11 +160,24 @@ During slice 2 the user also chose:
   (`PAINTSYSTEM_PT_layer_pairs`). It lists the active layer's pairs, each
   with the channel its stack reaches, or "In no stack". Add Pair adds a
   pair in no stack. Remove Pair takes the selected pair out of its stack,
-  closes the gap and removes the pair with its filter result. The last
+  closes the gap and removes the pair with its filter result
+  (`stack_ops.remove_pair`). It never deletes the layer, and the last
   pair cannot be removed. The list's selection, `active_pair_index`, is
   left out of the compile hash.
-- Remove Layer removes only the pair in the active channel's stack. A
-  folder's content goes only when the folder itself is deleted.
+- Removing a pair's input leaves Blender with dangling internal links, the
+  pass-through a muted node uses, when several outputs took theirs from
+  that input. The next depsgraph update then crashes on 4.5 and later.
+  `remove_pair` unlinks the input and moves it after the other pair
+  inputs first, so Blender chooses the links again without it
+  (`tests/test_pairs.py` crashed without this).
+- Remove Layer removes only the pair in the active channel's stack, and
+  needs the active layer to be in that stack. The layer is deleted when
+  none of its other pairs feeds anything: another stack, a mask or any
+  other node. A folder's content goes only when the folder itself is
+  deleted, on the same rule, and links into nodes deleted in the same
+  removal do not count. `stack_ops.removal` works this out first, and the
+  dialog says which other channels the layer stays in, or that it stays
+  in the tree because a pair still feeds something.
 - The layer list shows a placeholder `LINKED` badge on a layer with more
   than one pair.
 
@@ -172,8 +187,14 @@ During slice 2 the user also chose:
   position: its cache (`PairCache`) and, on a filter layer, its result,
   freshness and refresh error (`PaintSystemFilterPair`). Settings stay on
   the layer and are shared, Auto Refresh and the cache's UV map included.
+  A bake that changes the UV map sends the other pairs' caches back to
+  baking, since they were baked with the old one. The bake dialog starts
+  from the layer's UV map.
 - Bake Cache, Update Filter and Clear Result act on the pair in the
   active channel's stack (`pair_in_stack`).
+- An automatic filter refresh remembers the position of the pair it
+  builds, and drops the build when that pair moves or goes, since the
+  position would then name another pair.
 - In-memory tables, such as the refresh job and its counts, key a pair
   by `pair_key`: the node's uuid and the output's identifier. Blender
   gives a new socket the identifier of one removed earlier, so
@@ -191,13 +212,33 @@ During slice 2 the user also chose:
   twice without a cycle, for example inside a linked folder and again
   below it. `move` refuses to make that (`stack_ops.repeats`). Paste
   Linked must refuse it too.
+- The same per-node check flags two layers stacked in opposite orders in
+  two channels, and Blender draws one of their links red. Each pair
+  compiles on its own, so that is allowed. `move` checks for loops pair by
+  pair (`loops_back`), and refuses a move only when the moved pair would
+  read its own output, as through a mask link. It returns why it refused,
+  `'LOOP'` or `'REPEAT'`, and the Move operators report that.
 
 ### File compatibility
 
-- No migration. `complete_pairs` runs when a file is read, and gives
-  every layer in the editable trees a virtual input and a state per pair.
+- No migration. `complete_pairs` gives every layer in the editable trees
+  a virtual input and a state per pair. It runs when a file is read, and
+  before every compile, which covers a tree appended from an older file.
   A layer saved before pairs existed bakes its cache and builds its
   filter result again.
+
+### Known gaps
+
+- Delete with Reconnect (Ctrl+X) and Detach Links in the node editor use
+  Blender's internal links, which map every pair output to the first
+  linked pair input. On a layer with several pairs they wire every stack
+  to the stack below pair 0. Remove Layer and Remove Pair are correct.
+  Blender has no Python API for a node's internal links, so a fix would
+  be a Paint System operator on Ctrl+X in the addon's own node editor
+  keymap.
+- A layer node's body in the node editor finds the pair in the active
+  channel by walking that channel's stack, about 0.4 ms per redraw for a
+  layer with several pairs in a 40-layer stack. That is left as it is.
 
 ## Acceptance
 
@@ -227,10 +268,15 @@ During slice 2 the user also chose:
   - Removing a pair, from the sidebar list or with Remove Layer, keeps
     the other pairs' links and compiled nodes; the last pair cannot be
     removed from the list (`tests/test_pairs.py`).
+  - Remove Layer deletes a layer that no other pair keeps, and a folder's
+    content that nothing else reads (`tests/test_pairs.py`).
+  - Removing a pair of a tree Blender evaluates leaves no dangling
+    internal link (`tests/test_pairs.py`).
   - A folder's pairs share its content (`tests/test_pairs.py`).
-  - Moves never put a layer in one channel twice (`tests/test_pairs.py`).
+  - Moves never put a layer in one channel twice, allow opposite orders
+    in two channels and refuse a pair loop (`tests/test_pairs.py`).
   - A layer saved before pairs gets its virtual input and pair states
-    when the file is read (`tests/test_layers.py`).
+    before the tree compiles (`tests/test_layers.py`).
   - The pair list draws in the node editor sidebar
     (`tests/test_ui_draw.py`, CI only).
   - Dragging a link onto the virtual socket in the node editor, and the
