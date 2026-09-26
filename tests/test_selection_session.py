@@ -21,6 +21,7 @@ from harness import check, finish, guarded, import_from, register_addon, section
 register_addon()
 core = import_from("gpu_passes.core")
 raster = import_from("selection.raster")
+reasons = import_from("selection.reasons")
 session = import_from("selection.session")
 stencil = import_from("selection.stencil")
 selection_ops = import_from("ops.selection_ops")
@@ -189,7 +190,7 @@ def test_sync_compares_state():
     session.sync()
 
     if not HAS_GPU:
-        check(moved.reason == 'NO_GPU' and moved.message == raster.MESSAGES['NO_GPU'],
+        check(moved.reason == 'NO_GPU' and moved.message == reasons.TEXTS['NO_GPU'].message,
               f"without a GPU context the state says why ({moved.reason})")
         count = len(reaches)
         session.sync()

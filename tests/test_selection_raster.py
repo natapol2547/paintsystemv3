@@ -34,6 +34,7 @@ from harness import check, finish, guarded, import_from, op_points, register_add
 register_addon()
 core = import_from("gpu_passes.core")
 raster = import_from("selection.raster")
+reasons = import_from("selection.reasons")
 selftest = import_from("selection.raster_selftest")
 
 TREE = "PS Selection Raster Tree"
@@ -860,10 +861,10 @@ def test_problems():
         raster.get_mask(sel, size=SIZE)
         check(False, "a VIEW box without an object raises SURFACE")
     except raster.MaskUnavailable as error:
-        check(error.reason == 'SURFACE' and error.op_index == 1 and str(error) == raster.MESSAGES['SURFACE'],
+        check(error.reason == 'SURFACE' and error.op_index == 1 and str(error) == reasons.TEXTS['SURFACE'].message,
               f"a VIEW box without an object raises SURFACE at op 1 and a VIEW ALL does not "
               f"({error.reason}, {error.op_index})")
-    check(raster.MESSAGES['VIEW'] == "This selection's view is invalid"
+    check(reasons.TEXTS['VIEW'].message == "This selection's view is invalid"
           and raster.GEOMETRY_REASONS == {'SURFACE', 'VIEW', 'EDIT_MODE'},
           "VIEW has its own message, and the reasons that depend on objects are listed")
     sel = fresh_selection()
@@ -899,7 +900,7 @@ def test_problems():
             raster.get_mask(sel, size=size)
             check(False, f"{label} raises {reason}")
         except raster.MaskUnavailable as error:
-            check(error.reason == reason and str(error) == raster.MESSAGES[reason],
+            check(error.reason == reason and str(error) == reasons.TEXTS[reason].message,
                   f"{label} raises {reason} with the public message ({error.reason})")
     missing = bpy.data.images.new("PS Selection Missing", 4, 4)
     missing.source = 'FILE'

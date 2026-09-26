@@ -51,6 +51,7 @@ from ..common import redraw_paint_views
 from ..gpu_passes import core
 from ..gpu_passes.texel_map import resolve_uv_map
 from . import overlay, raster, stencil
+from .reasons import TEXTS
 
 log = logging.getLogger(__name__)
 
@@ -68,26 +69,6 @@ NO_LAYER = "NO_LAYER"
 NO_IMAGE = "NO_IMAGE"
 UDIM = "UDIM"
 NO_UV_MAP = "NO_UV_MAP"
-
-_TARGET_MESSAGES = {
-    NO_LAYER: "No active layer",
-    NO_IMAGE: "Active layer has no image",
-    UDIM: "UDIM layers are not supported yet",
-    NO_UV_MAP: "Layer's UV map is missing",
-}
-
-_LABELS = {
-    'NO_GPU': "No GPU context",
-    'NO_SIZE': "Layer image has no pixels",
-    'TOO_LARGE': "Image too large for a selection",
-    'UNSUPPORTED': "Operation not supported yet",
-    'TOO_COMPLEX': "Lasso too complex",
-    'SELF_TEST': "GPU failed the selection self-test",
-    'GPU_ERROR': "GPU error, retrying",
-    'SURFACE': "Selection's object or UV map is gone",
-    'VIEW': "Selection's view is invalid",
-    'EDIT_MODE': "Leave Edit Mode to use the selection",
-}
 
 NOTHING_SELECTED = "Nothing selected"
 """Label of a selection whose mask selects no texel (`State.empty`)."""
@@ -181,7 +162,7 @@ def _state(context) -> tuple[State, Target | None]:
         if tree is None or not len(tree.selection.ops):
             return State(scene_uid, tree.session_uid if tree is not None else 0, paint_mode=paint_mode), None
         return State(scene_uid, tree.session_uid, selected=True, paint_mode=paint_mode,
-                     reason=reason, message=_TARGET_MESSAGES[reason]), None
+                     reason=reason, message=TEXTS[reason].message), None
     selection = target.tree.selection
     selected = len(selection.ops) > 0
     # The provider is called for outlined VIEW ops only, so a selection
@@ -205,7 +186,7 @@ def _build(state: State, target: Target) -> State:
     """
     if core.gpu_known() is not True:
         # Never start a background GPU context from here (see gpu_passes.core).
-        return dataclasses.replace(state, reason='NO_GPU', message=raster.MESSAGES['NO_GPU'], empty=False)
+        return dataclasses.replace(state, reason='NO_GPU', message=TEXTS['NO_GPU'].message, empty=False)
     try:
         empty = raster.get_mask(target.tree.selection, target.size, target.tile).is_empty()
     except raster.MaskUnavailable as error:
@@ -220,7 +201,7 @@ def _build(state: State, target: Target) -> State:
         # Reading the mask back raises when no GPU context is active.
         log.debug("Selection mask could not be read back: %s", str(error))
         _retries[state.digest] = _retries.get(state.digest, 0) + 1
-        return dataclasses.replace(state, reason='GPU_ERROR', message=raster.MESSAGES['GPU_ERROR'], empty=False)
+        return dataclasses.replace(state, reason='GPU_ERROR', message=TEXTS['GPU_ERROR'].message, empty=False)
     _retries.pop(state.digest, None)
     return dataclasses.replace(state, empty=empty)
 
@@ -309,7 +290,8 @@ def label(state: State) -> str:
         return NOTHING_SELECTED
     if state.reason == 'GPU_ERROR' and _retries.get(state.digest, 0) >= RETRY_LIMIT:
         return GPU_ERROR_GIVEN_UP
-    return _TARGET_MESSAGES.get(state.reason) or _LABELS.get(state.reason, state.message)
+    text = TEXTS.get(state.reason)
+    return text.label if text is not None else state.message
 
 
 def forget_failures() -> None:

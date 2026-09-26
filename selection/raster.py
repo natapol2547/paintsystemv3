@@ -75,6 +75,7 @@ from ..props.selection import FEATHER_MAX, OUTLINELESS_KINDS, POINTS_KEY, SPACEL
 from . import outline, view_raster
 from .raster_glsl import (LASSO_FRAGMENT_SOURCE, QUANTISE_FRAGMENT_SOURCE, QUANTISE_VERTEX_SOURCE,
                           SHAPE_FRAGMENT_SOURCE)
+from .reasons import MALFORMED_POINTS, TEXTS, UNSUPPORTED_KIND_MESSAGES
 
 log = logging.getLogger(__name__)
 
@@ -96,24 +97,6 @@ will be added with the tools that create them (PS-093, PS-094)."""
 
 _MODE_UNIFORMS = {'REPLACE': 0, 'ADD': 1, 'SUBTRACT': 2, 'INTERSECT': 3}
 _SHAPE_ALL, _SHAPE_BOX, _SHAPE_ELLIPSE, _SHAPE_INVERT, _SHAPE_NOTHING = range(5)
-
-_UNSUPPORTED_KIND_MESSAGES = {
-    'FACES': "Selections with a faces operation cannot be built yet",
-    'RASTER': "Selections with a raster operation cannot be built yet",
-    'TRANSFORM': "Selections with a transform operation cannot be built yet",
-}
-MESSAGES = {
-    'NO_GPU': "This Blender session has no GPU context, so the selection cannot be built",
-    'NO_SIZE': "The selection has no image with pixels to take its size from",
-    'TOO_LARGE': "The image is too large for a selection mask",
-    'VIEW': "This selection's view is invalid",
-    'SURFACE': "The object or UV map this selection was drawn on is gone",
-    'EDIT_MODE': "Leave Edit Mode to use this selection",
-    'POINTS': "A selection operation has malformed points",
-    'TOO_COMPLEX': "The lasso outline is too complex to build",
-    'SELF_TEST': "The GPU failed the selection self-test, so selections are disabled in this session",
-    'GPU_ERROR': "The GPU could not build the selection right now; try again",
-}
 
 GEOMETRY_REASONS = frozenset(('SURFACE', 'VIEW', 'EDIT_MODE'))
 """Failure reasons that depend on the objects a selection was drawn on,
@@ -189,7 +172,7 @@ def _resources() -> dict:
 
 
 class MaskUnavailable(RuntimeError):
-    """Raised when a mask cannot be built. `str()` is a message for the UI.
+    """Raised when a mask cannot be built. `str()` is a message for the UI (`reasons.TEXTS`).
 
     `reason` is one of `NO_GPU`, `NO_SIZE`, `TOO_LARGE`, `UNSUPPORTED`,
     `TOO_COMPLEX`, `SELF_TEST`, `GPU_ERROR` or one of `GEOMETRY_REASONS`.
@@ -458,7 +441,7 @@ def _run_chain(specs, source, targets, width: int, height: int, tile: int) -> No
             try:
                 _run_pass(spec, source, target, width, height, tile)
             except outline.OutlineTooComplex:
-                failure = ('TOO_COMPLEX', MESSAGES['TOO_COMPLEX'], step)
+                failure = ('TOO_COMPLEX', TEXTS['TOO_COMPLEX'].message, step)
                 break
             except MaskUnavailable as error:
                 failure = (error.reason, str(error), step)
@@ -511,10 +494,10 @@ def render(specs, width: int, height: int, tile: int = 1001) -> np.ndarray:
     """
     problem = _target_problem(width, height)
     if problem is not None:
-        raise MaskUnavailable(problem, MESSAGES[problem])
+        raise MaskUnavailable(problem, TEXTS[problem].message)
     for index, spec in enumerate(specs):
         if spec.kind not in SUPPORTED_KINDS:
-            message = _UNSUPPORTED_KIND_MESSAGES.get(spec.kind, "This selection operation cannot be built")
+            message = UNSUPPORTED_KIND_MESSAGES.get(spec.kind, TEXTS['UNSUPPORTED'].message)
             raise MaskUnavailable('UNSUPPORTED', message, index)
     specs = list(specs)
     if not specs:
@@ -646,24 +629,24 @@ def _problem(selection, width: int, height: int, probe: bool = True,
     """
     reason = _target_problem(width, height, probe)
     if reason is not None:
-        return reason, MESSAGES[reason], -1
+        return reason, TEXTS[reason].message, -1
     ops = selection.ops
     drawn_in_view = False
     for index in range(selection.chain_start(), len(ops)):
         op = ops[index]
         if op.kind not in SUPPORTED_KINDS:
-            return 'UNSUPPORTED', _UNSUPPORTED_KIND_MESSAGES[op.kind], index
+            return 'UNSUPPORTED', UNSUPPORTED_KIND_MESSAGES[op.kind], index
         if op.kind not in OUTLINELESS_KINDS:
             raw = op.get(POINTS_KEY)
             if raw is not None and points_view(raw) is None:
-                return 'UNSUPPORTED', MESSAGES['POINTS'], index
+                return 'UNSUPPORTED', MALFORMED_POINTS, index
         if op.space == 'VIEW' and op.kind not in SPACELESS_KINDS:
             reason = _view_problem(op, surface_key)
             if reason is not None:
-                return reason, MESSAGES[reason], index
+                return reason, TEXTS[reason].message, index
             drawn_in_view = True
     if _self_test_result is False or (drawn_in_view and view_raster._view_self_test_result is False):
-        return 'SELF_TEST', MESSAGES['SELF_TEST'], -1
+        return 'SELF_TEST', TEXTS['SELF_TEST'].message, -1
     return None
 
 
@@ -789,9 +772,9 @@ def get_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=vie
         return _masks.touch(digests[last])
     passed = self_test()
     if passed is None:
-        _raise(('GPU_ERROR', MESSAGES['GPU_ERROR'], -1), digests[last])
+        _raise(('GPU_ERROR', TEXTS['GPU_ERROR'].message, -1), digests[last])
     if not passed:
-        _raise(('SELF_TEST', MESSAGES['SELF_TEST'], -1), digests[last])
+        _raise(('SELF_TEST', TEXTS['SELF_TEST'].message, -1), digests[last])
 
     start = selection.chain_start()
     source_index = None
@@ -804,9 +787,9 @@ def get_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=vie
     if any(spec.view is not None for spec in specs):
         passed = view_raster.view_self_test()
         if passed is None:
-            _raise(('GPU_ERROR', MESSAGES['GPU_ERROR'], -1), digests[last])
+            _raise(('GPU_ERROR', TEXTS['GPU_ERROR'].message, -1), digests[last])
         if not passed:
-            _raise(('SELF_TEST', MESSAGES['SELF_TEST'], -1), digests[last])
+            _raise(('SELF_TEST', TEXTS['SELF_TEST'].message, -1), digests[last])
     passes = len(specs)
     keep = set() if source_index is None else {digests[source_index]}
     _evict(min(passes, 2) * width * height * 4, keep, width, height)
@@ -824,7 +807,7 @@ def get_mask(selection, size: tuple[int, int], tile: int = 1001, surface_key=vie
         # gpu.types raises RuntimeError when no GPU context is active or an
         # allocation fails. A later build may succeed.
         log.debug("Selection mask build failed: %s", str(error))
-        failure = ('GPU_ERROR', MESSAGES['GPU_ERROR'], -1)
+        failure = ('GPU_ERROR', TEXTS['GPU_ERROR'].message, -1)
     if failure is not None:
         _return_to_pool(targets, width, height)
         # Nothing the traceback keeps may hold a texture (see `_run_chain`).

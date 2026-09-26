@@ -36,6 +36,7 @@ surface = import_from("gpu_passes.surface")
 texel_map = import_from("gpu_passes.texel_map")
 raster = import_from("selection.raster")
 view_raster = import_from("selection.view_raster")
+reasons = import_from("selection.reasons")
 selftest = import_from("selection.raster_selftest")
 session = import_from("selection.session")
 
@@ -271,7 +272,7 @@ def test_self_test_failure():
         raster.invalidate()
         check(view_raster.view_self_test() is False, "with one expected value wrong, view_self_test() fails")
         check(failure(view_selection) == ('SELF_TEST', -1)
-              and raster.availability(view_selection, (SIZE, SIZE)) == raster.MESSAGES['SELF_TEST'],
+              and raster.availability(view_selection, (SIZE, SIZE)) == reasons.TEXTS['SELF_TEST'].message,
               f"a VIEW selection raises SELF_TEST and availability says so ({failure(view_selection)})")
         uv_selection = fresh_selection()
         uv_selection.add_op('BOX', points=[(0.1, 0.1), (0.6, 0.6)])

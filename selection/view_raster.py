@@ -41,6 +41,7 @@ from ..gpu_passes import core, texel_map
 from ..lru import LRUCache
 from . import raster
 from .raster_glsl import COMMON_SOURCE
+from .reasons import TEXTS
 
 REACH_PAD = 1.5
 """Pixels of signed distance kept beyond the soft edge, so the bilinear
@@ -436,10 +437,10 @@ def run_view_pass(spec: "raster.OpSpec", source, target, width: int, height: int
     view = spec.view
     surface_map = view.surface.texel_map(width, height, tile)
     if surface_map is None:
-        raise raster.MaskUnavailable('SURFACE', raster.MESSAGES['SURFACE'])
+        raise raster.MaskUnavailable('SURFACE', TEXTS['SURFACE'].message)
     batch = None if view.through else view.surface.batch()
     if not view.through and batch is None:
-        raise raster.MaskUnavailable('SURFACE', raster.MESSAGES['SURFACE'])
+        raise raster.MaskUnavailable('SURFACE', TEXTS['SURFACE'].message)
     region_width, region_height = view.region
     targets = _region_targets(view.region)
     half_width = raster._half_width(spec.feather, spec.antialias)
