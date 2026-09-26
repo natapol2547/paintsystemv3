@@ -208,14 +208,19 @@ def producing_link(socket) -> bpy.types.NodeLink | None:
 #
 # A layer takes each stack it sits in on one input and gives it back on
 # one output. That input and output are a pair. Pairs are numbered by
-# position: the n-th pair input goes with the n-th output. The first
-# pair input is always the layer's first input. A folder's
-# ``Content Color`` and ``Mask`` are shared by every pair.
+# position: the n-th pair input goes with the n-th output.
+#
+# A layer's inputs are its pair inputs, then its virtual input, then the
+# inputs every pair shares: a folder's ``Content Color``, and ``Mask``,
+# which is always last. So the first pair input is always the first
+# input. A link dropped on the virtual input adds a pair and moves onto
+# its input (``PaintSystemLayerNode.update``).
 #
 # Identifiers cannot match an input to its output: inputs and outputs
 # number their identifiers separately, and Blender gives a new socket the
-# number of one removed earlier. Every pair socket is also named after
-# its pair, not after the stack, so names cannot match them either.
+# identifier of one removed earlier. Every pair socket is also named
+# after its pair, not after the stack (``pair_name``), so names cannot
+# match them either.
 #
 # What a pair builds for its stack, a cache or a filter result, is kept
 # in the layer's ``pairs`` collection, at the pair's position.
@@ -223,6 +228,13 @@ def producing_link(socket) -> bpy.types.NodeLink | None:
 CONTENT = 'Content Color'
 MASK = 'Mask'
 VIRTUAL_SOCKET = 'NodeSocketVirtual'
+# The identifier Blender's own nodes give their virtual sockets.
+VIRTUAL_ID = '__extend__'
+
+
+def pair_name(pair: int) -> str:
+    """The name of both sockets of a layer's *pair*: ``Color``, then ``Color 2`` and so on."""
+    return "Color" if pair == 0 else f"Color {pair + 1}"
 
 
 def is_virtual(socket) -> bool:
@@ -265,7 +277,7 @@ def pair_of_output(socket) -> int:
 
 
 def virtual_input(node):
-    """The layer's virtual input, or None while ``init`` has not added it yet."""
+    """The layer's virtual input, or None while ``init`` or a file read has not added it yet."""
     return next((socket for socket in node.inputs if is_virtual(socket)), None)
 
 

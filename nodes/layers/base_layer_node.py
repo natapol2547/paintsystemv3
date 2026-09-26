@@ -9,8 +9,9 @@ from ...common import icon_kwargs
 from ...compiler.core import ps_trees
 from ...compiler.library import layer_blend_group
 from ...context import update_active_image
-from ...nodetree.stack_ops import (below_input, clip_base, feeds_clip_run, is_layer, pair_count,
-                                   pair_role, stack_output)
+from ...nodetree.stack_ops import (VIRTUAL_ID, VIRTUAL_SOCKET, below_input, clip_base,
+                                   feeds_clip_run, is_layer, pair_count, pair_inputs, pair_name,
+                                   pair_role, stack_output, virtual_input)
 
 
 def update_painting(self, context):
@@ -51,6 +52,18 @@ def new_hidden_input(node, socket_type: str, name: str, default):
     socket.default_value = default
     socket.hide_value = True
     return socket
+
+
+def _after_pairs(node) -> int:
+    """The index just below the layer *node*'s last pair input, where its virtual input goes."""
+    last = pair_inputs(node)[-1]
+    return next(index for index, socket in enumerate(node.inputs) if socket == last) + 1
+
+
+def add_virtual_input(node) -> None:
+    """Give the layer *node* its virtual input, just below its pair inputs."""
+    node.inputs.new(VIRTUAL_SOCKET, "", identifier=VIRTUAL_ID)
+    node.inputs.move(len(node.inputs) - 1, _after_pairs(node))
 
 
 def draw_uv_map(context, layout, node, obj=None, prop="uv_map"):
@@ -126,27 +139,33 @@ class PaintSystemLayerPair(PairCache, PropertyGroup):
     """What one pair of a layer builds for its stack (``stack_ops``, "Pairs")."""
 
 
-def add_missing_pair_states() -> None:
-    """Give every layer in the file's editable trees a state for each of its pairs.
+def complete_pairs() -> None:
+    """Give every layer in the file's editable trees a virtual input and a state per pair.
 
-    Called when a file is read. A layer saved before pairs had state has
-    none. Its old cache and filter result are not carried over, because
-    v3 is unreleased: the layer bakes and builds again instead (PS-098).
+    Called when a file is read. A layer saved before pairs existed has
+    neither. Its old cache and filter result are not carried over,
+    because v3 is unreleased: the layer bakes and builds again instead
+    (PS-098).
     """
     for tree in ps_trees():
         if not tree.is_editable:
             continue
         for node in tree.nodes:
-            if is_layer(node):
-                for _missing in range(pair_count(node) - len(node.pairs)):
-                    node.pairs.add()
+            if not is_layer(node):
+                continue
+            if virtual_input(node) is None:
+                add_virtual_input(node)
+            for _missing in range(pair_count(node) - len(node.pairs)):
+                node.pairs.add()
 
 
 class PaintSystemLayerNode(PaintSystemBaseNode):
-    """A layer. It takes the stack below on ``Color`` and outputs a new stack.
+    """A layer. For each stack it sits in, it takes the stack below and outputs a new one.
 
-    Each link carries the stack as one RGBA value. ``Mask`` is always the
-    last input.
+    Each stack goes through a pair of sockets, ``Color`` for the first
+    (``stack_ops``, "Pairs"). Each link carries the stack as one RGBA
+    value. Linking into the virtual input adds a pair, and ``Mask`` is
+    always the last input.
 
     Subclasses implement ``emit_source(ctx, pair)``, which returns
     ``(color, alpha)``. Each is an IR ref or a constant. Blending is shared
@@ -237,10 +256,56 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
 
     def init(self, context):
         super().init(context)
-        new_hidden_input(self, 'NodeSocketColor', "Color", (0, 0, 0, 0))
+        new_hidden_input(self, 'NodeSocketColor', pair_name(0), (0, 0, 0, 0))
+        add_virtual_input(self)
         new_hidden_input(self, 'NodeSocketFloat', "Mask", 1.0)
-        self.outputs.new('NodeSocketColor', "Color")
+        self.outputs.new('NodeSocketColor', pair_name(0))
         self.pairs.add()
+
+    def update(self):
+        # Blender calls this on every node when the tree's links change,
+        # before ``NodeTree.update`` compiles. So a link dropped on the
+        # virtual input moves onto a new pair before the compile sees it.
+        # Unlike ``NodeTree.update``, this callback may link. Afterwards
+        # nothing is linked into the virtual input, so calling it again
+        # does nothing.
+        virtual = virtual_input(self)
+        if virtual is None or not virtual.is_linked:
+            return
+        links = self.id_data.links
+        for link in list(virtual.links):
+            source = link.from_socket
+            links.remove(link)
+            links.new(source, self.add_pair())
+
+    def add_pair(self):
+        """Give this layer a new pair after its others, and return the pair's input.
+
+        The input goes just above the virtual input. The pair sits in no
+        stack until something links to it.
+        """
+        pair = pair_count(self)
+        index = _after_pairs(self)
+        new_hidden_input(self, 'NodeSocketColor', pair_name(pair), (0, 0, 0, 0))
+        self.inputs.move(len(self.inputs) - 1, index)
+        self.outputs.new('NodeSocketColor', pair_name(pair))
+        self.pairs.add()
+        return below_input(self, pair)
+
+    def remove_pair(self, pair: int) -> None:
+        """Remove *pair*'s sockets and state, and name the pairs after it again.
+
+        The other pairs keep their links. ``stack_ops.remove`` takes the
+        pair out of its stack first, and deletes the layer instead when
+        this is its last pair.
+        """
+        self.inputs.remove(below_input(self, pair))
+        self.outputs.remove(stack_output(self, pair))
+        self.pairs.remove(pair)
+        for index, sockets in enumerate(zip(pair_inputs(self), self.outputs)):
+            for socket in sockets:
+                if socket.name != pair_name(index):
+                    socket.name = pair_name(index)
 
     @classmethod
     def create(cls, tree, target=None, ps_object=None, **options):

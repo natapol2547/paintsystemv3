@@ -254,14 +254,22 @@ try:
     check(all(len(node.pairs) == stack_ops.pair_count(node) == 1
               for node in tree.nodes if stack_ops.is_layer(node)),
           "every new layer has one state for its one pair")
-    # A layer saved before pairs had state reads back with none.
-    tree.nodes["A"].pairs.clear()
-    tree.nodes["F"].pairs.clear()
-    base_layer_node.add_missing_pair_states()
+    # A layer saved before pairs existed reads back with no state and no
+    # virtual input.
+    for name in ("A", "F"):
+        node = tree.nodes[name]
+        node.pairs.clear()
+        node.inputs.remove(stack_ops.virtual_input(node))
+    base_layer_node.complete_pairs()
     check(len(tree.nodes["A"].pairs) == 1 and len(tree.nodes["F"].pairs) == 1,
           "reading a file gives such a layer a state for each pair")
-    base_layer_node.add_missing_pair_states()
-    check(len(tree.nodes["A"].pairs) == 1, "and a second pass adds nothing")
+    check([socket.identifier for socket in tree.nodes["A"].inputs] == ["Color", "__extend__", "Mask"]
+          and [socket.identifier for socket in tree.nodes["F"].inputs]
+          == ["Color", "__extend__", "Content Color", "Mask"],
+          "and a virtual input below its pair inputs")
+    base_layer_node.complete_pairs()
+    check(len(tree.nodes["A"].pairs) == 1 and len(tree.nodes["A"].inputs) == 3,
+          "and a second pass adds nothing")
     check(core.compile_tree(tree), "so it compiles")
 
     section("layer type registry")

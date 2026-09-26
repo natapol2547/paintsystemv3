@@ -359,6 +359,11 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             node.surface_name = ps_object.name
         return node
 
+    def remove_pair(self, pair):
+        # Before the sockets go, while the pair still has its key.
+        layer_job.forget(self, pair)
+        super().remove_pair(pair)
+
     @property
     def surface_object(self):
         """The object ``surface_name`` names, or None."""

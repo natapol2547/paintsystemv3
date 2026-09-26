@@ -89,9 +89,10 @@ try:
     check([(node.name, pair) for node, pair in stack_ops.removal(f)] == [("F", 0), ("G", 0), ("C", 0), ("B", 0)],
           "removing a folder takes its nested content, top first")
     check(tree.nodes["C"].location.y > g.location.y > a.location.y, "folder content is laid out above its folder")
-    check([socket.name for socket in a.inputs] == ["Color", "Mask"], "a layer takes Color, then Mask")
-    check([socket.name for socket in f.inputs] == ["Color", "Content Color", "Mask"],
-          "a folder takes Color, then Content Color, with Mask last")
+    check([socket.identifier for socket in a.inputs] == ["Color", "__extend__", "Mask"],
+          "a layer takes Color, then its virtual input, then Mask")
+    check([socket.identifier for socket in f.inputs] == ["Color", "__extend__", "Content Color", "Mask"],
+          "a folder takes Content Color below its virtual input, with Mask last")
     check_one_link(tree, "after inserts")
 
     section("insert into folders")

@@ -26,9 +26,10 @@ class PaintSystemBaseNode:
     # Python property would hide the built-in one, and before Blender 5.2
     # ``nodes.get`` still looks up the built-in name, so the two can differ.
 
-    # No ``update`` override. When links change, Blender calls
-    # ``Node.update`` on every node of the tree and then
-    # ``NodeTree.update`` once. That last call compiles.
+    # When links change, Blender calls ``Node.update`` on every node of
+    # the tree and then ``NodeTree.update`` once. That last call
+    # compiles. Only layers override ``update``, to turn a link into
+    # their virtual input into a new pair.
 
     is_layer_node = False
     is_folder = False

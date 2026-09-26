@@ -188,6 +188,20 @@ def settled(node, pair: int) -> None:
         _poked = True
 
 
+def forget(node, pair: int) -> None:
+    """Drop the job and the counts of *node*'s *pair*, which is about to be removed.
+
+    Blender can give the next new pair the removed pair's output
+    identifier, and with it the same key. The new pair must not inherit
+    the old one's counts or its build.
+    """
+    key = pair_key(node, pair)
+    if _job is not None and _job.key == key:
+        _drop(_job)
+    _builds.pop(key, None)
+    _restarts.pop(key, None)
+
+
 def scene_changed() -> None:
     """Ask again for any layer that is waiting. Called on every depsgraph update.
 
@@ -316,7 +330,7 @@ def _drop(job) -> None:
     job.close()
     _builds.pop(job.key, None)
     _restarts.pop(job.key, None)
-    log.debug("dropped the refresh of %s: the layer is gone", job.node_name)
+    log.debug("dropped the refresh of %s: its pair is gone", job.node_name)
 
 
 def _uncount(job) -> None:
