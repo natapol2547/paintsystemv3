@@ -302,7 +302,21 @@ class PaintSystemLayerNode(PaintSystemBaseNode):
         pair out of its stack first, and deletes the layer instead when
         this is its last pair.
         """
-        self.inputs.remove(below_input(self, pair))
+        doomed = below_input(self, pair)
+        # Blender gives each output an internal link, the pass-through a
+        # muted node uses, and several outputs can take it from the same
+        # input. Removing that input drops only one of those links. The
+        # rest point at freed memory and crash the next depsgraph update
+        # on Blender 4.5 and later. Blender chooses the links again
+        # whenever a link or the socket order changes, and of two pair
+        # inputs it never chooses a later, unlinked one. So the input is
+        # unlinked and moved after the other pair inputs before it goes.
+        links = self.id_data.links
+        for link in list(doomed.links):
+            links.remove(link)
+        self.inputs.move(next(index for index, socket in enumerate(self.inputs) if socket == doomed),
+                         _after_pairs(self) - 1)
+        self.inputs.remove(doomed)
         self.outputs.remove(stack_output(self, pair))
         self.pairs.remove(pair)
         for index, sockets in enumerate(zip(pair_inputs(self), self.outputs)):

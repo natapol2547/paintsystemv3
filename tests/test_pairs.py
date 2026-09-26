@@ -263,6 +263,32 @@ try:
           "Add Pair adds a pair in no stack, and selects it")
     bpy.context.scene.paint_system.active_node_tree = None
 
+    section("removing a pair of a tree Blender evaluates")
+    # A muted node passes its unlinked pair outputs through one pair
+    # input. Removing that input once left internal links pointing at
+    # freed memory, which crashed the next depsgraph update on 4.5 and
+    # later.
+    for bl_idname, extra, masked in ((SOLID, 1, False), (SOLID, 2, True), (FOLDER, 2, False)):
+        tree = new_tree("Evaluated")
+        under = add(tree, SOLID, "Under", "Color", RED)
+        node = add(tree, bl_idname, "Solo", "Color")
+        for _ in range(extra):
+            node.add_pair()
+        if masked:
+            tree.links.new(under.outputs[0], node.inputs["Mask"])
+        bpy.context.scene.paint_system.active_node_tree = tree
+        tree.nodes.active = node
+        bpy.context.view_layer.update()
+        node.active_pair_index = 0
+        bpy.ops.paint_system.remove_pair()
+        bpy.context.view_layer.update()
+        inputs = {socket.as_pointer() for socket in node.inputs}
+        check(stack_ops.pair_count(node) == extra
+              and all(link.from_socket.as_pointer() in inputs for link in node.internal_links),
+              f"{node.ps_type} with {extra + 1} pairs{', masked' if masked else ''}: the first "
+              f"pair goes, and every internal link starts at an input the node still has")
+    bpy.context.scene.paint_system.active_node_tree = None
+
 except Exception:
     traceback.print_exc()
     check(False, "unexpected exception")
