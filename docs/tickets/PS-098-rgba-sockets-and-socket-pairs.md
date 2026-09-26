@@ -175,9 +175,15 @@ During slice 2 the user also chose:
   none of its other pairs feeds anything: another stack, a mask or any
   other node. A folder's content goes only when the folder itself is
   deleted, on the same rule, and links into nodes deleted in the same
-  removal do not count. `stack_ops.removal` works this out first, and the
-  dialog says which other channels the layer stays in, or that it stays
-  in the tree because a pair still feeds something.
+  removal do not count. `stack_ops.removal` works this out first, as a
+  fixed point: it assumes everything it reaches goes, keeps each layer
+  that still feeds something staying, and repeats until nothing changes.
+  So the stack order does not change the result, and layers that only
+  feed each other or their own folder go together. `stack_ops.remove`
+  carries out exactly that plan. The dialog says which other channels
+  the layer stays in, or that it stays in the tree because a pair still
+  feeds something. A deleted filter layer takes the results of all its
+  pairs with it, linked or not.
 - The layer list shows a placeholder `LINKED` badge on a layer with more
   than one pair.
 
@@ -189,7 +195,10 @@ During slice 2 the user also chose:
   the layer and are shared, Auto Refresh and the cache's UV map included.
   A bake that changes the UV map sends the other pairs' caches back to
   baking, since they were baked with the old one. The bake dialog starts
-  from the layer's UV map.
+  from the layer's UV map. The bake is given that UV map, or the active
+  render one for '', because `bpy.ops.object.bake` otherwise writes
+  through the active UV map, whatever the target node's Vector input
+  reads.
 - Bake Cache, Update Filter and Clear Result act on the pair in the
   active channel's stack (`pair_in_stack`).
 - An automatic filter refresh remembers the position of the pair it
@@ -222,8 +231,9 @@ During slice 2 the user also chose:
 ### File compatibility
 
 - No migration. `complete_pairs` gives every layer in the editable trees
-  a virtual input and a state per pair. It runs when a file is read, and
-  before every compile, which covers a tree appended from an older file.
+  a virtual input and a state per pair. It runs when a file is read, in
+  `normalize_tree` before every compile, and on every flush for all
+  trees, which covers a tree appended from an older file.
   A layer saved before pairs existed bakes its cache and builds its
   filter result again.
 
