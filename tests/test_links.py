@@ -218,6 +218,8 @@ def test_link_and_sync():
     x.derived_stale_reason = "changed below"
     check(abs(y.blur_sigma - 7.0) < 1e-6 and y.derived_stale_reason == "",
           "a filter shares its settings, not its build state")
+    x.auto_refresh = False
+    check(y.auto_refresh, "nor Auto Refresh, which the refresh job turns off on the one layer that failed")
     check(links.link_candidates(x) == [] and x not in links.link_candidates(a),
           "a layer only links with layers of its own type")
 

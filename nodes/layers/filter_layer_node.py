@@ -131,8 +131,10 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
         'surface_name',
     )
     # Each linked filter layer builds its own result from the stack below
-    # it.
-    ps_unlinked_props = ('derived_image', 'derived_stale_reason', 'derived_stale_pixels', 'derived_error')
+    # it. Auto Refresh goes with the result: the refresh job turns it off
+    # on the one layer whose build failed, and says why there.
+    ps_unlinked_props = ('derived_image', 'derived_stale_reason', 'derived_stale_pixels', 'derived_error',
+                         'auto_refresh')
 
     filter_type: EnumProperty(
         name="Filter", items=layer_filter_items(), update=mark_tree_dirty,
