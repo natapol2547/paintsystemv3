@@ -201,7 +201,8 @@ try:
     got = channel_pixel(tree, "Second")
     want = over(GREEN, BLUE, 0.5)
     check(close(got, want), f"and is blended over each of them {fmt(got)}")
-    check([(node.name, pair) for node, pair in stack_ops.removal(box, 0)] == [("Box", 0)],
+    plan = stack_ops.removal(box, 0)
+    check([(node.name, pair) for node, pair in plan.positions] == [("Box", 0)] and not plan.deleted,
           "removing one of two pairs leaves the content")
     tree.remove_layer_node(box, "Color")
     check(tree.nodes.get("Inside") is not None
@@ -261,6 +262,41 @@ try:
     check(bpy.ops.paint_system.add_pair() == {'FINISHED'} and stack_ops.pair_count(node) == 2
           and node.active_pair_index == 1 and not node.outputs[1].is_linked,
           "Add Pair adds a pair in no stack, and selects it")
+
+    section("Remove Layer keeps a layer only while another pair feeds something")
+    tree.active_channel_index = [channel.name for channel in tree.channels].index("Color")
+    name = node.name
+    plan = stack_ops.removal(node, 0)
+    check(plan.positions == [(node, 0)] and plan.deleted == {name},
+          "a pair in no stack does not keep the layer")
+    check(bpy.ops.paint_system.remove_layer('EXEC_DEFAULT') == {'FINISHED'} and name not in tree.nodes,
+          "so Remove Layer deletes it")
+    box = add(tree, FOLDER, "Box", "Color")
+    keeper = add(tree, SOLID, "Keeper", "Color", BLUE, target=box)
+    share_top(tree, keeper, "Second")
+    add(tree, SOLID, "Inside", "Color", RED, target=box)
+    tree.nodes.active = box
+    plan = stack_ops.removal(box, 0)
+    check([(node.name, pair) for node, pair in plan.positions] == [("Box", 0), ("Inside", 0), ("Keeper", 0)]
+          and plan.deleted == {"Box", "Inside"},
+          f"a folder takes its content, but not a layer another stack reads {plan}")
+    check(bpy.ops.paint_system.remove_layer('EXEC_DEFAULT') == {'FINISHED'}
+          and "Box" not in tree.nodes and "Inside" not in tree.nodes
+          and rows(tree, "Color") == [("Under", 0, 0)]
+          and rows(tree, "Second") == [("Keeper", 0, 0), ("Ground", 0, 0)],
+          f"and does so {rows(tree, 'Color')} {rows(tree, 'Second')}")
+    tree.nodes.active = keeper
+    check(not bpy.ops.paint_system.remove_layer.poll(),
+          "Remove Layer refuses a layer that is not in the active channel")
+    box = add(tree, FOLDER, "Box", "Color")
+    masker = add(tree, SOLID, "Masker", "Color", target=box)
+    masked = add(tree, SOLID, "Masked", "Color", target=box)
+    masker.add_pair()
+    tree.links.new(masker.outputs[1], masked.inputs["Mask"])
+    plan = stack_ops.removal(box, 0)
+    tree.remove_layer_node(box, "Color")
+    check(plan.deleted == {"Box", "Masked", "Masker"} and not {"Box", "Masked", "Masker"} & set(tree.nodes.keys()),
+          f"a pair that only feeds a layer going too does not keep its layer {plan.deleted}")
     bpy.context.scene.paint_system.active_node_tree = None
 
     section("removing a pair of a tree Blender evaluates")

@@ -316,8 +316,9 @@ class PaintSystemNodeTree(NodeTree):
     def remove_layer_node(self, node: bpy.types.Node, channel_name: str | None = None) -> None:
         """Take a layer out of the channel's stack and close the gap.
 
-        Only the pair in that stack goes. The layer is deleted with its last
-        pair, and a folder's content with the folder (``stack_ops.remove``).
+        Only the pair in that stack goes. The layer is deleted when none of
+        its other pairs feeds anything, and a folder's content with the
+        folder (``stack_ops.removal``).
         """
         channel_name = self._channel_name(channel_name)
         with suspend_compile(self):

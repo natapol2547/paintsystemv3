@@ -86,7 +86,8 @@ try:
     ], f"folders nested two deep walk top first with levels {layout(tree)}")
     check(tree.nodes.active == d, "the inserted layer becomes active")
     check(not tree.nodes["B"].inputs['Color'].is_linked, "bottom layer of a folder has nothing below it")
-    check([(node.name, pair) for node, pair in stack_ops.removal(f)] == [("F", 0), ("G", 0), ("C", 0), ("B", 0)],
+    check([(node.name, pair) for node, pair in stack_ops.removal(f).positions]
+          == [("F", 0), ("G", 0), ("C", 0), ("B", 0)],
           "removing a folder takes its nested content, top first")
     check(tree.nodes["C"].location.y > g.location.y > a.location.y, "folder content is laid out above its folder")
     check([socket.identifier for socket in a.inputs] == ["Color", "__extend__", "Mask"],

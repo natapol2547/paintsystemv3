@@ -10,8 +10,8 @@ from ..compiler.core import suspend_compile
 from ..filters.layer_specs import layer_filter_items
 from ..nodes.layers.base_layer_node import RESOLUTION_ITEMS
 from ..nodes.layers.registry import layer_type, layer_type_items
-from ..nodetree.stack_ops import (Position, arrange_stack, channel_of, is_layer, movement_options,
-                                  pair_count, remove, removal)
+from ..nodetree.stack_ops import (Position, arrange_stack, channel_of, movement_options, pair_count,
+                                  remove_pair, removal)
 from ..undo import undo_restores_data
 
 
@@ -54,15 +54,15 @@ class PAINTSYSTEM_OT_add_layer(Operator):
             self.layout.prop(self, name)
 
 
-def _filter_results(plan: list) -> list:
-    """The filter result images of the pairs a ``removal`` *plan* takes out.
+def _filter_results(positions: list[Position]) -> list:
+    """The filter result images of the pairs at *positions*, which are about to go.
 
     A filter result counts as the pair's content, not as an artifact
     that can be rebuilt, so removing the pair removes it too. Cache
     images are left out on purpose, because they can always be baked
     again.
     """
-    return [layer.pairs[pair].derived_image for layer, pair in plan
+    return [layer.pairs[pair].derived_image for layer, pair in positions
             if getattr(layer, 'ps_type', "") == 'FILTER'
             and layer.pairs[pair].derived_image is not None]
 
@@ -76,19 +76,30 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
 
     @classmethod
     def poll(cls, context):
-        tree = get_active_tree(context)
-        return tree is not None and is_layer(tree.nodes.active)
+        ps = parse_context(context)
+        if ps.layer is None:
+            return False
+        if ps.stack_item is None:
+            # Which pair to take out follows from the channel's stack.
+            cls.poll_message_set("The active layer is not in this channel")
+            return False
+        return True
 
     def invoke(self, context, event):
         # The dialog draws on every redraw, so work out what it shows once
         # here.
         ps = parse_context(context)
         node = ps.layer
-        plan = removal(node, ps.tree.pair_in_stack(node))
+        plan = removal(node, ps.stack_item.pair)
         self.layer_name = node.name
-        self.content_count = len({position.node.name for position in plan} - {node.name})
-        self.other_stacks = pair_count(node) - sum(position.node == node for position in plan)
-        self.filter_count = len(_filter_results(plan))
+        self.content_count = len(plan.deleted - {node.name})
+        self.stays = node.name not in plan.deleted
+        taken = {position.pair for position in plan.positions if position.node == node}
+        channels = (channel_of(ps.tree, node, pair) for pair in range(pair_count(node))
+                    if pair not in taken)
+        self.other_stacks = len({channel.name for channel in channels
+                                 if channel is not None and channel != ps.channel})
+        self.filter_count = len(_filter_results(plan.positions))
         self.undo_restores = undo_restores_data(context)
         return context.window_manager.invoke_props_dialog(self, confirm_text="Remove")
 
@@ -99,6 +110,8 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
             layout.label(text="It stays in the other stack it is linked into.")
         elif self.other_stacks > 1:
             layout.label(text=f"It stays in the {self.other_stacks} other stacks it is linked into.")
+        elif self.stays:
+            layout.label(text="It stays in the node tree, where its other pairs are still linked.")
         if self.content_count == 1:
             layout.label(text="The layer inside it goes with it.")
         elif self.content_count > 1:
@@ -112,7 +125,7 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
 
     def execute(self, context):
         ps = parse_context(context)
-        tree, node = ps.tree, ps.layer
+        tree, node, pair = ps.tree, ps.layer, ps.stack_item.pair
         # The row that moves up into the removed row's place becomes
         # active. That is the first row after the layer's content. If the
         # removed row was at the bottom, the new last row becomes active.
@@ -130,7 +143,7 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
         # because ``free`` also runs when undo tears nodes down. This
         # operator has the UNDO option, so its undo step holds the node
         # and the packed image together, and one Ctrl+Z brings both back.
-        for image in _filter_results(removal(node, tree.pair_in_stack(node))):
+        for image in _filter_results(removal(node, pair).positions):
             bpy.data.images.remove(image)
 
         tree.remove_layer_node(node)
@@ -184,7 +197,7 @@ class PAINTSYSTEM_OT_remove_pair(Operator):
         for image in _filter_results([Position(node, pair)]):
             bpy.data.images.remove(image)
         with suspend_compile(tree):
-            remove(tree, node, pair)
+            remove_pair(tree, node, pair)
             if channel is not None:
                 arrange_stack(tree, channel.name)
         node.active_pair_index = min(pair, pair_count(node) - 1)

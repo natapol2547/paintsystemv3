@@ -57,7 +57,8 @@ paint_sections_drawn = []
 
 # What each remove confirmation dialog showed, by operator class name.
 dialogs_shown = {}
-DIALOG_FIELDS = ("layer_name", "content_count", "channel_name", "undo_restores")
+DIALOG_FIELDS = ("layer_name", "content_count", "stays", "other_stacks", "channel_name",
+                 "undo_restores")
 
 
 def record_dialog(cls):
@@ -368,7 +369,8 @@ class Steps:
                     or bpy.data.objects['Cube'].mode != 'TEXTURE_PAINT')
         self.expected_dialogs = {
             "PAINTSYSTEM_OT_remove_layer": {
-                "layer_name": folder.name, "content_count": 1, "undo_restores": restores},
+                "layer_name": folder.name, "content_count": 1, "stays": False, "other_stacks": 0,
+                "undo_restores": restores},
             "PAINTSYSTEM_OT_remove_channel": {
                 "channel_name": self.tree.active_channel.name, "undo_restores": restores},
         }

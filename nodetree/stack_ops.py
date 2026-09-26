@@ -611,49 +611,85 @@ def insert_into(tree, folder, node, *, at_top: bool = True, pair: int = 0) -> No
     attach(tree, node, below_input(*content[-1]) if content else content_input(folder), pair)
 
 
-def removal(node, pair: int = 0) -> list[Position]:
-    """The positions ``remove(tree, node, pair)`` takes out, in the order it takes them.
+class Removal(NamedTuple):
+    """What ``remove`` takes out, worked out before anything is removed.
 
-    A layer is deleted with its last pair, and a folder's content goes
-    with the folder. A layer inside it that sits in other stacks too only
-    loses the pairs inside. The operators read this to say what goes
-    before anything is removed.
+    *positions* are the pairs it takes out, in the order it takes them.
+    *deleted* holds the names of the nodes it deletes.
     """
-    left: dict[str, int] = {}
-    found: list[Position] = []
+    positions: list[Position]
+    deleted: set[str]
+
+
+def _kept(node, taken: set[int], deleted: set[str] = frozenset()) -> bool:
+    """Whether *node* stays once its pairs in *taken* are gone.
+
+    It stays while another of its pairs feeds something: another stack,
+    a mask or any other node. A pair in no stack, such as a new one from
+    Add Pair, does not keep it. Links into the nodes named in *deleted*
+    do not count, since they go with those nodes.
+    """
+    return any(link.to_node.name not in deleted
+               for pair in range(pair_count(node)) if pair not in taken
+               for link in socket_links(stack_output(node, pair)))
+
+
+def removal(node, pair: int = 0) -> Removal:
+    """What ``remove(tree, node, pair)`` takes out.
+
+    A layer is deleted when none of its other pairs feeds anything, and a
+    deleted folder takes its content with it. A layer inside it that
+    something else still reads only loses the pair inside. The operators
+    read this to say what goes before anything is removed.
+    """
+    taken: dict[str, set[int]] = {}
+    positions: list[Position] = []
+    deleted: set[str] = set()
 
     def take(node, pair):
-        found.append(Position(node, pair))
-        count = left.setdefault(node.name, pair_count(node))
-        left[node.name] = count - 1
-        if count == 1 and is_folder(node):
+        positions.append(Position(node, pair))
+        pairs = taken.setdefault(node.name, set())
+        pairs.add(pair)
+        if _kept(node, pairs, deleted):
+            return
+        deleted.add(node.name)
+        if is_folder(node):
             for child, child_pair in list(layers_down_from(content_input(node), set())):
                 take(child, child_pair)
 
     with link_index(node.id_data):
         take(node, pair)
-    return found
+    return Removal(positions, deleted)
+
+
+def remove_pair(tree, node, pair: int) -> None:
+    """Take *node*'s *pair* out of its stack, close the gap and remove the pair.
+
+    The node keeps its other pairs, even when none of them feeds
+    anything.
+    """
+    detach(tree, node, pair)
+    node.remove_pair(pair)
 
 
 def remove(tree, node, pair: int = 0) -> None:
-    """Take *node*'s *pair* out of its stack and close the gap.
+    """Take *node*'s *pair* out of its stack and close the gap, deleting what ``removal`` describes.
 
-    The node is deleted with its last pair. Deleting a folder takes its
-    content with it, as ``removal`` describes. The content is taken top
-    first and read again after each step, because removing a pair
-    renumbers the pairs after it.
+    The content of a folder that goes is taken top first and read again
+    after each step, because removing a pair renumbers the pairs after
+    it.
     """
-    if pair_count(node) == 1 and is_folder(node):
+    if _kept(node, {pair}):
+        remove_pair(tree, node, pair)
+        return
+    if is_folder(node):
         while True:
             link = feeding_link(content_input(node))
             if link is None or not is_layer(link.from_node):
                 break
             remove(tree, link.from_node, pair_of_output(link.from_socket))
     detach(tree, node, pair)
-    if pair_count(node) > 1:
-        node.remove_pair(pair)
-    else:
-        tree.nodes.remove(node)
+    tree.nodes.remove(node)
 
 
 # ── Moving ───────────────────────────────────────────────────────────
