@@ -515,7 +515,7 @@ def test_operators():
         select_only(tree, a, b, c, locked, folder)
         check(bpy.ops.paint_system.link_selected_layers.poll(), "on offer with other solids selected")
         result = bpy.ops.paint_system.link_selected_layers('INVOKE_DEFAULT')
-    check(result == {'FINISHED'}, f"with no image to lose there is no dialog {result}")
+    check(result == {'FINISHED'}, f"Ctrl+L links them {result}")
     check(b.link_id == c.link_id == a.link_id != "" and tuple(c.fill_color) == RED, "B and C take A's settings")
     check(locked.link_id == "" and folder.link_id == "", "a locked layer and another type are left out")
     bpy.context.scene.paint_system.active_node_tree = tree
@@ -538,6 +538,33 @@ def test_operators():
     check(not bpy.ops.paint_system.unlink_layer.poll(), "an unlinked layer cannot be unlinked")
     tree.nodes.active = locked
     check(not bpy.ops.paint_system.link_layer.poll(), "a locked layer cannot take another's settings")
+
+    section("Ctrl+L asks first when painting would be lost")
+    # A background Blender runs execute in place of invoke, so invoke is
+    # called here with a window manager that records the dialog.
+    pictures = new_tree("Ctrl L Images")
+    kept = add(pictures, IMAGE, "Kept")
+    lost = add(pictures, IMAGE, "Lost")
+    kept.image = bpy.data.images.new("Kept Painting", 4, 4)
+    lost.image = painted_image("Lost Painting", GREEN)
+    operator = link_ops.PAINTSYSTEM_OT_link_selected_layers
+
+    def invoke():
+        calls = []
+        stand_in = SimpleNamespace(targets=operator.targets, execute=lambda context: calls.append('execute') or {'FINISHED'})
+        window_manager = SimpleNamespace(invoke_props_dialog=lambda op, **kwargs: calls.append('dialog') or {'RUNNING_MODAL'})
+        with node_editor(pictures):
+            select_only(pictures, kept, lost)
+            context = SimpleNamespace(space_data=bpy.context.space_data, window_manager=window_manager)
+            operator.invoke(stand_in, context, None)
+        return calls, stand_in.lost
+
+    calls, lost_images = invoke()
+    check(calls == ['dialog'] and lost_images == [(lost, lost.image)],
+          f"linking a layer whose painting nothing else uses opens a dialog, which names the image {calls}")
+    kept.image = lost.image
+    calls, lost_images = invoke()
+    check(calls == ['execute'] and lost_images == [], f"with no painting to lose it links at once {calls}")
 
 
 def test_ui():
