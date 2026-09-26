@@ -104,7 +104,8 @@ class _Job:
     """A build in flight, which pair it is for, and what it read.
 
     The pair is held by its output's identifier, which stays with it
-    when a pair before it is removed. Its position does not.
+    when a pair before it is removed. Its position does not, and the
+    build holds the position it started with.
     """
 
     def __init__(self, tree, node, pair, plan):
@@ -112,6 +113,7 @@ class _Job:
         self.node_name = node.name
         self.uuid = node.uuid
         self.output = node.outputs[pair].identifier
+        self.pair = pair
         self.key = pair_key(node, pair)
         # Taken in the same tick as the build's own `inputs_of` call,
         # which runs in the first unit `_run` drives, so the two agree.
@@ -258,7 +260,7 @@ def _tick():
         # Nothing here touches the GPU in the meantime, not even closing
         # a job.
         return DEBOUNCE
-    if _job is not None and _position_of(_job) is None:
+    if _job is not None and _moved_away(_job):
         _drop(_job)
     if _job is not None and _overtaken(_job):
         _restart(_job)
@@ -314,23 +316,31 @@ def _restart(job) -> None:
     log.debug("restarting the refresh of %s: what it read has moved", job.node_name)
 
 
-def _drop(job) -> None:
-    """Drop *job*, because its pair, its layer or its tree is gone.
+def _moved_away(job) -> bool:
+    """Whether *job*'s pair, layer or tree is gone, or its pair has a new position."""
+    position = _position_of(job)
+    return position is None or position.pair != job.pair
 
-    The build holds the node and the tree it started with. After either
-    is removed, the next unit, and above all the commit, would write
-    through a pointer to freed memory and crash Blender. A removed pair
-    would leave the commit writing into another pair's state. Closing the
-    build is safe, because that only frees its textures. A renamed layer
-    looks gone too. It still needs a build, and the pass that follows
-    finds it under its new name.
+
+def _drop(job) -> None:
+    """Drop *job*, because its pair, its layer or its tree is gone, or its pair has moved.
+
+    The build holds the node, the tree and the pair position it started
+    with. After the node or the tree is removed, the next unit, and above
+    all the commit, would write through a pointer to freed memory and
+    crash Blender. After its pair, or a pair before it, is removed, the
+    commit would write into another pair's state or past the last one.
+    Closing the build is safe, because that only frees its textures. A
+    renamed layer looks gone too. It still needs a build, and the pass
+    that follows finds it under its new name, as it finds a moved pair
+    at its new position.
     """
     global _job
     _job = None
     job.close()
     _builds.pop(job.key, None)
     _restarts.pop(job.key, None)
-    log.debug("dropped the refresh of %s: its pair is gone", job.node_name)
+    log.debug("dropped the refresh of %s: its pair is gone or has moved", job.node_name)
 
 
 def _uncount(job) -> None:

@@ -617,6 +617,31 @@ if available():
             bpy.data.node_groups.remove(doomed)
             core.flush_now()
             check(tick_out(), "and removing its tree drops that one")
+
+            # The build holds its pair by position, which a pair removed
+            # before it changes.
+            shifted = bpy.data.node_groups.new("Auto Shifted", 'PaintSystemNodeTree')
+            shifted.initialize()
+            with core.suspend_compile(shifted):
+                shifted.insert_layer_node(SOLID)
+                layer = shifted.insert_layer_node(FILTER)
+                layer.resolution = SIZE
+                # The stack moves onto a second pair, leaving the first in no stack.
+                below = layer.inputs[0].links[0]
+                shifted.links.new(below.from_socket, layer.add_pair())
+                shifted.links.new(layer.outputs[1], layer.outputs[0].links[0].to_socket)
+                shifted.links.remove(below)
+            core.flush_now()
+            layer_job._deadline = 0.0
+            layer_job._tick()
+            layer_job._tick()
+            check(layer_job.running_on(layer, 1), "a refresh of a layer's second pair is in flight")
+            layer.remove_pair(0)
+            core.flush_now()
+            check(tick_out(), "removing the pair before it drops it at the next tick")
+            check(pump() and derived.is_built(layer.pairs[0].derived_image),
+                  "and the pair is built at its new position")
+            bpy.data.node_groups.remove(shifted)
         finally:
             layer_job.BUDGET = budget
         core.flush_now()
