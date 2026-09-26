@@ -646,8 +646,8 @@ def insert_into(tree, folder, node, *, at_top: bool = True, pair: int = 0) -> No
 class Removal(NamedTuple):
     """What ``remove`` takes out, worked out before anything is removed.
 
-    *positions* are the pairs it takes out, in the order it takes them.
-    *deleted* holds the names of the nodes it deletes.
+    *positions* are the pairs it takes out, each folder before its
+    content. *deleted* holds the names of the nodes it deletes.
     """
     positions: list[Position]
     deleted: set[str]
@@ -669,29 +669,43 @@ def _kept(node, taken: set[int], deleted: set[str] = frozenset()) -> bool:
 def removal(node, pair: int = 0) -> Removal:
     """What ``remove(tree, node, pair)`` takes out.
 
-    A layer is deleted when none of its other pairs feeds anything, and a
-    deleted folder takes its content with it. A layer inside it that
-    something else still reads only loses the pair inside. The operators
-    read this to say what goes before anything is removed.
-    """
-    taken: dict[str, set[int]] = {}
-    positions: list[Position] = []
-    deleted: set[str] = set()
+    A layer is deleted when none of its other pairs feeds anything that
+    stays, and a deleted folder takes its content with it. A layer inside
+    it that something else still reads only loses the pair inside. The
+    operators read this to say what goes before anything is removed.
 
-    def take(node, pair):
-        positions.append(Position(node, pair))
-        pairs = taken.setdefault(node.name, set())
-        pairs.add(pair)
-        if _kept(node, pairs, deleted):
-            return
-        deleted.add(node.name)
-        if is_folder(node):
-            for child, child_pair in list(layers_down_from(content_input(node), set())):
-                take(child, child_pair)
+    Whether a layer stays can depend on layers further on in the walk, for
+    example a layer whose other pair masks a layer below it in the same
+    folder. So the walk first assumes that everything it reaches goes,
+    then keeps each layer that still feeds something staying, and repeats
+    until nothing changes. Starting from "everything goes" means layers
+    that only feed each other, or only their own folder, go together.
+    """
+    def walk(expanded):
+        positions = []
+
+        def take(node, pair):
+            positions.append(Position(node, pair))
+            if is_folder(node) and (expanded is None or node.name in expanded):
+                for child, child_pair in list(layers_down_from(content_input(node), set())):
+                    take(child, child_pair)
+
+        take(node, pair)
+        return positions
 
     with link_index(node.id_data):
-        take(node, pair)
-    return Removal(positions, deleted)
+        positions = walk(None)
+        deleted = {position.node.name for position in positions}
+        while True:
+            nodes = {position.node.name: position.node for position in positions}
+            taken: dict[str, set[int]] = {}
+            for position in positions:
+                taken.setdefault(position.node.name, set()).add(position.pair)
+            going = {name for name, pairs in taken.items() if not _kept(nodes[name], pairs, deleted)}
+            if going == deleted:
+                return Removal(positions, deleted)
+            deleted = going
+            positions = walk(deleted)
 
 
 def remove_pair(tree, node, pair: int) -> None:
@@ -705,13 +719,19 @@ def remove_pair(tree, node, pair: int) -> None:
 
 
 def remove(tree, node, pair: int = 0) -> None:
-    """Take *node*'s *pair* out of its stack and close the gap, deleting what ``removal`` describes.
+    """Take *node*'s *pair* out of its stack and close the gap, deleting what ``removal`` describes."""
+    _take_out(tree, node, pair, removal(node, pair).deleted)
+
+
+def _take_out(tree, node, pair: int, deleted: set[str]) -> None:
+    """Remove *node*'s *pair*, or the whole node when it is named in *deleted*.
 
     The content of a folder that goes is taken top first and read again
     after each step, because removing a pair renumbers the pairs after
-    it.
+    it. A deleted node has every pair detached first, so no stack it was
+    still wired into is left with a gap.
     """
-    if _kept(node, {pair}):
+    if node.name not in deleted:
         remove_pair(tree, node, pair)
         return
     if is_folder(node):
@@ -719,8 +739,9 @@ def remove(tree, node, pair: int = 0) -> None:
             link = feeding_link(content_input(node))
             if link is None or not is_layer(link.from_node):
                 break
-            remove(tree, link.from_node, pair_of_output(link.from_socket))
-    detach(tree, node, pair)
+            _take_out(tree, link.from_node, pair_of_output(link.from_socket), deleted)
+    for each in range(pair_count(node)):
+        detach(tree, node, each)
     tree.nodes.remove(node)
 
 

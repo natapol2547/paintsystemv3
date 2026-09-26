@@ -10,8 +10,8 @@ from ..compiler.core import suspend_compile
 from ..filters.layer_specs import layer_filter_items
 from ..nodes.layers.base_layer_node import RESOLUTION_ITEMS
 from ..nodes.layers.registry import layer_type, layer_type_items
-from ..nodetree.stack_ops import (Position, arrange_stack, channel_of, movement_options, pair_count,
-                                  remove_pair, removal)
+from ..nodetree.stack_ops import (Position, Removal, arrange_stack, channel_of, movement_options,
+                                  pair_count, remove_pair, removal)
 from ..undo import undo_restores_data
 
 
@@ -54,15 +54,19 @@ class PAINTSYSTEM_OT_add_layer(Operator):
             self.layout.prop(self, name)
 
 
-def _filter_results(positions: list[Position]) -> list:
-    """The filter result images of the pairs at *positions*, which are about to go.
+def _filter_results(plan: Removal) -> list:
+    """The filter result images that go with *plan*, which is about to be carried out.
 
-    A filter result counts as the pair's content, not as an artifact
-    that can be rebuilt, so removing the pair removes it too. Cache
-    images are left out on purpose, because they can always be baked
-    again.
+    That is the image of each pair taken out, and of every pair of a
+    layer that is deleted, linked or not. A filter result counts as the
+    pair's content, not as an artifact that can be rebuilt, so removing
+    the pair removes it too. Cache images are left out on purpose,
+    because they can always be baked again.
     """
-    return [layer.pairs[pair].derived_image for layer, pair in positions
+    pairs = {(layer.name, pair): layer for layer, pair in plan.positions}
+    pairs.update({(layer.name, each): layer for layer, _ in plan.positions if layer.name in plan.deleted
+                  for each in range(pair_count(layer))})
+    return [layer.pairs[pair].derived_image for (_, pair), layer in pairs.items()
             if getattr(layer, 'ps_type', "") == 'FILTER'
             and layer.pairs[pair].derived_image is not None]
 
@@ -99,7 +103,7 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
                     if pair not in taken)
         self.other_stacks = len({channel.name for channel in channels
                                  if channel is not None and channel != ps.channel})
-        self.filter_count = len(_filter_results(plan.positions))
+        self.filter_count = len(_filter_results(plan))
         self.undo_restores = undo_restores_data(context)
         return context.window_manager.invoke_props_dialog(self, confirm_text="Remove")
 
@@ -143,7 +147,7 @@ class PAINTSYSTEM_OT_remove_layer(Operator):
         # because ``free`` also runs when undo tears nodes down. This
         # operator has the UNDO option, so its undo step holds the node
         # and the packed image together, and one Ctrl+Z brings both back.
-        for image in _filter_results(removal(node, pair).positions):
+        for image in _filter_results(removal(node, pair)):
             bpy.data.images.remove(image)
 
         tree.remove_layer_node(node)
@@ -194,7 +198,7 @@ class PAINTSYSTEM_OT_remove_pair(Operator):
         pair = min(node.active_pair_index, pair_count(node) - 1)
         channel = channel_of(tree, node, pair)
         # As in Remove Layer, before the pair is gone (``_filter_results``).
-        for image in _filter_results([Position(node, pair)]):
+        for image in _filter_results(Removal([Position(node, pair)], set())):
             bpy.data.images.remove(image)
         with suspend_compile(tree):
             remove_pair(tree, node, pair)

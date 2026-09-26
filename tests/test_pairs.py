@@ -19,6 +19,7 @@ bake = import_from("compiler.bake")
 core = import_from("compiler.core")
 derived = import_from("filters.derived")
 layer_job = import_from("filters.layer_job")
+layer_ops = import_from("ops.layer_ops")
 stack_ops = import_from("nodetree.stack_ops")
 
 SOLID = 'PaintSystemSolidColorLayerNode'
@@ -302,11 +303,14 @@ try:
     section("Remove Layer keeps a layer only while another pair feeds something")
     tree.active_channel_index = [channel.name for channel in tree.channels].index("Color")
     name = node.name
+    node.pairs[1].derived_image = bpy.data.images.new("Unlinked Result", 8, 8)
     plan = stack_ops.removal(node, 0)
     check(plan.positions == [(node, 0)] and plan.deleted == {name},
           "a pair in no stack does not keep the layer")
+    check(len(layer_ops._filter_results(plan)) == 1, "the dialog counts that pair's filtered image")
     check(bpy.ops.paint_system.remove_layer('EXEC_DEFAULT') == {'FINISHED'} and name not in tree.nodes,
           "so Remove Layer deletes it")
+    check("Unlinked Result" not in bpy.data.images, "with the filtered image of the pair in no stack")
     box = add(tree, FOLDER, "Box", "Color")
     keeper = add(tree, SOLID, "Keeper", "Color", BLUE, target=box)
     share_top(tree, keeper, "Second")
@@ -324,15 +328,48 @@ try:
     tree.nodes.active = keeper
     check(not bpy.ops.paint_system.remove_layer.poll(),
           "Remove Layer refuses a layer that is not in the active channel")
+    for order in (("Masker", "Masked"), ("Masked", "Masker")):
+        box = add(tree, FOLDER, "Box", "Color")
+        # Each layer added into the folder lands on top of it.
+        made = {name: add(tree, SOLID, name, "Color", target=box) for name in order}
+        made["Masker"].add_pair()
+        tree.links.new(made["Masker"].outputs[1], made["Masked"].inputs["Mask"])
+        plan = stack_ops.removal(box, 0)
+        tree.remove_layer_node(box, "Color")
+        check(plan.deleted == {"Box", "Masked", "Masker"}
+              and not {"Box", "Masked", "Masker"} & set(tree.nodes.keys()),
+              f"a pair that only feeds a layer going too does not keep its layer, with {order[-1]} on top "
+              f"{plan.deleted}")
     box = add(tree, FOLDER, "Box", "Color")
-    masker = add(tree, SOLID, "Masker", "Color", target=box)
-    masked = add(tree, SOLID, "Masked", "Color", target=box)
-    masker.add_pair()
-    tree.links.new(masker.outputs[1], masked.inputs["Mask"])
+    inside = add(tree, SOLID, "Inside", "Color", target=box)
+    inside.add_pair()
+    tree.links.new(inside.outputs[1], box.inputs["Mask"])
     plan = stack_ops.removal(box, 0)
     tree.remove_layer_node(box, "Color")
-    check(plan.deleted == {"Box", "Masked", "Masker"} and not {"Box", "Masked", "Masker"} & set(tree.nodes.keys()),
-          f"a pair that only feeds a layer going too does not keep its layer {plan.deleted}")
+    check(plan.deleted == {"Box", "Inside"} and not {"Box", "Inside"} & set(tree.nodes.keys()),
+          f"a layer that only masks its own folder goes with the folder {plan.deleted}")
+    box = add(tree, FOLDER, "Box", "Color")
+    inner = add(tree, FOLDER, "Inner", "Color", target=box)
+    add(tree, SOLID, "Deep", "Color", target=inner)
+    twice = add(tree, SOLID, "Twice", "Color", target=box)
+    # Wire Twice on top of Inner's content too, by hand, as the operators never would.
+    link_into_virtual(tree, stack_ops.feeding_link(stack_ops.content_input(inner)).from_socket, twice)
+    tree.links.new(twice.outputs[1], stack_ops.content_input(inner))
+    plan = stack_ops.removal(box, 0)
+    tree.remove_layer_node(box, "Color")
+    check(plan.deleted == {"Box", "Inner", "Deep", "Twice"} and not plan.deleted & set(tree.nodes.keys()),
+          f"a layer wired in twice leaves no gap that would strand the layers under it {plan.deleted}")
+    box = add(tree, FOLDER, "Box", "Color")
+    low = add(tree, SOLID, "Low", "Color", target=box)
+    high = add(tree, SOLID, "High", "Color", target=box)
+    share_top(tree, high, "Second")
+    share_top(tree, low, "Second")
+    plan = stack_ops.removal(box, 0)
+    tree.remove_layer_node(box, "Color")
+    check(plan.deleted == {"Box"} and rows(tree, "Color") == [("Under", 0, 0)]
+          and rows(tree, "Second") == [("Low", 0, 0), ("High", 0, 0), ("Keeper", 0, 0), ("Ground", 0, 0)],
+          f"layers in another stack stay, each kept by the one above it {plan.deleted} "
+          f"{rows(tree, 'Second')}")
     bpy.context.scene.paint_system.active_node_tree = None
 
     section("removing a pair of a tree Blender evaluates")
