@@ -284,14 +284,21 @@ GPU passes build the mask at the image's size, or at a UDIM tile's.
   stencil at 8 bits, so a feather has 256 levels, with a maximum error
   of 0.002 against the float mask. `sync_canvas` leaves the settings
   alone.
-- In Solid shading Blender draws the Stencil Mask over what is not
-  selected, in `stencil_color` (black by default) at the view's "Stencil
-  Mask Opacity" (1.0), which hides the paint there; Material Preview
-  does not draw it. The add-on leaves both settings to the user: the
-  display is Blender's own cue for protected texels, the opacity is per
-  3D view, so overriding it would need a backup in every view, and
-  with the tint off by default it is the only in-surface cue in Solid
-  shading.
+- The mask is stored in the stencil's alpha, with its colour white
+  everywhere. In Solid shading Blender draws the Stencil Mask over the
+  texels the stencil protects, in `stencil_color` (black by default) at
+  the view's "Stencil Mask Opacity" (1.0); Material Preview does not
+  draw it. The first version stored the mask as grey, so testers in
+  Solid shading saw the whole unselected surface turn black. The
+  display reads only the colour (`overlay_paint_texture_frag.glsl`),
+  while painting reads the average colour times the alpha
+  (`project_paint_uvpixel_mask`), the same from 4.2 to 5.3. A white
+  stencil therefore clips strokes exactly as before and the display
+  draws nothing, so the unselected surface looks as it does without a
+  selection. The ants and the optional tint are the selection's only
+  cues. Zeroing "Stencil Mask Opacity" instead was rejected: it is a
+  setting of each 3D view, so it would need a backup per view that
+  survives splitting areas, saves and autosaves.
 - **Policy: the selection owns the stencil while it applies.** A user
   edit to those settings notifies the message bus
   (`ImagePaint.use_stencil_layer`, `invert_stencil`, `stencil_image`,

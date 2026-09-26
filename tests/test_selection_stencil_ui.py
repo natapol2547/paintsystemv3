@@ -135,7 +135,7 @@ def applied():
 def stencil_matches_mask():
     state = session.current()
     expected = raster.get_mask(tree().selection, state.size, state.tile).read_bytes()
-    got = np.rint(pixels(stencil.stencil_image())[..., 0] * 255).astype(np.uint8)
+    got = np.rint(pixels(stencil.stencil_image())[..., 3] * 255).astype(np.uint8)
     return got.shape == expected.shape and np.array_equal(got, expected)
 
 

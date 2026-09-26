@@ -93,8 +93,17 @@ def pixels(image):
 
 
 def stencil_bytes():
-    """The red channel of the stencil image as the bytes its file holds."""
-    return np.rint(pixels(stencil.stencil_image())[..., 0] * 255).astype(np.uint8)
+    """The alpha of the stencil image as the bytes its file holds."""
+    return np.rint(pixels(stencil.stencil_image())[..., 3] * 255).astype(np.uint8)
+
+
+def stencil_is_white():
+    """Whether the stencil image's colour is white everywhere.
+
+    Blender's Stencil Mask overlay reads only the colour, so it then
+    draws nothing over the unselected part of the model.
+    """
+    return bool((pixels(stencil.stencil_image())[..., :3] == 1.0).all())
 
 
 def mask_bytes(state):
@@ -150,15 +159,17 @@ def test_png_round_trip():
     width, height = 37, 23
     ramp = ((np.arange(width)[None, :] * 3 + np.arange(height)[:, None] * 7) % 256).astype(np.uint8)
     noise = np.random.default_rng(91).integers(0, 256, (height, width), dtype=np.uint8)
-    for label, grey in (("ramp", ramp), ("random", noise)):
+    for label, mask in (("ramp", ramp), ("random", noise)):
         path = os.path.join(directory, f"{label}.png")
-        stencil._write_png(path, grey)
+        stencil._write_png(path, mask)
         image = bpy.data.images.load(path)
         image.colorspace_settings.name = 'Non-Color'
         loaded = pixels(image)
-        got = np.rint(loaded[..., 0] * 255).astype(np.uint8)
-        check(tuple(image.size) == (width, height) and np.array_equal(got, grey),
-              f"{label}: every value reads back exactly, row 0 at the bottom")
+        got = np.rint(loaded[..., 3] * 255).astype(np.uint8)
+        check(tuple(image.size) == (width, height) and np.array_equal(got, mask),
+              f"{label}: every alpha value reads back exactly, row 0 at the bottom")
+        check(bool((loaded[..., :3] == 1.0).all()) and image.alpha_mode == 'STRAIGHT',
+              f"{label}: the colour is white everywhere, with straight alpha")
         check(not image.is_dirty, f"{label}: the loaded image is not dirty")
         bpy.data.images.remove(image)
     check(not any(name.endswith(".tmp") for name in os.listdir(directory)), "no temporary file is left behind")
@@ -184,6 +195,8 @@ def test_apply_and_restore():
           f"through the layer's UV map ({state.uv_map})")
     check(image.colorspace_settings.name == 'Non-Color' and image.source == 'FILE' and not image.is_dirty,
           "the image is a clean Non-Color file image")
+    check(stencil_is_white() and image.alpha_mode == 'STRAIGHT',
+          "its colour is white, so Blender's Stencil Mask overlay leaves the model alone")
     digest = t.selection.prefix_digests(*state.size, state.tile, surface_key=raster.view_key)[-1]
     expected = stencil.BLOCK_FILE if state.reason else digest.hex() + ".png"
     check(file_name() == expected, f"it reads {expected} ({state.reason or 'mask available'})")
@@ -394,10 +407,10 @@ def test_block_mode():
     def blocked():
         image = stencil.stencil_image()
         return (file_name() == stencil.BLOCK_FILE and tuple(image.size) == (1, 1)
-                and stencil_bytes().max() == 0 and image_paint().invert_stencil)
+                and stencil_bytes().max() == 0 and stencil_is_white() and image_paint().invert_stencil)
 
     stencil.sync(dataclasses.replace(state, reason=session.UDIM, message="UDIM"), None)
-    check(blocked(), "a target problem gives the black 1x1 stencil")
+    check(blocked(), "a target problem gives the transparent 1x1 stencil")
 
     usable = dataclasses.replace(state, reason="", message="")
 
@@ -422,14 +435,23 @@ def test_block_mode():
 
     def generated_blocks():
         image = image_paint().stencil_image
-        return (image is not None and image.get(stencil.BLOCK_KEY) and image.source == 'GENERATED'
-                and tuple(image.size) == (1, 1) and pixels(image)[..., :3].max() == 0 and not image.is_dirty
+        if image is None:
+            return False
+        rgba = pixels(image)
+        return (image.get(stencil.BLOCK_KEY) and image.source == 'GENERATED' and tuple(image.size) == (1, 1)
+                and rgba[..., 3].max() == 0 and bool((rgba[..., :3] == 1.0).all()) and not image.is_dirty
                 and image_paint().use_stencil_layer and image_paint().invert_stencil)
+
+    # A black block image made by an earlier version turns transparent too.
+    old_block = bpy.data.images.new(stencil.BLOCK_NAME, 1, 1)
+    old_block[stencil.BLOCK_KEY] = True
+    old_block.generated_color = (0.0, 0.0, 0.0, 1.0)
 
     with patched(raster, "get_mask", lambda selection, size, tile=1001: FakeMask(size, 255)), \
             patched(stencil, "_write_png", unwritable):
         stencil.sync(usable, target)
-        check(generated_blocks(), "with no file at all, a generated black image blocks")
+        check(generated_blocks() and image_paint().stencil_image == old_block,
+              "with no file at all, a generated transparent image blocks")
         stencil.sync(dataclasses.replace(state, reason=session.UDIM, message="UDIM"), None)
         check(generated_blocks(), "and so it does for a target problem")
         remove_mask_file(state)

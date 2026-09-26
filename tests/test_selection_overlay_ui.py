@@ -41,6 +41,7 @@ selection = import_from("selection")
 session = import_from("selection.session")
 raster = import_from("selection.raster")
 overlay = import_from("selection.overlay")
+stencil = import_from("selection.stencil")
 
 draws = {"view3d": 0, "image": 0}
 builds = []
@@ -120,6 +121,11 @@ RED_GREEN_ANTS = {
     "selection_wash_color": (0.0, 0.0, 0.0, 0.0),
 }
 """Overlay settings for the 3D checks: dash colours the Stencil Mask display cannot produce, and no wash."""
+
+
+def opaque_black(pixels):
+    """Opaque near-black pixels: what Blender's Stencil Mask display draws, in its default colour."""
+    return (pixels[..., :3] < 30).all(-1) & (pixels[..., 3] > 250)
 
 
 def red_green_ants(pixels):
@@ -243,6 +249,15 @@ def steps():
     partial_ants = int(red_green_ants(pixels).sum()) if pixels is not None else -1
     check(baseline_ants >= 0 and partial_ants > baseline_ants + 200,
           f"the ants show on the surface ({partial_ants} ant pixels, {baseline_ants} without a selection)")
+    # In Solid shading Blender draws the Stencil Mask where the stencil
+    # protects, and the selection holds the stencil now. Its image is
+    # white, so that display must leave the unselected faces alone.
+    baseline_black = int(opaque_black(baseline).sum()) if baseline is not None else -1
+    shaded = int(opaque_black(pixels).sum()) if pixels is not None else -1
+    check(view3d.spaces.active.shading.type == 'SOLID' and stencil.is_applied(bpy.context.scene)
+          and 0 <= shaded <= baseline_black + 20,
+          f"Blender's Stencil Mask display leaves the unselected faces alone "
+          f"({shaded} black pixels, {baseline_black} without a selection)")
 
     section("a selection that ends on UV seams draws no ants along them")
     uvs = np.empty(len(obj.data.uv_layers.active.data) * 2, dtype=np.float32)

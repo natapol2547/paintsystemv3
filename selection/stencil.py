@@ -8,6 +8,17 @@ selected, 0 where not, and feathered in between. So while there is a
 selection in texture paint mode, the scene's stencil settings belong to
 it.
 
+- The mask is stored in the image's alpha, and its colour is white
+  everywhere. Painting reads the stencil as its average colour times its
+  alpha, so it gets the mask. Blender also draws the Stencil Mask over
+  the model in Solid shading, in `stencil_color` (black by default) where
+  the stencil protects. That overlay reads the colour only. With the
+  colour white, it sees nothing protected and draws nothing, so the
+  unselected part of the model looks as it does without a selection.
+  Both reads are the same from 4.2 to 5.3 (`project_paint_uvpixel_mask`
+  and `overlay_paint_texture_frag.glsl`). The alpha is straight: that is
+  the default `alpha_mode`, and a premultiplied image would bring the
+  mask back into the colour the overlay reads.
 - The stencil image is `.PS Selection Stencil`, a Non-Color PNG read
   from the session temporary directory. A generated image would be dirty
   after every write. Blender then packs it on "Save All Images" and asks
@@ -19,10 +30,11 @@ it.
   A packed image reloads its packed copy, so it is unpacked before it is
   pointed at another file.
 - When a selection exists but its mask cannot be used, the stencil image
-  is a single black pixel. This blocks painting altogether instead of
-  letting paint land outside the selection. When not even that file can
-  be written, `.PS Selection Block`, a generated black image, blocks
-  instead. It holds no pixels of its own, so it is never dirty either.
+  is a single transparent pixel. This blocks painting altogether instead
+  of letting paint land outside the selection. When not even that file
+  can be written, `.PS Selection Block`, a generated transparent image,
+  blocks instead. It holds no pixels of its own, so it is never dirty
+  either.
 - The user's settings from before are backed up (`props/stencil.py`).
   They are restored when the selection stops applying, before a file is
   saved and when the add-on is unregistered. User edits made while the
@@ -57,6 +69,7 @@ BLOCK_KEY = "ps_selection_block"
 BLOCK_NAME = ".PS Selection Block"
 FILE_DIR = "paint_system_selection"
 BLOCK_FILE = "block.png"
+BLOCK_COLOR = (1.0, 1.0, 1.0, 0.0)
 FILE_BUDGET = 256 << 20
 """Bytes of mask files kept in the temporary directory before the oldest are deleted."""
 
@@ -70,18 +83,24 @@ def _file_dir() -> str:
     return os.path.join(bpy.app.tempdir, FILE_DIR)
 
 
-def _write_png(path: str, grey: np.ndarray) -> None:
-    """Write a greyscale PNG atomically. *grey* is uint8 (h, w), row 0 at the bottom."""
-    height, width = grey.shape
-    rows = np.empty((height, width + 1), np.uint8)
-    rows[:, 0] = 0
-    rows[:, 1:] = grey[::-1]
+def _write_png(path: str, mask: np.ndarray) -> None:
+    """Write a white PNG with *mask* as its alpha, atomically.
+
+    *mask* is uint8 (h, w), row 0 at the bottom. The PNG is grey with
+    alpha, so each pixel is a constant 255 followed by its mask byte.
+    """
+    height, width = mask.shape
+    rows = np.empty((height, 2 * width + 1), np.uint8)
+    rows[:, 0] = 0  # no row filter
+    rows[:, 1::2] = 255
+    rows[:, 2::2] = mask[::-1]
 
     def chunk(kind: bytes, data: bytes) -> bytes:
         return (struct.pack(">I", len(data)) + kind + data
                 + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
 
-    header = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    # 8 bits per channel, colour type 4: grey with alpha.
+    header = struct.pack(">IIBBBBB", width, height, 8, 4, 0, 0, 0)
     temporary = path + ".tmp"
     with open(temporary, "wb") as file:
         file.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
@@ -133,9 +152,9 @@ def _mask_file(selection, size: tuple[int, int], tile: int) -> str | None:
 
 
 def _block_file() -> str | None:
-    """The path of a 1x1 black PNG, or None when it cannot be written.
+    """The path of a 1x1 transparent PNG, or None when it cannot be written.
 
-    With the stencil inverted, black lets no paint through.
+    With the stencil inverted, zero alpha lets no paint through.
     """
     path = os.path.join(_file_dir(), BLOCK_FILE)
     if not os.path.exists(path):
@@ -158,13 +177,17 @@ def _is_selection_image(image) -> bool:
 
 
 def _block_image() -> bpy.types.Image:
-    """The generated black image that blocks painting when no file can be written, created if needed."""
+    """The generated transparent image that blocks painting when no file can be written, created if needed."""
     image = next((image for image in bpy.data.images if image.get(BLOCK_KEY)), None)
     if image is None:
-        image = bpy.data.images.new(BLOCK_NAME, 1, 1)
+        image = bpy.data.images.new(BLOCK_NAME, 1, 1, alpha=True)
         image[BLOCK_KEY] = True
-        image.generated_color = (0.0, 0.0, 0.0, 1.0)
         image.colorspace_settings.name = 'Non-Color'
+    # Also updates a black block image that a file saved by an older
+    # version still holds. A property array never equals a tuple, so it
+    # is converted before comparing.
+    if tuple(image.generated_color) != BLOCK_COLOR:
+        image.generated_color = BLOCK_COLOR
     return image
 
 
