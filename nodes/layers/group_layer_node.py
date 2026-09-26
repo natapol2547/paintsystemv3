@@ -13,7 +13,8 @@ from ...compiler.core import compile_tree, compile_wrapped_tree, mark_dirty
 from ...compiler.vector import from_world, space_settings, to_world
 
 
-def is_ps_node_tree_poll(self, node_tree: bpy.types.NodeTree):
+def _group_tree_poll(self, node_tree: bpy.types.NodeTree):
+    """A Paint System tree that does not already hold this node's tree, so no group holds itself."""
     return node_tree.bl_idname == 'PaintSystemNodeTree' and not tree_references(node_tree, self.id_data)
 
 
@@ -40,7 +41,7 @@ class PaintSystemGroupLayerNode(PaintSystemBaseNode, bpy.types.NodeCustomGroup):
         name="Node Tree",
         description="The Paint System tree this group node wraps",
         update=_on_tree_changed,
-        poll=is_ps_node_tree_poll,
+        poll=_group_tree_poll,
     )
 
     def poll_instance(self, node_tree):
