@@ -23,7 +23,7 @@ BLEND_MODE_ITEMS = []
 for blend_mode in bpy.types.ShaderNodeMix.bl_rna.properties['blend_type'].enum_items:
     BLEND_MODE_ITEMS.append(
         (blend_mode.identifier, blend_mode.name, blend_mode.description))
-    if blend_mode.identifier in ["MIX", "COLOR_BURN", "ADD", "LINEAR_LIGHT", "DIVIDE"]:
+    if blend_mode.identifier in ["MIX", "BURN", "ADD", "LINEAR_LIGHT", "DIVIDE"]:
         BLEND_MODE_ITEMS.append(None)
 
 

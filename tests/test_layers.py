@@ -261,6 +261,18 @@ try:
     check(registry.layer_type('IMAGE').bl_idname == 'PaintSystemImageLayerNode' and registry.layer_type('NOPE') is None,
           "lookup by type")
 
+    section("the blend mode menu")
+    groups = [[]]
+    for item in import_from("nodes.layers.base_layer_node").BLEND_MODE_ITEMS:
+        if item is None:
+            groups.append([])
+        else:
+            groups[-1].append(item[0])
+    check(groups == [['MIX'], ['DARKEN', 'MULTIPLY', 'BURN'], ['LIGHTEN', 'SCREEN', 'DODGE', 'ADD'],
+                     ['OVERLAY', 'SOFT_LIGHT', 'LINEAR_LIGHT'], ['DIFFERENCE', 'EXCLUSION', 'SUBTRACT', 'DIVIDE'],
+                     ['HUE', 'SATURATION', 'COLOR', 'VALUE']],
+          f"separators split the modes into the groups of the Mix node's menu {groups}")
+
     section("the Add Layer menu")
     calls = []
     menu_layout = RecordingLayout(calls)
