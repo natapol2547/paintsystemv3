@@ -22,8 +22,10 @@ The main panel keeps the channel list and moves the compiled shader info
 into a collapsed "Compiled Shader" sub-panel, shown only while the
 Developer Extras preference is on (PS-039).
 
-Open: `MAT_MT_LayerMenu` (copy, paste and merge are M2), the "not
-connected" warning, the warnings box (PS-019), the bake box, the header
+The layer menu, `PAINTSYSTEM_MT_layer_menu`, has copy, paste and
+Paste Linked (PS-017), and Unlink on a linked layer (PS-016).
+
+Open: merge in the layer menu (M2), the "not connected" warning, the warnings box (PS-019), the bake box, the header
 preset, the delete confirmation dialog and screenshot parity.
 
 ## v2 behaviour

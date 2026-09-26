@@ -6,10 +6,17 @@ Epic B. Size L. Milestone M2. The layer socket model that linked layers
 ## Status
 
 - Slice 1, RGBA-only sockets: done. See "Slice 1" below.
-- Slice 2, socket pairs and the virtual input: done, apart from the
-  user's GUI check. See "Slice 2" below.
-- Slice 3, Paste and Paste Linked: not started. Rewrites PS-016 and
-  PS-017 around slice 2.
+- Slice 2, socket pairs and the virtual input: built, then backed out in
+  e199ca9. Blender's own node tools assume a node passes one input
+  through: Delete with Reconnect, Detach and mute give every output the
+  first linked input, so on a layer in two channels they wired the
+  second channel to the first channel's stack. A Python node cannot
+  choose its internal links. One node is one layer again. The bake's UV
+  map fix found during the slice was kept (36852c5). "Slice 2" below
+  records the design as it was built.
+- Slice 3, Paste and Paste Linked: replaced by linked layers as separate
+  nodes with linked settings (PS-016, a8749b5 and 05754ee) and the
+  clipboard (PS-017, a8749b5).
 - Slice 4, a Separate Color node in the Paint System tree: not started.
 
 ## Decisions
@@ -36,7 +43,8 @@ Made with the user on 2026-09-23.
   Paste copies a node with its settings and data. Paste Linked adds a pair
   to the same node and wires the target stack through that pair. All
   settings are shared by every pair; filter results and caches are built
-  per pair.
+  per pair. Superseded on 2026-09-26 with slice 2 (see "Status"): a
+  linked layer is now a separate node with linked settings (PS-016).
 - No migration. v3 is unreleased, so a tree saved before slice 1 keeps
   its stale Alpha sockets and links; make a fresh tree instead.
 
@@ -123,7 +131,9 @@ During slice 2 the user also chose:
 
 ## Slice 2: socket pairs
 
-`nodetree/stack_ops.py`, "Pairs", describes the model in the code.
+Backed out in e199ca9 (see "Status"). This section and slice 2's
+acceptance below record the design as it was built; the code no longer
+has pairs.
 
 ### Socket layout
 
@@ -278,7 +288,8 @@ During slice 2 the user also chose:
   - A float child channel, which has no alpha since PS-005, feeds the
     parent's channel, and a constant feeds the parent's alpha. Retyping
     the child keeps the parent's compiled links (`tests/test_compile.py`).
-- Slice 2, done apart from the GUI check:
+- Slice 2, met when it was built and backed out since, with
+  `tests/test_pairs.py`:
   - Linking into the virtual input adds a pair above it; the link lands
     on the new pair, the virtual input is free again and `Mask` stays
     last (`tests/test_pairs.py`).

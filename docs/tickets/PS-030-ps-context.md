@@ -8,8 +8,9 @@ Done for the demo (M0 slice 3): `context.PSContext` and
 `parse_context(context)`, covered by `tests/test_stack.py`. Deviations from
 the design below:
 
-- No `prefs`, `trees` or `source_layer` fields yet; they arrive with the
-  tickets that need them (PS-040, PS-016). `scene_settings`,
+- No `prefs` or `trees` fields yet; they arrive with the tickets that
+  need them (PS-040). No `source_layer` either: a linked layer is a node
+  with its own settings and no source (PS-016). `scene_settings`,
   `active_object`, `ps_objects`, `material` and `material_settings` are
   left out too, since nothing reads them; each comes back with the first
   code that does. `PSContext` holds `ps_object`, `tree`, `channel`,

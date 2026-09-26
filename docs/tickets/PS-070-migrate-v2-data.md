@@ -27,8 +27,9 @@ colour state. Versioning history in `paintsystem/versioning.py` and
    `enabled`, `lock_*`, `is_expanded`, `actions`. A v2 `external_image`
    is dropped: v3 has no external-editor round trip (PS-054).
    Folders get their children inserted into the content chain; linked
-   layers become linked nodes (PS-016) resolved by uid across materials
-   after all trees exist.
+   layers become nodes of their source's type, resolved by uid after all
+   trees exist. v3 links only within one tree (PS-016), so a v2 link
+   into another material becomes a copy there.
 3. Parameter-node state (curves, ramps, texture settings, custom group
    inputs) is read from the old per-layer node tree by node name
    (`source`, `map_range`, ...) and applied to the new artifact nodes

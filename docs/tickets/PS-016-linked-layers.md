@@ -255,29 +255,85 @@ Other code paths that touch links:
 
 ## v3 design
 
-- `PaintSystemLinkedLayerNode(PaintSystemLayerNode)`: `source_tree`
-  (PointerProperty to a `PaintSystemNodeTree`, may be the same tree) and
-  `source_uuid`. `resolve()` returns the source node or `None`.
-- `emit_source` emits the source node's source subgraph under the linked
-  node's own uuid prefix (`ctx.emit_as(self, source_node)` swaps the
-  node-id namespace while the source's `emit_source` runs). Blend mode,
-  opacity, clip and masks belong to the linked node; only the content is
-  shared. Sources that are folders link the whole content chain.
-- `hash_parts` includes `source_tree.compiled_hash`-independent data: the
-  source node's `subtree_hash` computed in the source tree's context.
-- Editing: the Layer Settings panel for a linked node draws the source
-  node's settings (`draw_layer_settings` delegated) with a header row
-  "Linked to <tree> / <layer>" and the "Unlink" operator, which replaces
-  the node by a deep copy of the source chain.
-- Missing source (deleted) compiles to transparent and shows the warning
-  icon with "Linked layer source missing".
-- Cross-material linking works because trees are datablocks: the linked
-  node stores the tree pointer, not a material.
+Built in a8749b5 and 05754ee, after the PS-098 socket pairs were backed
+out (e199ca9). `nodes/layers/links.py` describes the model in the code.
+
+Decisions made with the user on 2026-09-26:
+
+- One node is one layer. Linked layers are separate nodes of the same
+  type in the same tree, with the same `link_id`. There is no linked
+  layer node type and no source: every node of a group is equal.
+- Settings are copied on change. Each node keeps its full settings and
+  compiles like any other layer. A change to a linked setting on one
+  node is copied to the others from the property's `update` callback.
+  Drivers and keyframes set values without calling it, so animated
+  values stay per node.
+- Every property a layer class declares is linked, except those its
+  `ps_unlinked_props` names: the bake cache, `link_id`, a folder's
+  `is_expanded`, and a filter's derived result, its freshness and Auto
+  Refresh. Those belong to one place in one stack. The refresh job turns
+  Auto Refresh off on the one layer whose build failed, and says why
+  there. `is_clip`, `enabled` and `lock_layer` are linked.
+- A change and the copies it makes compile the tree once, inside
+  `suspend_compile`, and so does linking.
+- A folder links its own settings only. Each folder keeps its own
+  content.
+- Links stay within one tree. Across materials, Paste copies instead.
+- A Linked Layers node with an input any layer can be linked into was
+  proposed and is deferred until the user designs it.
+
+Ways to link:
+
+- Ctrl+L in the node editor links the selected layers with the active
+  one, which gives them its settings. Locked layers and layers of
+  another type are left out and reported. When linking would leave a
+  painted image without a user, a dialog lists the images first. Images
+  with a fake user, and generated images that were never painted, are
+  not listed.
+- "Link With..." in the node editor sidebar's Linked Layers panel picks
+  a layer by name from a search list, so a redo links with the same
+  layer. The panel lists the active layer's linked layers with their
+  channels and offers Unlink.
+- Paste Linked Layer(s) in the layer list's Layer menu (PS-017).
+
+Unlink and copies:
+
+- Unlink takes a layer out of its group. An image layer gets its own copy
+  of the image, with unsaved painting, packed
+  (`compiler.bake.duplicate_image`). v2's `image.copy()` lost unsaved
+  strokes. The copy also keeps an unsaved resize, and the pixels of an
+  image whose file is gone.
+- The last layer left in a group loses its `link_id`, so a later copy of
+  it does not read as linked. A group whose other layers were deleted
+  keeps the id, so undo brings the link back.
+- Shift+D, and Ctrl+C then Ctrl+V in the node editor, make an unlinked
+  copy while the source is in the tree. The copy finds it by the uuid
+  Blender passes to `Node.copy`, so a renamed source still counts. A
+  Ctrl+V after the source was deleted keeps the link and takes the
+  group's settings. A copy of the whole tree keeps the links among its
+  own nodes.
+- `link_id` is not part of the compile fingerprint.
+
+The layer list shows a link icon on linked rows, and the node editor
+draws a tab in the header colour with a chain icon on top of each linked
+node (`nodes/link_tabs.py`). The `gpu` module cannot draw Blender's
+icons, so the tab uses `icons/link_tab.png`, a placeholder until the
+user supplies the final icon.
 
 ## Acceptance
 
-- Paint on the source image; the linked layer in another material
-  updates after compile.
-- Unlink produces an independent copy with new uuids and a copied image
-  reference (image is shared, as in v2).
-- Deleting the source shows the warning and does not crash the compile.
+- Linking gives the selected layers the active layer's settings, and a
+  change on any linked layer reaches the others and their compiled
+  result, in any channel (`tests/test_links.py`).
+- Unlinked properties stay per node: cache, folder expansion and
+  content, filter results (`tests/test_links.py`).
+- Only layers of one type link, and Ctrl+L skips locked layers and warns
+  about images that would be lost (`tests/test_links.py`).
+- Unlink gives an image layer its own copy of the painted pixels
+  (`tests/test_links.py`).
+- Shift+D and a tree copy keep or drop links as above, and deleting one
+  layer of a group leaves the other working (`tests/test_links.py`).
+- The node editor tab has the header colour, sits on the node's top
+  edge and holds the icon the right way up (`tests/test_links.py`, where
+  a GPU context exists).
+- The user's GUI check of the tab and the linking UI.

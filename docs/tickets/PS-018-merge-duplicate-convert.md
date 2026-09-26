@@ -217,7 +217,8 @@ All of these are `bake_node_cache` with a different target:
   opacity, clip, masks and position.
 - Transfer UV: bake the image node's own image through the new UV map
   into a new image, then switch `uv_map_name` and `image`.
-- Duplicate layer: `duplicate_subtree` (PS-017) + `insert_above(node)`.
+- Duplicate layer: copy the layer and its content as the clipboard's
+  paste does (`nodes/layers/clipboard.py`, PS-017), above the layer.
   Add "Duplicate Layer" to `MAT_MT_LayerMenu` (new in v3). Expect the
   duplicate to arrive unbaked: `PaintSystemLayerNode.copy` clears the
   cache, because the two layers would otherwise share one image and

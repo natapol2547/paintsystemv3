@@ -121,11 +121,11 @@ groups and templates (040-042), colour history (062).
 | [PS-013](tickets/PS-013-clipping-layers.md) | Clipping layers | M | 001 010 |
 | [PS-014](tickets/PS-014-passthrough-folders.md) | Pass-through folders | S | 010 |
 | [PS-015](tickets/PS-015-layer-masks.md) | Layer masks | M | 008 |
-| [PS-016](tickets/PS-016-linked-layers.md) | Linked layers | M | 010 098 |
-| [PS-017](tickets/PS-017-clipboard.md) | Clipboard: copy, copy all, paste, paste linked, unlink | M | 010 016 098 |
+| [PS-016](tickets/PS-016-linked-layers.md) | Linked layers: separate nodes with linked settings, done apart from the GUI check | M | 010 098 |
+| [PS-017](tickets/PS-017-clipboard.md) | Clipboard: copy, copy all, paste, paste linked, unlink. Done apart from the GUI check | M | 010 016 098 |
 | [PS-018](tickets/PS-018-merge-duplicate-convert.md) | Merge up/down, duplicate, convert to image layer, transfer UV | M | 010 020 |
 | [PS-019](tickets/PS-019-base-layer-flags.md) | Base layer flags and warnings API | S | – |
-| [PS-098](tickets/PS-098-rgba-sockets-and-socket-pairs.md) | RGBA sockets and socket pairs. Slice 1, RGBA-only sockets, done | L | 010 |
+| [PS-098](tickets/PS-098-rgba-sockets-and-socket-pairs.md) | RGBA sockets and socket pairs. Slice 1, RGBA-only sockets, done; socket pairs backed out | L | 010 |
 
 ## Epic C. Layer types
 
@@ -292,5 +292,5 @@ data structures or algorithms are ported.
 
 - Legacy UI mode (`use_legacy_ui`). The v3 sidebar implements only the modern layout.
 - `SHADER` layer type. It is not in `LAYER_TYPE_ENUM` and has no graph builder in v2.
-- `BLANK` layer type. v2 used it as the carrier for linked layers; v3 has a dedicated node (PS-016).
+- `BLANK` layer type. v2 used it as the carrier for linked layers; in v3 a linked layer is a node of the source's own type (PS-016).
 - `PS Camera Plane Old` geometry node group from `library2.blend`.
