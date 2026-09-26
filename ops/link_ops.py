@@ -1,6 +1,6 @@
 """Link and unlink layers (PS-016). See ``nodes/layers/links.py``."""
 from bpy.types import Operator
-from bpy.props import EnumProperty
+from bpy.props import StringProperty
 from bpy.utils import register_classes_factory
 
 from ..common import icon_kwargs
@@ -8,17 +8,11 @@ from ..context import button_layer, get_active_tree, node_editor_tree, update_ac
 from ..nodes.layers import links
 from ..nodetree.stack_ops import is_layer
 
-# The items ``_target_items`` last returned. Blender keeps no reference
-# to a dynamic enum's items, so their strings must stay alive here.
-_target_item_list = []
 
-
-def _target_items(self, context):
-    global _target_item_list
+def target_names(self, context, edit_text):
+    """The names of the layers the active layer can link with. Blender filters them by *edit_text*."""
     layer = button_layer(context, get_active_tree(context))
-    candidates = links.link_candidates(layer) if layer is not None else []
-    _target_item_list = [(node.name, node.name, "") for node in candidates]
-    return _target_item_list
+    return [node.name for node in links.link_candidates(layer)] if layer is not None else []
 
 
 def draw_lost_images(layout, lost) -> None:
@@ -90,7 +84,11 @@ class PAINTSYSTEM_OT_link_layer(Operator):
                       "and a change to one linked layer changes them all")
     bl_options = {'REGISTER', 'UNDO'}
 
-    target: EnumProperty(name="Layer", description="The layer to link with", items=_target_items)
+    # A name, not a dynamic enum. An enum stores the index of the item,
+    # and the layer picked leaves the list once linked, so a redo would
+    # read another layer at that index.
+    target: StringProperty(name="Layer", description="The layer to link with",
+                           search=target_names, search_options=set())
 
     @classmethod
     def poll(cls, context):
@@ -106,6 +104,9 @@ class PAINTSYSTEM_OT_link_layer(Operator):
         return True
 
     def invoke(self, context, event):
+        names = target_names(self, context, "")
+        if self.target not in names:
+            self.target = names[0]
         return context.window_manager.invoke_props_dialog(self, confirm_text="Link")
 
     def draw(self, context):

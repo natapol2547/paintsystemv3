@@ -30,6 +30,7 @@ links = import_from("nodes.layers.links")
 clipboard = import_from("nodes.layers.clipboard")
 registry = import_from("nodes.layers.registry")
 link_tabs = import_from("nodes.link_tabs")
+link_ops = import_from("ops.link_ops")
 layers_panels = import_from("panels.layers_panels")
 stack_ops = import_from("nodetree.stack_ops")
 gpu_core = import_from("gpu_passes.core")
@@ -524,9 +525,15 @@ def test_operators():
     section("Link With and Unlink")
     d = add(tree, SOLID, "D")
     tree.nodes.active = d
-    check(bpy.ops.paint_system.link_layer(target="A") == {'FINISHED'} and d.link_id == a.link_id,
+    names = link_ops.target_names(None, bpy.context, "")
+    check(names == ["A", "B", "C", "Locked"], f"Link With offers the other layers of its type {names}")
+    # With undo on, the call is kept for Adjust Last Operation.
+    check(bpy.ops.paint_system.link_layer('EXEC_DEFAULT', True, target="A") == {'FINISHED'} and d.link_id == a.link_id,
           "Link With links the active layer with the one picked")
     check(tuple(d.fill_color) == RED, "and it takes that layer's settings")
+    last = bpy.context.window_manager.operators[-1]
+    check(last.bl_idname == "PAINT_SYSTEM_OT_link_layer" and last.properties.target == "A",
+          f"a redo links with the layer picked, which has left the list since ({last.properties.target!r})")
     check(bpy.ops.paint_system.unlink_layer() == {'FINISHED'} and d.link_id == "", "Unlink undoes it")
     check(not bpy.ops.paint_system.unlink_layer.poll(), "an unlinked layer cannot be unlinked")
     tree.nodes.active = locked
