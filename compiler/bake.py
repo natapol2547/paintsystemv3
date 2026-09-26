@@ -156,6 +156,24 @@ def _borrowed_selection(view_layer, obj):
         view_layer.objects.active = previous_active
 
 
+@contextlib.contextmanager
+def _active_uv_map(mesh, name: str):
+    """Make the UV map *name* of *mesh* the active one, then restore the user's.
+
+    ``bpy.ops.object.bake`` writes through the active UV map, whatever
+    the target Image Texture's Vector input reads. Its ``uv_layer``
+    option would pick another map, but that string holds 63 bytes, fewer
+    than a UV map name can have.
+    """
+    uv_layers = mesh.uv_layers
+    previous = uv_layers.active_index
+    try:
+        uv_layers.active_index = uv_layers.find(name)
+        yield
+    finally:
+        uv_layers.active_index = previous
+
+
 def _merge_alpha(color_image, alpha_image) -> None:
     """Copy the red channel of *alpha_image* into the alpha of *color_image*.
 
@@ -188,15 +206,10 @@ def bake_subtree(context, tree, node, obj, image, *, pair: int = 0, margin: int 
 
     *image* is written in place and not packed. The caller decides whether
     the result is saved inside the .blend file. The render settings, the
-    object's material slots and the selection are all restored before this
-    returns.
+    object's material slots, its active UV map and the selection are all
+    restored before this returns.
     """
     check_bake_object(obj, uv_map)
-    # The bake writes through the UV map it is given, or through the
-    # active UV map when given none, whatever the target Image Texture's
-    # Vector input reads. The cache is read through *uv_map*, or the
-    # active render UV map for '', so the bake is given that same map.
-    uv_layer = resolve_uv_map(obj, uv_map)
 
     bake_tree, subtree_hash = build_bake_tree(tree, node, pair)
     alpha_image = create_managed_image(BAKE_ALPHA_IMAGE_NAME, image.size[0], image.size[1],
@@ -215,20 +228,23 @@ def bake_subtree(context, tree, node, obj, image, *, pair: int = 0, margin: int 
     nt.nodes.active = target
 
     try:
+        # The cache is read through *uv_map*, or the active render UV map
+        # for '', so the bake writes through that same map.
         with _temporary_material(context, obj, mat), _bake_settings(context.scene) as bake, \
-                _borrowed_selection(context.view_layer, obj):
+                _borrowed_selection(context.view_layer, obj), \
+                _active_uv_map(obj.data, resolve_uv_map(obj, uv_map)):
             bake.margin = margin
             with context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
                 # Pass 1: colour
                 nt.links.new(group.outputs['Color'], emission.inputs['Color'])
                 target.image = image
-                bpy.ops.object.bake(type='EMIT', uv_layer=uv_layer)
+                bpy.ops.object.bake(type='EMIT')
                 # Pass 2: alpha
                 for link in list(emission.inputs['Color'].links):
                     nt.links.remove(link)
                 nt.links.new(group.outputs['Alpha'], emission.inputs['Color'])
                 target.image = alpha_image
-                bpy.ops.object.bake(type='EMIT', uv_layer=uv_layer)
+                bpy.ops.object.bake(type='EMIT')
         _merge_alpha(image, alpha_image)
     finally:
         bpy.data.materials.remove(mat)

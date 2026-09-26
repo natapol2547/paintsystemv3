@@ -156,29 +156,34 @@ try:
     check(shared.pairs[1].cache_stale is False and f"{shared.uuid}:cache@Color 2" not in compiled_ids(tree),
           "and has no cache node")
     cube = bpy.data.objects["Cube"]
-    first_uv = cube.data.uv_layers.active
-    second_uv = cube.data.uv_layers.new(name="Second UV")
+    uv_layers = cube.data.uv_layers
+    first_uv = uv_layers.active.name
+    # Longer than the 63 bytes the bake operator's uv_layer string holds.
+    second_uv = "Second UV map, with a name longer than any operator string holds"
+    uv_layers.new(name=second_uv)
     # Squeeze the second UV map into the bottom-left quarter, so a bake
     # through any other map paints outside it.
-    for corner in second_uv.data:
+    for corner in uv_layers[second_uv].data:
         corner.uv = corner.uv * 0.5
-    cube.data.uv_layers.active = first_uv
-    second_uv.active_render = True
-    for pair, uv_map in ((0, ""), (1, "Second UV")):
+    uv_layers.active = uv_layers[first_uv]
+    uv_layers[second_uv].active_render = True
+    for pair, uv_map in ((0, ""), (1, second_uv)):
         baked = bake.bake_node_cache(bpy.context, tree, shared, cube, pair=pair, width=16, height=16,
                                      margin=0, uv_map=uv_map)
         painted = painted_texels(baked)
         outside = [(x, y) for x, y in painted if x >= 8 or y >= 8]
         check(painted and not outside,
               f"pair {pair} bakes through the UV map its cache is read with, "
-              f"{uv_map or 'the active render one'}, not the active one {len(painted)} {outside}")
-    first_uv.active_render = True
+              f"{'the named one' if uv_map else 'the active render one'}, not the active one "
+              f"{len(painted)} {outside}")
+    check(uv_layers.active.name == first_uv, "and the active UV map is the user's again")
+    uv_layers[first_uv].active_render = True
     channel_pixel(tree, "Color")
-    check(shared.cache_uv_map == "Second UV" and shared.pairs[1].cache_hash != ""
+    check(shared.cache_uv_map == second_uv and shared.pairs[1].cache_hash != ""
           and shared.pairs[0].cache_hash == "" and shared.pairs[0].cache_stale,
           "baking a pair with another UV map sends the other pairs back to baking, "
           "since one UV map reads every pair's cache")
-    cube.data.uv_layers.remove(second_uv)
+    uv_layers.remove(uv_layers[second_uv])
     shared.cache_enabled = False
     bpy.data.images.remove(shared.pairs[1].cache_image)
     shared.pairs[0].cache_image = None
