@@ -37,6 +37,7 @@ window_only=(
 # Run again windowed under --ui: 4.2 to 5.1 have no background GPU context.
 ui_tests=(
     test_ui_draw.py
+    test_links.py
     test_texel_map.py
     test_selection_raster.py
     test_selection_session_ui.py

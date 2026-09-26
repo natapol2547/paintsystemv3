@@ -72,11 +72,21 @@ def unload_icons() -> None:
     _icon_previews = None
 
 
-def get_icon(name: str) -> int | None:
-    """Icon id of the add-on icon *name*, or None when there is no such icon."""
+def icon_preview(name: str) -> bpy.types.ImagePreview | None:
+    """The preview of the add-on icon *name*, or None when there is no such icon.
+
+    Its ``image_pixels_float`` are the icon's pixels, for drawing it with
+    the ``gpu`` module.
+    """
     if _icon_previews is None or name not in _icon_previews:
         return None
-    return _icon_previews[name].icon_id
+    return _icon_previews[name]
+
+
+def get_icon(name: str) -> int | None:
+    """Icon id of the add-on icon *name*, or None when there is no such icon."""
+    preview = icon_preview(name)
+    return preview.icon_id if preview is not None else None
 
 
 _blender_icons: set[str] | None = None
@@ -122,19 +132,23 @@ def blender_icon(*names: str) -> str:
     return next((name for name in names if name in blender_icons), 'NONE')
 
 
-def rounded_rect(x0, y0, x1, y1, radius, segments=6):
+def rounded_rect(x0, y0, x1, y1, radius, segments=6, square_bottom=False):
     """Outline points of a rounded rectangle, counter-clockwise from the right edge.
 
     (x0, y0) is the bottom-left corner and (x1, y1) the top-right one. The
-    radius is clamped so the corners fit. The shape is convex, so a triangle
-    fan over the points fills it.
+    radius is clamped so the corners fit. With *square_bottom*, only the
+    top corners are rounded. The shape is convex, so a triangle fan over
+    the points fills it.
     """
     radius = max(0.0, min(radius, (x1 - x0) / 2, (y1 - y0) / 2))
-    corners = ((x1 - radius, y1 - radius, 0.0), (x0 + radius, y1 - radius, 0.5),
-               (x0 + radius, y0 + radius, 1.0), (x1 - radius, y0 + radius, 1.5))
+    bottom = 0.0 if square_bottom else radius
+    corners = ((x1 - radius, y1 - radius, radius, 0.0), (x0 + radius, y1 - radius, radius, 0.5),
+               (x0 + bottom, y0 + bottom, bottom, 1.0), (x1 - bottom, y0 + bottom, bottom, 1.5))
     points = []
-    for cx, cy, start in corners:
-        for step in range(segments + 1):
-            angle = math.pi * (start + 0.5 * step / segments)
-            points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
+    for cx, cy, corner_radius, start in corners:
+        # A square corner is one point.
+        steps = segments if corner_radius > 0 else 0
+        for step in range(steps + 1):
+            angle = math.pi * (start + 0.5 * step / max(steps, 1))
+            points.append((cx + corner_radius * math.cos(angle), cy + corner_radius * math.sin(angle)))
     return points

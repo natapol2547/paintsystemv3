@@ -4,7 +4,7 @@ Linked layers are nodes of one type in one tree with the same
 ``link_id``. A change to a linked setting on one is copied to the
 others. These check what is linked and what is not, how links start
 and end, how copies of linked layers behave, the clipboard, the
-operators and the layer list.
+operators and the layer list, and the tab that marks a linked node.
 
 Run:  blender -b --factory-startup --python tests/test_links.py
 """
@@ -15,10 +15,11 @@ from types import SimpleNamespace
 
 import bpy
 import numpy as np
+from mathutils import Matrix
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (RecordingLayout, bake_group, check, close, finish, guarded, import_from,  # noqa: E402
-                     pixel_at, register_addon, section)
+                     pixel_at, register_addon, section, skip)
 
 register_addon()
 core = import_from("compiler.core")
@@ -26,8 +27,11 @@ bake = import_from("compiler.bake")
 links = import_from("nodes.layers.links")
 clipboard = import_from("nodes.layers.clipboard")
 registry = import_from("nodes.layers.registry")
+link_tabs = import_from("nodes.link_tabs")
 layers_panels = import_from("panels.layers_panels")
 stack_ops = import_from("nodetree.stack_ops")
+gpu_core = import_from("gpu_passes.core")
+common = import_from("common")
 
 SOLID = 'PaintSystemSolidColorLayerNode'
 FOLDER = 'PaintSystemFolderLayerNode'
@@ -463,6 +467,79 @@ def test_ui():
     check("B" in labels and "Color" in labels, f"it lists the linked layer and its channel {labels}")
 
 
+def test_tabs():
+    section("the tab on a linked node")
+    preview = common.icon_preview(link_tabs.ICON_NAME)
+    check(preview is not None and tuple(preview.image_size) != (0, 0), "the chain icon is shipped")
+    path = os.path.join(os.path.dirname(common.__file__), "icons", f"{link_tabs.ICON_NAME}.png")
+    loaded = bpy.data.images.load(path)
+    size = loaded.size[0] * loaded.size[1] * 4
+    from_file = np.empty(size, dtype=np.float32)
+    loaded.pixels.foreach_get(from_file)
+    bpy.data.images.remove(loaded)
+    from_preview = np.array(preview.image_pixels_float[:], dtype=np.float32)
+    check(from_preview.shape == from_file.shape and np.allclose(from_preview[3::4], from_file[3::4], atol=2 / 255),
+          "the preview's pixels run bottom row first, as a texture's do")
+
+    if not gpu_core.gpu_available():
+        skip("no GPU context in this background Blender, so the tab is not drawn")
+        return
+    import gpu
+    tree = new_tree("Link Tabs")
+    a = add(tree, SOLID, "A")
+    b = add(tree, SOLID, "B")
+    lone = add(tree, SOLID, "Lone")
+    links.link([b], a)
+    a.location = (100, 200)
+    b.location = (1000, 1000)
+    lone.location = (150, 200)
+    scale = 4.0
+    # View space x 400..760, y 780..880 fills the image one pixel per unit.
+    # A's tab and the place Lone's would be are both inside it.
+    x0, y0, width, height = 400, 780, 360, 100
+    projection = Matrix(((2 / width, 0, 0, -(2 * x0 + width) / width),
+                         (0, 2 / height, 0, -(2 * y0 + height) / height),
+                         (0, 0, 1, 0), (0, 0, 0, 1)))
+    offscreen = gpu.types.GPUOffScreen(width, height)
+    try:
+        with offscreen.bind():
+            framebuffer = gpu.state.active_framebuffer_get()
+            framebuffer.clear(color=(0.0, 0.0, 0.0, 0.0))
+            with gpu.matrix.push_pop(), gpu.matrix.push_pop_projection():
+                gpu.matrix.load_identity()
+                gpu.matrix.load_projection_matrix(projection)
+                link_tabs.draw_tabs(tree, scale)
+            buffer = framebuffer.read_color(0, 0, width, height, 4, 0, 'UBYTE')
+        pixels = np.array(buffer.to_list(), dtype=np.float32).reshape(height, width, 4) / 255
+    finally:
+        offscreen.free()
+
+    def at(x, y):
+        return tuple(pixels[int(y - y0), int(x - x0)])
+
+    left, top = 100 * scale, 200 * scale
+    tab_left = left + link_tabs.TAB_INSET * scale
+    tab_right = tab_left + link_tabs.TAB_WIDTH * scale
+    tab_top = top + link_tabs.TAB_HEIGHT * scale
+    header = (*a.header_color, 1.0)
+    check(close(at(tab_left + 3, top + 3), header, 2 / 255), f"the tab has the header colour {at(tab_left + 3, top + 3)}")
+    check(at(tab_left - 3, top + 3)[3] == 0 and at(tab_right + 3, top + 3)[3] == 0, "it is as wide as a tab")
+    check(at(tab_left + 3, tab_top + 3)[3] == 0, "and as high")
+    check(at(tab_left + 1, tab_top - 1)[3] == 0 and at(tab_left + 3, top - 1)[3] > 0,
+          "its top corners are round and its bottom ones square")
+    half = link_tabs.ICON_SIZE * scale / 2
+    cx, cy = (tab_left + tab_right) / 2, (top + tab_top) / 2
+    icon = pixels[int(cy - half - y0):int(cy + half - y0), int(cx - half - x0):int(cx + half - x0)]
+    white = (icon[..., 0] > 0.9) & (icon[..., 1] > 0.9)
+    mid = white.shape[0] // 2
+    upper_right, upper_left = white[mid:, mid:].mean(), white[mid:, :mid].mean()
+    check(white.mean() > 0.1, f"the chain is drawn inside ({white.mean():.2f} white)")
+    check(upper_right > 2 * upper_left, f"the right way up, rising to the right ({upper_right:.2f} > {upper_left:.2f})")
+    lone_tab_left = 150 * scale + link_tabs.TAB_INSET * scale
+    check(at(lone_tab_left + 3, top + 3)[3] == 0, "an unlinked layer gets no tab")
+    link_tabs.release()
+
+
 guarded(test_what_is_linked)
 guarded(test_link_and_sync)
 guarded(test_unlink_and_copies)
@@ -470,4 +547,5 @@ guarded(test_images)
 guarded(test_clipboard)
 guarded(test_operators)
 guarded(test_ui)
+guarded(test_tabs)
 finish("LINKED LAYERS TEST")

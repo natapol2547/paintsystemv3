@@ -2,6 +2,7 @@
 """Coloured node headers, drawn from inside ``draw_label``.
 
 Entry point: ``draw_header(node)``, called from the node's ``draw_label``.
+``node_top_left`` places the header, and ``link_tabs`` uses it too.
 
 The technique is adapted from ControlRig by Edward Urena
 (``GeneralNode.draw_color`` and ``blender_draw.Draw``/``Rect``).
@@ -19,6 +20,20 @@ from gpu_extras.batch import batch_for_shader
 from ..common import is_newer_than, node_location, rounded_rect
 
 
+def node_top_left(node, scale) -> tuple[float, float]:
+    """The top-left corner of *node* as the node editor draws it, in view space.
+
+    *scale* is the interface scale, ``preferences.system.ui_scale``.
+    """
+    location = node_location(node)
+    if node.hide:
+        # Blender centres a collapsed node on the centre of the expanded
+        # title (NODE_DY / 2 = 10 UI units), not on the node's top edge.
+        return (round(location.x * scale),
+                round(location.y * scale) + node.dimensions[1] / 2 - 10 * scale)
+    return location.x * scale, location.y * scale
+
+
 def draw_header(node):
     context = bpy.context
     if (bpy.app.background or not node.use_custom_color
@@ -33,20 +48,16 @@ def draw_header(node):
         return
 
     scale = context.preferences.system.ui_scale
-    location = node_location(node)
     padding = 1.5 * scale
-    left, top = location.x * scale - padding, location.y * scale + padding
     corner_radius = 5 * scale
     if node.hide:
-        # Blender centres a collapsed node on the centre of the expanded
-        # title (NODE_DY / 2 = 10 UI units), not on the node's top edge.
         padding = 0.5
-        left = round(location.x * scale) - padding
-        top = round(location.y * scale) + height / 2 - 10 * scale + padding
         # Blender 4.x draws a collapsed node as a capsule. 5.x uses the
         # standard node corner radius.
         corner_radius = 4 * scale if is_newer_than(5, 0) else height / 2
         corner_radius += padding
+    left, top = node_top_left(node, scale)
+    left, top = left - padding, top + padding
     right, bottom = left + width + 2 * padding, top - height - 2 * padding
     vertices = rounded_rect(left, bottom, right, top, corner_radius)
 
