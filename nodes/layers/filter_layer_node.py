@@ -12,7 +12,7 @@ from ..base_node import mark_tree_dirty
 from ...common import blender_icon, icon_kwargs
 from ...compiler.library import filter_mix_group
 from ...filters.derived import FINGERPRINT_KEY, build_stamp, is_built, stamped_uv_map
-from ...filters.freshness import PIXEL_REASON, built_on_surface, fingerprint_parts, structure_reason
+from ...filters.freshness import PIXEL_REASON, fingerprint_parts, read_render_map, structure_reason
 from ...filters.layer_specs import LAYER_FILTERS, layer_filter_items
 from ...filters import layer_job, layer_plan
 from ...nodetree.stack_ops import below_input, feeding_link
@@ -376,9 +376,11 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
             link = feeding_link(below_input(self))
             stored = str(image.get(FINGERPRINT_KEY, ""))
             # A build that needed a mesh took it from the Object, which it
-            # filled in. A build that did not is compared without one.
-            surface = self.surface_object if built_on_surface(stored) else None
-            parts = fingerprint_parts(ctx, self, link.from_node if link else None, surface)
+            # filled in. The stamp says whether it also read the mesh's
+            # render UV map. A kind that neither needs a mesh nor read the
+            # map ignores the Object.
+            parts = fingerprint_parts(ctx, self, link.from_node if link else None,
+                                      self.surface_object, read_render_map(stored))
             reason = structure_reason(stored, parts)
         # Writing an RNA property tags the tree and the materials that
         # use it for an update, so only write when the value changes.

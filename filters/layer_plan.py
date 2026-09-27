@@ -24,17 +24,21 @@ because they need no mesh:
   layer with its own UV Map left empty follows them.
 - Two different names. They disagree whatever the mesh.
 
-A mesh is needed only when one map is named and some layers below leave
-theirs empty. Those use the mesh's active render map, and only the mesh
-can say whether that is the named one. The mesh is the one stored on the
-filter layer (its Object), else the active one. So a layer resolves the
-same way whatever is selected once it has been built. `surface_of` has
-the rules, and `keep_surface` stores the mesh when a build goes ahead.
+For the UV maps, a mesh is needed only when one map is named and some
+layers below leave theirs empty. Those use the mesh's active render map,
+and only the mesh can say whether that is the named one. A kind that
+`needs_surface`, such as the painter, needs one whatever the maps say.
+`_seam_surface` checks it before the build starts.
+
+The mesh is the one stored on the filter layer (its Object), else the
+active one. So a layer resolves the same way whatever is selected once
+it has been built. `surface_of` has the rules, and `keep_surface` stores
+the mesh when a build goes ahead.
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import bpy
 
@@ -44,6 +48,7 @@ from ..gpu_passes.texel_map import resolve_uv_map
 from ..nodetree.stack_ops import below_input, channel_of, feeding_link
 from . import composite
 from .core import Refused
+from .layer_specs import LAYER_FILTERS
 
 log = logging.getLogger(__name__)
 
@@ -60,12 +65,25 @@ class InputPlan:
     nothing names a map, so the result uses the active render map too.
 
     *surface* is the mesh the plan was resolved against, or None when it
-    needed none. A build stores it on the layer (`keep_surface`).
+    needed none. A kind that `needs_surface` always has one. A build
+    stores it on the layer (`keep_surface`).
     """
     source: bpy.types.Node
     chain: composite.ChainPlan
     uv_map: str
     surface: bpy.types.Object | None
+
+    @property
+    def reads_render_map(self) -> bool:
+        """Whether the result depends on which UV map *surface* renders with.
+
+        Layers below that leave their UV map empty use that map, and the
+        plan checked that it is the named one. A kind that `needs_surface`
+        reads the mesh through that map when nothing names one. A stack
+        that names its map, with no layer below leaving it empty, uses
+        neither, whatever the mesh renders with.
+        """
+        return self.surface is not None and (not self.uv_map or "" in self.chain.uv_maps)
 
 
 def resolve_input(context, tree, node) -> InputPlan:
@@ -92,7 +110,12 @@ def resolve_input(context, tree, node) -> InputPlan:
         raise Refused(f"There is nothing below '{node.name}' to filter")
     if gpu_known() is False:
         raise _needs_bake(node, "this Blender has no GPU context to composite in")
-    return _composite_plan(context, tree, node, source, chain)
+    plan = _composite_plan(context, tree, node, source, chain)
+    # An unregistered kind is refused by the build, with its own message.
+    kind = LAYER_FILTERS.get(node.filter_type)
+    if kind is not None and kind.needs_surface:
+        plan = _seam_surface(context, tree, node, plan)
+    return plan
 
 
 def _needs_bake(node, reason: str) -> Refused:
@@ -148,6 +171,45 @@ def _composite_plan(context, tree, node, source, chain) -> InputPlan:
                       f"({name!r} and the render map {render!r}), "
                       "so filtering them needs a Cycles bake")
     return InputPlan(source, chain, name, obj)
+
+
+def _seam_surface(context, tree, node, plan) -> InputPlan:
+    """*plan*, with the mesh whose UV seams *node*'s strokes are to follow.
+
+    Reuses the mesh the UV maps were settled on, if any, instead of
+    looking it up again. Everything the mesh can be refused for is
+    checked here, before the build starts. So a layer that cannot be
+    built says why and waits, with Auto Refresh still on.
+    """
+    obj = plan.surface
+    if obj is None:
+        obj, problem = surface_of(context, tree, node)
+        if obj is None:
+            raise Refused(f"'{node.name}' needs a mesh to continue its strokes across UV seams, "
+                          f"but {problem}. {_PICK_MESH}")
+    name = resolve_uv_map(obj, plan.uv_map)
+    if name is None and plan.uv_map:
+        raise Refused(f"'{obj.name}' has no UV map named {plan.uv_map!r}")
+    if name is None:
+        raise Refused(f"'{obj.name}' has no UV map, so '{node.name}' cannot find its UV seams")
+    # Also true while another object sharing the mesh is in Edit Mode.
+    # The mesh then holds what it had before Edit Mode, not what is shown.
+    if obj.data.is_editmode:
+        raise Refused(f"The mesh of '{obj.name}' is in Edit Mode, so its UV seams cannot be read")
+    # The evaluated mesh is the one that renders, so it is the one
+    # checked. An object disabled in the viewport, or in a collection
+    # excluded from the view layer, is not evaluated, and `evaluated_get`
+    # then returns the object without its modifiers.
+    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    if not evaluated.is_evaluated:
+        raise Refused(f"'{obj.name}' is disabled in the viewport or excluded from the view layer, "
+                      "so its UV seams cannot be read")
+    # Some modifiers, such as Remesh, leave the mesh without UV maps.
+    uv = evaluated.data.attributes.get(name)
+    if uv is None or uv.domain != 'CORNER' or uv.data_type != 'FLOAT2':
+        raise Refused(f"The modifiers on '{obj.name}' remove UV map {name!r}, "
+                      "so its UV seams cannot be read")
+    return replace(plan, surface=obj)
 
 
 # ── The mesh a layer resolves against ────────────────────────────────

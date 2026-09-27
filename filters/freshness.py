@@ -21,7 +21,9 @@ datablock swapped or renamed.
   socket stays the same, and `subtree_hash` cannot see it. Clip gets its
   own part.
 - The mesh's active render UV map is outside the tree too. It gets a
-  part when the build needed a mesh (see `fingerprint_parts`).
+  part when the build read it (see `fingerprint_parts`). So does the
+  mesh itself, for a kind that always needs one
+  (`LayerFilterSpec.needs_surface`).
 - The parts are stamped separately, not as one hash, so a mismatch can
   say which part changed. "Out of date" with no reason is a button the
   user has to press on faith.
@@ -69,7 +71,8 @@ PIXEL_REASON = "the pixels below changed"
 # when several changed at once. `params` comes after `filter` and `size`
 # because it changes along with either one. Switching the filter changes
 # the settings too, and a Painterly layer's settings record its blur in
-# texels, which a new resolution changes.
+# texels, which a new resolution changes. `seams` comes before `surface`,
+# because losing the mesh changes both, and the mesh is what changed.
 REASONS = (
     ("below", "the layers below changed"),
     ("clip", "clipping changed what it filters"),
@@ -77,12 +80,13 @@ REASONS = (
     ("size", "the resolution changed"),
     ("params", "the filter settings changed"),
     ("uv_map", "the UV map changed"),
+    ("seams", "the mesh whose UV seams the strokes follow changed"),
     ("surface", "the object or its render UV map changed"),
     ("version", "Paint System was updated"),
 )
 
 
-def fingerprint_parts(ctx, node, below, surface=None) -> dict:
+def fingerprint_parts(ctx, node, below, surface=None, render_map=False) -> dict:
     """What a build of *node* would be asked for, as a dict of named parts.
 
     *below* is the node feeding the filter's ``Color`` input, which is
@@ -91,8 +95,10 @@ def fingerprint_parts(ctx, node, below, surface=None) -> dict:
     not on the context that walked it, so a build's context and a
     compile's context give the same result.
 
-    *surface* is the mesh the build resolved its UV map against, or None
-    when it needed none (`filters.layer_plan.InputPlan.surface`).
+    *surface* is the mesh the build resolved against, or None when it
+    needed none (`filters.layer_plan.InputPlan.surface`). *render_map*
+    says whether the build read which UV map it renders with
+    (`filters.layer_plan.InputPlan.reads_render_map`).
     """
     kind = LAYER_FILTERS.get(node.filter_type)
     size = int(node.resolution)
@@ -122,15 +128,22 @@ def fingerprint_parts(ctx, node, below, surface=None) -> dict:
     # exists to catch. One rebuild is the price.
     if clip_base(node) is not None:
         parts["clip"] = True
-    # A build needs a mesh when some layers below leave their UV map empty
-    # and one map is named. Those layers use the mesh's active render
-    # map, and the build checked that it is the named one. No hash of the
-    # tree covers that map, so it gets its own part. Like "clip", the
-    # part is only present when a mesh was needed, so switching the
-    # render map does not affect a build that did not depend on it, and
+    # Layers below that leave their UV map empty use the mesh's active
+    # render map, and the build checked that it is the named one. A kind
+    # that `needs_surface` reads the mesh through that map when nothing
+    # names one. No hash of the tree covers the map, so it gets its own
+    # part. Like "clip", the part is only present when the build read
+    # the map, so switching it does not affect a build that did not, and
     # older stamps still match.
-    if surface is not None:
+    if render_map:
         parts["surface"] = resolve_uv_map(surface, "") or ""
+    # A kind that `needs_surface` also depends on which mesh it read.
+    # Only the name is recorded, because the compile must not read the
+    # mesh's geometry. The part is always present for such a kind, ""
+    # when the compile finds no mesh, so a stamp from before this part
+    # existed reads as out of date once.
+    if kind is not None and kind.needs_surface:
+        parts["seams"] = surface.name if surface is not None else ""
     return parts
 
 
@@ -139,11 +152,11 @@ def stamp(parts: dict) -> str:
     return json.dumps(parts, sort_keys=True, separators=(",", ":"), default=str)
 
 
-def built_on_surface(stored: str) -> bool:
-    """Whether the stamp *stored* comes from a build that needed a mesh.
+def read_render_map(stored: str) -> bool:
+    """Whether the stamp *stored* comes from a build that read the mesh's render UV map.
 
-    A compile has no plan, so it cannot tell whether the layer needs a
-    mesh without resolving one against the selection. It asks the stamp
+    A compile has no plan, so it cannot tell whether the layer reads that
+    map without resolving a mesh against the selection. It asks the stamp
     instead, and hashes the "surface" part only when the build did.
     """
     try:

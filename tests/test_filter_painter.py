@@ -9,8 +9,9 @@ that reads both at every stamp centre. Then stamps are drawn one or two
 at a time, which is where a turned quad or a blend order is easy to get
 backwards and still look like paint.
 
-Last, whole layers are built, and held to what has to be true of any
-painting rather than to one: a flat picture paints to itself, a
+Last, whole layers are built on a plane whose UV map covers the image,
+so there are no seams to cross. They are held to what has to be true of
+any painting rather than to one: a flat picture paints to itself, a
 transparent one stays transparent, the same settings paint the same
 pixels twice, and the 4K build with the default settings stays inside
 the ticket's ten seconds.
@@ -28,8 +29,8 @@ import gpu
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import (check, finish, import_from, register_addon,  # noqa: E402
-                     section, skip)
+from harness import (bake_plane, check, finish, import_from,  # noqa: E402
+                     register_addon, section, skip, use_tree)
 
 register_addon()
 gpu_core = import_from("gpu_passes.core")
@@ -232,12 +233,18 @@ if available():
         flat = np.tile(np.array([0.4, 0.6, 0.2, 1.0], dtype=np.float32), (SIZE, SIZE, 1))
         source.pixels.foreach_set(flat.ravel())
         source.update()
+        # The painter needs the mesh it paints for, for the UV seams its
+        # strokes are to follow. A plane whose UV map covers the whole
+        # image has none.
+        plane = bake_plane()
+        use_tree(plane, tree)
         with core.suspend_compile(tree):
             layer = tree.insert_layer_node(IMAGE)
             layer.image = source
             node = tree.insert_layer_node(FILTER)
             node.filter_type = 'PAINTERLY'
             node.resolution = str(SIZE)
+            node.surface_name = plane.name
         core.flush_now()
 
         labels = []

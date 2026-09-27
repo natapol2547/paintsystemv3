@@ -72,6 +72,11 @@ class LayerFilterSpec:
     # data. None records the passes, which is right for any kind that has
     # them.
     fingerprint_of: Callable[[Any], list] | None = None
+    # True for a kind that needs the mesh itself, not only the stack
+    # below. The painter's strokes are to follow the mesh's UV seams, so
+    # it always needs one, checked before a build starts
+    # (`filters.layer_plan.resolve_input`).
+    needs_surface: bool = False
 
     def fingerprint(self, node) -> list:
         """What the pixels of a build of *node* depend on, besides the stack.
@@ -167,6 +172,7 @@ PAINTERLY = LayerFilterSpec(
     build=painter_build.build,
     settings_of=Settings.of,
     fingerprint_of=_painterly_fingerprint,
+    needs_surface=True,
 )
 
 LAYER_FILTERS = {spec.name: spec for spec in (INVERT, BLUR, SHARPEN, PAINTERLY)}

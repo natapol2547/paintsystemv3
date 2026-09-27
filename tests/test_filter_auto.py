@@ -502,6 +502,40 @@ if available():
         pump()
         core.flush_now()
 
+        section("a Painterly layer while its mesh is in Edit Mode")
+        # The painter needs the mesh's UV seams, which Edit Mode keeps in
+        # a copy of its own. That is a refusal about the scene, so the
+        # layer waits with Auto Refresh on, and leaving Edit Mode is the
+        # depsgraph update that asks again.
+        node.filter_type = 'PAINTERLY'
+        core.flush_now()
+        check(pump() and not node.needs_build and node.derived_error == "",
+              f"a Painterly layer builds on the cube: {node.stale_reason!r}, {node.derived_error!r}")
+        was = stamp(node)
+        seed = node.painter.seed
+        bpy.ops.object.mode_set(mode='EDIT')
+        try:
+            node.painter.seed = seed + 1
+            core.flush_now()
+            check(pump() and stamp(node) == was and node.auto_refresh
+                  and node.derived_error == "The mesh of 'Cube' is in Edit Mode, "
+                                            "so its UV seams cannot be read",
+                  f"out of date in Edit Mode, it waits and says why: {node.derived_error!r}")
+        finally:
+            quiet()
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.context.view_layer.update()
+        check(bpy.app.timers.is_registered(layer_job._tick), "leaving Edit Mode asks again")
+        check(pump() and stamp(node) != was, "the refresh runs to the end")
+        core.flush_now()
+        check(not node.needs_build and node.derived_error == "",
+              f"and the layer is built: {node.stale_reason!r}, {node.derived_error!r}")
+        node.painter.seed = seed
+        node.filter_type = 'INVERT'
+        core.flush_now()
+        pump()
+        core.flush_now()
+
         section("a linked tree")
         # A linked tree is read from its library again whenever the file
         # opens, so the job leaves it alone instead of building a result
@@ -814,6 +848,7 @@ if available():
 layer_job.cancel_all()
 import_from("filters.composite").release()
 import_from("filters.blend_glsl").release()
+import_from("filters.painter.build").release()
 filters_core.release()
 
 finish("FILTER AUTO REFRESH TEST")

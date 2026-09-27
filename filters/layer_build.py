@@ -334,4 +334,5 @@ def _fingerprint(tree, node, plan) -> str:
     its own context and compares.
     """
     with hash_context(tree) as ctx:
-        return freshness.stamp(freshness.fingerprint_parts(ctx, node, plan.source, plan.surface))
+        return freshness.stamp(freshness.fingerprint_parts(ctx, node, plan.source, plan.surface,
+                                                           plan.reads_render_map))

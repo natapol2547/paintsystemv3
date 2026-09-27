@@ -2,15 +2,18 @@
 
 `filters.layer_plan.resolve_input` decides whether the GPU composite can
 draw the stack below a filter layer, and refuses with the reason when it
-cannot. It allocates nothing, so these need no GPU context and run
-everywhere -- what they check is the decision, not the pixels. `tests/test_filter_composite.py` checks the
-pixels.
+cannot. It allocates nothing, and what these check is the decision, not
+the pixels. `tests/test_filter_composite.py` checks the pixels. Without
+a GPU context every stack is refused as needing a bake. There the rules
+on the mesh are checked on `surface_of` and `_seam_surface` directly.
 
 A composite samples every source image by normalised coordinate, so the
 whole stack below has to share one UV map with the derived image. The
 names decide that on their own unless one map is named and some layers
-leave theirs empty. Only then is a mesh asked: the layer's own Object
-first, else the active object, and either one must use the tree.
+leave theirs empty. Only then do the maps need a mesh: the layer's own
+Object first, else the active object, and either one must use the tree.
+A kind that `needs_surface`, such as Painterly, needs a mesh whatever
+the maps say, for the UV seams its strokes are to follow.
 """
 import os
 import sys
@@ -26,6 +29,7 @@ from harness import (check, finish, import_from, register_addon,  # noqa: E402
 register_addon()
 core = import_from("compiler.core")
 gpu_core = import_from("gpu_passes.core")
+composite = import_from("filters.composite")
 layer_plan = import_from("filters.layer_plan")
 filters_core = import_from("filters.core")
 stack_ops = import_from("nodetree.stack_ops")
@@ -39,7 +43,8 @@ FILTER = 'PaintSystemFilterLayerNode'
 
 # Background 4.2 to 5.1 have no way to reach a GPU context, so every
 # stack there is refused as needing a bake. The rules on which mesh
-# answers are still checked there, on `surface_of` directly.
+# answers are still checked there, on `surface_of` directly, and the
+# checks on a Painterly layer's mesh on `_seam_surface` (`seam_plan`).
 HAS_GPU = gpu_core.gpu_known() is not False
 
 
@@ -110,6 +115,29 @@ def expect_refusal(context, tree, node, wanted, label, composite_only=False):
     elif not composite_only:
         found, problem = layer_plan.surface_of(context, tree, node)
         check(found is None and wanted in problem, f"{label}: {problem}")
+
+
+def seam_plan(context, tree, node):
+    """Resolve *node* as a build would, or check only its mesh without a GPU context.
+
+    Without one, the stack is refused as needing a bake before the mesh
+    is asked. The checks on the mesh need no GPU, so there they run on
+    `_seam_surface` directly, given the plan the UV maps settle on for a
+    stack of solid colours.
+    """
+    if HAS_GPU:
+        return layer_plan.resolve_input(context, tree, node)
+    plan = layer_plan.InputPlan(None, composite.plan_below(node), node.uv_map, None)
+    return layer_plan._seam_surface(context, tree, node, plan)
+
+
+def seam_refusal(context, tree, node):
+    """The message `seam_plan` refuses with, or "" when it does not."""
+    try:
+        seam_plan(context, tree, node)
+    except filters_core.Refused as error:
+        return str(error)
+    return ""
 
 
 try:
@@ -191,8 +219,8 @@ try:
                    "a mesh that does not show the tree is not asked")
     plan = expect_composite(FakeContext(plane), tree, node, "a mesh that shows the tree", plane)
     if plan is not None:
-        check(plan.uv_map == "UVMap" and plan.surface == plane,
-              f"resolves it on that mesh ({plan.uv_map!r}, {plan.surface})")
+        check(plan.uv_map == "UVMap" and plan.surface == plane and plan.reads_render_map,
+              f"resolves it on that mesh, and depends on its render map ({plan.uv_map!r}, {plan.surface})")
 
     handle = bpy.data.objects.new("Plan Handle", None)
     bpy.context.scene.collection.objects.link(handle)
@@ -421,6 +449,100 @@ try:
     stack_ops.detach(tree, inside)
     check(stack_ops.channel_of(tree, inside) is None,
           "a layer that reaches no output has no channel")
+
+    section("a filter that follows the UV seams")
+    # A Painterly layer's strokes are to follow the mesh's UV seams, so it
+    # needs a mesh even when the UV maps below settle without one.
+    # Everything the mesh can be refused for is checked before the build,
+    # so the layer waits and says why instead of failing part way.
+    seamed = bpy.data.node_groups.new("Plan Seams", 'PaintSystemNodeTree')
+    seamed.initialize()
+    with core.suspend_compile(seamed):
+        seamed.insert_layer_node(SOLID)
+        painterly = seamed.insert_layer_node(FILTER)
+        painterly.filter_type = 'PAINTERLY'
+    core.flush_now()
+    seam_mesh = mesh_with_uvs("Plan Seam Mesh", ["UVMap"], tree=seamed)
+    pick = "Select a mesh that uses this Paint System tree, or set the layer's Object"
+    needs = f"'{painterly.name}' needs a mesh to continue its strokes across UV seams, but"
+    plan = seam_plan(FakeContext(seam_mesh), seamed, painterly)
+    check(plan.surface == seam_mesh and plan.uv_map == "" and plan.reads_render_map,
+          f"solid colours need no mesh, but the painter takes the active one ({plan.surface}), "
+          "through its render map")
+    painterly.uv_map = "UVMap"
+    plan = seam_plan(FakeContext(seam_mesh), seamed, painterly)
+    check(plan.surface == seam_mesh and not plan.reads_render_map,
+          "with the map named, which map the mesh renders with does not matter")
+    painterly.uv_map = ""
+    check(seam_refusal(FakeContext(), seamed, painterly)
+          == f"{needs} nothing is selected. {pick}",
+          f"with nothing selected it asks for one: {seam_refusal(FakeContext(), seamed, painterly)}")
+    ghost = mesh_with_uvs("Plan Seam Ghost", ["UVMap"], tree=seamed)
+    painterly.surface_name = ghost.name
+    bpy.data.objects.remove(ghost)
+    check(seam_refusal(FakeContext(), seamed, painterly)
+          == f"{needs} its Object 'Plan Seam Ghost' was deleted or renamed. {pick}",
+          f"and names an Object that is gone: {seam_refusal(FakeContext(), seamed, painterly)}")
+    painterly.surface_name = seam_mesh.name
+
+    painterly.uv_map = "Seams Map"
+    check(seam_refusal(FakeContext(), seamed, painterly)
+          == "'Plan Seam Mesh' has no UV map named 'Seams Map'",
+          f"a UV map the mesh lacks: {seam_refusal(FakeContext(), seamed, painterly)}")
+    painterly.uv_map = ""
+    bare = mesh_with_uvs("Plan Seam Bare", ["UVMap"], tree=seamed)
+    bare.data.uv_layers.remove(bare.data.uv_layers["UVMap"])
+    painterly.surface_name = bare.name
+    check(seam_refusal(FakeContext(), seamed, painterly)
+          == f"'Plan Seam Bare' has no UV map, so '{painterly.name}' cannot find its UV seams",
+          f"a mesh with no UV map at all: {seam_refusal(FakeContext(), seamed, painterly)}")
+    painterly.surface_name = seam_mesh.name
+
+    # Edit Mode keeps its own copy of the mesh, so the seams it shows are
+    # not the ones the mesh holds. That is also true while another object
+    # sharing the mesh is being edited.
+    in_edit = "The mesh of 'Plan Seam Mesh' is in Edit Mode, so its UV seams cannot be read"
+    twin = bpy.data.objects.new("Plan Seam Twin", seam_mesh.data)
+    bpy.context.scene.collection.objects.link(twin)
+    view_layer = bpy.context.view_layer
+    active = view_layer.objects.active
+    for editing in (seam_mesh, twin):
+        view_layer.objects.active = editing
+        bpy.ops.object.mode_set(mode='EDIT')
+        try:
+            check(seam_refusal(FakeContext(), seamed, painterly) == in_edit,
+                  f"'{editing.name}' in Edit Mode: {seam_refusal(FakeContext(), seamed, painterly)}")
+        finally:
+            bpy.ops.object.mode_set(mode='OBJECT')
+    view_layer.objects.active = active
+    bpy.data.objects.remove(twin)
+
+    # Only the evaluated mesh has the modifiers that render. An object the
+    # view layer does not evaluate has no evaluated mesh to check.
+    unevaluated = ("'Plan Seam Mesh' is disabled in the viewport or excluded from the view layer, "
+                   "so its UV seams cannot be read")
+    seam_mesh.hide_viewport = True
+    check(seam_refusal(FakeContext(), seamed, painterly) == unevaluated,
+          f"a mesh disabled in the viewport: {seam_refusal(FakeContext(), seamed, painterly)}")
+    seam_mesh.hide_viewport = False
+    shelf = bpy.data.collections.new("Plan Seam Shelf")
+    bpy.context.scene.collection.children.link(shelf)
+    shelf.objects.link(seam_mesh)
+    bpy.context.scene.collection.objects.unlink(seam_mesh)
+    view_layer.layer_collection.children[shelf.name].exclude = True
+    check(seam_refusal(FakeContext(), seamed, painterly) == unevaluated,
+          f"a mesh in an excluded collection: {seam_refusal(FakeContext(), seamed, painterly)}")
+    view_layer.layer_collection.children[shelf.name].exclude = False
+
+    # Remesh leaves the evaluated mesh with no UV map.
+    remesh = seam_mesh.modifiers.new("Remesh", 'REMESH')
+    check(seam_refusal(FakeContext(), seamed, painterly)
+          == "The modifiers on 'Plan Seam Mesh' remove UV map 'UVMap', so its UV seams cannot be read",
+          f"a modifier that drops the UV map: {seam_refusal(FakeContext(), seamed, painterly)}")
+    seam_mesh.modifiers.remove(remesh)
+
+    plan = seam_plan(FakeContext(), seamed, painterly)
+    check(plan.surface == seam_mesh, f"and with all of that put right it resolves ({plan.surface})")
 
 except Exception:
     traceback.print_exc()

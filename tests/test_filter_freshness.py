@@ -49,23 +49,25 @@ def below_of(node):
     return link.from_node if link is not None else None
 
 
-def current_parts(tree, node, surface=None):
+def current_parts(tree, node, surface=None, render_map=False):
     """What a build of *node* right now would be asked for.
 
-    *surface* is the mesh the build needed, as in `InputPlan.surface`.
+    *surface* is the mesh the build needed, as in `InputPlan.surface`,
+    and *render_map* whether it read the mesh's render UV map, as in
+    `InputPlan.reads_render_map`.
     """
     with core.hash_context(tree) as ctx:
-        return freshness.fingerprint_parts(ctx, node, below_of(node), surface)
+        return freshness.fingerprint_parts(ctx, node, below_of(node), surface, render_map)
 
 
-def current_stamp(tree, node, surface=None):
+def current_stamp(tree, node, surface=None, render_map=False):
     """What a build of *node* right now would stamp its image with."""
-    return freshness.stamp(current_parts(tree, node, surface))
+    return freshness.stamp(current_parts(tree, node, surface, render_map))
 
 
-def restamp(tree, node, surface=None):
+def restamp(tree, node, surface=None, render_map=False):
     """Pretend the layer was just rebuilt, without running a build."""
-    node.derived_image[derived.FINGERPRINT_KEY] = current_stamp(tree, node, surface)
+    node.derived_image[derived.FINGERPRINT_KEY] = current_stamp(tree, node, surface, render_map)
     reason(tree, node)
 
 
@@ -198,7 +200,7 @@ try:
     mesh.uv_layers.new(name="Other")
     plane = bpy.data.objects.new("Fresh Plane", mesh)
     node.surface_name = plane.name
-    restamp(tree, node, plane)
+    restamp(tree, node, plane, render_map=True)
     check(reason(tree, node) == "", "a build that needed the mesh is up to date")
     mesh.uv_layers["Other"].active_render = True
     check(reason(tree, node) == "the object or its render UV map changed",
@@ -224,6 +226,64 @@ try:
     mesh.uv_layers["UVMap"].active_render = True
     node.surface_name = ""
     bpy.data.objects.remove(plane)
+
+    section("the mesh whose UV seams it follows")
+    # A Painterly layer needs its mesh whatever the UV maps say, for the
+    # UV seams its strokes are to follow. So the stamp names the mesh, and
+    # the render map too when nothing names a map. The name is all a
+    # compile can check without reading the mesh's geometry.
+    node.filter_type = 'PAINTERLY'
+    seams_mesh = bpy.data.meshes.new("Fresh Seams")
+    seams_mesh.uv_layers.new(name="UVMap")
+    seams_mesh.uv_layers.new(name="Other")
+    seamed = bpy.data.objects.new("Fresh Seamed", seams_mesh)
+    lookalike = bpy.data.objects.new("Fresh Lookalike", seams_mesh.copy())
+    seams = "the mesh whose UV seams the strokes follow changed"
+    node.surface_name = seamed.name
+    restamp(tree, node, seamed, render_map=True)
+    check(reason(tree, node) == "", "a Painterly build on its mesh is up to date")
+    node.surface_name = lookalike.name
+    check(reason(tree, node) == seams,
+          f"another mesh with the same UV maps: {reason(tree, node)!r}")
+    node.surface_name = seamed.name
+    check(reason(tree, node) == "", "and pointing it back puts that right")
+    seams_mesh.uv_layers["Other"].active_render = True
+    check(reason(tree, node) == "the object or its render UV map changed",
+          f"its render UV map switched: {reason(tree, node)!r}")
+    seams_mesh.uv_layers["UVMap"].active_render = True
+    seamed.location = (1.0, 2.0, 3.0)
+    seamed.rotation_euler = (0.5, 0.0, 0.0)
+    check(reason(tree, node) == "", "moving the mesh changes nothing the strokes read")
+    node.surface_name = ""
+    check(reason(tree, node) == seams, f"clearing the Object: {reason(tree, node)!r}")
+    node.surface_name = seamed.name
+
+    # With the map named, the render map is read by nothing.
+    node.uv_map = "UVMap"
+    restamp(tree, node, seamed)
+    seams_mesh.uv_layers["Other"].active_render = True
+    check(reason(tree, node) == "",
+          f"a layer that names its UV map ignores the render map: {reason(tree, node)!r}")
+    seams_mesh.uv_layers["UVMap"].active_render = True
+    node.surface_name = lookalike.name
+    check(reason(tree, node) == seams, f"but not which mesh it is: {reason(tree, node)!r}")
+    node.surface_name = seamed.name
+    node.uv_map = ""
+
+    # A stamp from before the painter needed the mesh has neither part,
+    # so it names no mesh and reads as out of date once.
+    parts = current_parts(tree, node, seamed, render_map=True)
+    del parts["seams"], parts["surface"]
+    result[derived.FINGERPRINT_KEY] = freshness.stamp(parts)
+    check(reason(tree, node) == seams, f"a stamp that names no mesh: {reason(tree, node)!r}")
+
+    node.filter_type = 'INVERT'
+    node.surface_name = ""
+    restamp(tree, node)
+    check("seams" not in current_parts(tree, node, seamed, render_map=True),
+          "a kind that needs no mesh stamps no seams, even when its build needed the mesh")
+    bpy.data.objects.remove(seamed)
+    bpy.data.objects.remove(lookalike)
 
     section("what does not")
     # These are outside the hash by construction: they change how the
