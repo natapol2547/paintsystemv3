@@ -8,7 +8,12 @@ its y pointing up, the reduction to the strongest edge, and the gather
 that reads both at every stamp centre. Then stamps are drawn one or two
 at a time, which is where a turned quad or a blend order is easy to get
 backwards and still look like paint, and over an island map that a
-stamp must keep to.
+stamp must keep to. A stamp and the pieces of it carried across seams
+paint each texel once, a piece paints the far island's own texels only
+where the part of the stamp it carries is off the stamp's own island,
+and a stamp that crosses a seam between two quads runs on into the far
+quad as the unfolded mesh shows it, whether the far quad's UVs are
+turned, mirrored or scaled.
 
 Last, whole layers are built on a plane whose UV map covers the image,
 so there are no seams to cross. They are held to what has to be true of
@@ -19,7 +24,11 @@ and the 4K build with the default settings stays inside the ticket's ten
 seconds. Two quads apart in UV check that no stroke paints one quad's
 texels from the other, that a build whose mesh enters Edit Mode
 halfway paints what it would have painted anyway, and that the islands
-come from the UV map the layers below use.
+come from the UV map the layers below use. Suzanne checks the seams:
+painted, a smooth picture changes about as much across them as within
+an island, which it does not when strokes are only kept to their
+islands, and each island's colour is carried across onto the islands it
+joins and onto no other.
 
 These need a GPU context, as `tests/test_filter_build.py` explains.
 """
@@ -62,6 +71,8 @@ TOL = 1e-4
 HALF_TOL = 2e-3
 BYTE_TOL = 2.0 / 255.0
 SIZE = 1024
+# Suzanne is painted at the size the seams were measured at.
+SEAM_SIZE = 2048
 # The ticket's budget for a 4K build at the default settings, scaled as
 # `tests/test_perf.py` scales its own.
 BUDGET_4K = 10.0
@@ -111,23 +122,157 @@ def sobel(luma):
     return gx, gy
 
 
-def canvas(side):
+def canvas(side, depth=True):
+    """An empty canvas and a framebuffer over it, with the depth texture a build draws with.
+
+    The textures are returned together, because a framebuffer does not
+    keep them alive.
+    """
     texture = upload(np.zeros((side, side, 4), dtype=np.float32), 'RGBA16F')
-    return texture, gpu.types.GPUFrameBuffer(color_slots=(texture,))
+    if not depth:
+        return (texture,), gpu.types.GPUFrameBuffer(color_slots=(texture,))
+    slots = gpu.types.GPUTexture((side, side), format='DEPTH_COMPONENT32F')
+    return (texture, slots), gpu.types.GPUFrameBuffer(color_slots=(texture,), depth_slot=slots)
 
 
-def draw(framebuffer, side, masks, stamps, size, cell, islands=None):
+NO_PIECES = seams.Pieces(stamp=np.zeros(0, np.int64), points=np.zeros((0, seams.CORNERS), complex),
+                         coords=np.zeros((0, seams.CORNERS), complex), sources=np.zeros((0, seams.CORNERS), complex),
+                         count=np.zeros(0, np.int64), island=np.zeros(0, np.int32))
+
+
+def draw(framebuffer, side, masks, stamps, size, cell, islands=None, crossings=None, pieces=NO_PIECES):
     """*stamps* drawn over *framebuffer*, keeping to *islands*, a ``(side, side)`` array.
 
     Without *islands*, no texel is on an island, so a stamp paints
-    wherever it lands.
+    wherever it lands. With *crossings*, the parts of the stamps that run
+    over them are carried across as a build carries them. Otherwise the
+    stamps are drawn with *pieces*.
     """
     image, origins = drawing.atlas(masks, cell, *drawing.atlas_layout(len(masks), cell, 16384)[:2])
     atlas = painter_build._upload(image)
     island_map = upload(np.zeros((side, side)) if islands is None else islands, 'R32F')
+    corners, coords = drawing.quads(stamps, size, origins, cell)
+    if crossings is not None:
+        stamp, crossing = seams.candidates(crossings, corners.mean(axis=1), stamps.owner, size)
+        pieces = seams.pieces(crossings, corners, coords, stamp, crossing)
     painter_build._draw_stamps(framebuffer, (side, side), atlas, island_map,
-                               drawing.quads(stamps, size, origins, cell))
+                               drawing.geometry(corners, coords, stamps.color, stamps.owner, pieces))
     return gpu_core.read_color(framebuffer, side, side)
+
+
+def bilinear(image, x, y):
+    """*image* at the points ``(x, y)``, in texels, filtered as the stamp shader filters its atlas."""
+    x, y = x - 0.5, y - 0.5
+    low_x, low_y = np.floor(x).astype(int), np.floor(y).astype(int)
+    # One weight per point, for every channel of it.
+    fx, fy = ((each - low).reshape(each.shape + (1,) * (image.ndim - 2)) for each, low in ((x, low_x), (y, low_y)))
+    rows, columns = image.shape[:2]
+
+    def at(dx, dy):
+        return image[np.clip(low_y + dy, 0, rows - 1), np.clip(low_x + dx, 0, columns - 1)]
+
+    return ((at(0, 0) * (1 - fx) + at(1, 0) * fx) * (1 - fy)
+            + (at(0, 1) * (1 - fx) + at(1, 1) * fx) * fy)
+
+
+def seam_pair(name, tree, turn, flip, offset):
+    """Two quads sharing an edge, as a mesh that uses *tree*.
+
+    A's UVs are its vertices' x and y, scaled into the lower left of the
+    image as ``0.05 + 0.05i + 0.2 z``. B's UVs are what those would be,
+    carried by ``offset + turn * uv + flip * conj(uv)``. So B lies in UV
+    as the unfolded mesh would, seen through that map.
+    """
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata([(0, 0, 0), (1, 0, 0), (2, 0, 0), (0, 1, 0), (1, 1, 0), (2, 1, 0)], [],
+                     [(0, 1, 4, 3), (1, 2, 5, 4)])
+    z = np.array([complex(*mesh.vertices[loop.vertex_index].co[:2]) for loop in mesh.loops])
+    uv = (0.05 + 0.05j) + 0.2 * z
+    uv[4:] = offset + turn * uv[4:] + flip * np.conj(uv[4:])
+    mesh.uv_layers.new(name="UVMap").data.foreach_set(
+        'uv', np.stack([uv.real, uv.imag], axis=1).astype(np.float32).ravel())
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    use_tree(obj, tree)
+    return obj
+
+
+def seam_samples(mesh, uv_map, side, distance):
+    """Pairs of points either side of every seam of *mesh*, *distance* texels in from the edge.
+
+    Found by walking the mesh in bmesh, apart from `seams`. Each seam edge
+    gives 64 points along it on each side, moved *distance* texels into
+    that side's face. Returns ``(here, there, further, ratio)``: the
+    points on one side, the matching points on the other, the points
+    twice as far in again on the first side, all as ``(n, 2)`` texels,
+    and how much longer the edge is in UV on the other side.
+    """
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    layer = bm.loops.layers.uv[uv_map]
+    along = np.linspace(0.05, 0.95, 64)[:, None]
+    here, there, further, ratio = [], [], [], []
+
+    def inward(start, end, face):
+        normal = np.array([start[1] - end[1], end[0] - start[0]])
+        normal /= np.linalg.norm(normal)
+        centre = np.mean([np.array(loop[layer].uv) * side for loop in face.loops], axis=0)
+        return normal if np.dot(centre - start, normal) >= 0 else -normal
+
+    for edge in bm.edges:
+        if len(edge.link_faces) != 2:
+            continue
+        a, b = edge.link_loops
+        b_start, b_end = (b, b.link_loop_next) if b.vert == a.vert else (b.link_loop_next, b)
+        ends = [np.array(loop[layer].uv) * side for loop in (a, a.link_loop_next, b_start, b_end)]
+        if max(np.abs(ends[0] - ends[2]).max(), np.abs(ends[1] - ends[3]).max()) <= 1e-6 * side:
+            continue
+        for (p0, p1, near), (q0, q1, far) in (((ends[0], ends[1], a.face), (ends[2], ends[3], b.face)),
+                                              ((ends[2], ends[3], b.face), (ends[0], ends[1], a.face))):
+            into_near, into_far = inward(p0, p1, near), inward(q0, q1, far)
+            point = p0 + along * (p1 - p0) + distance * into_near
+            here.append(point)
+            there.append(q0 + along * (q1 - q0) + distance * into_far)
+            further.append(point + 2 * distance * into_near)
+            ratio.append(np.full(64, np.linalg.norm(q1 - q0) / np.linalg.norm(p1 - p0)))
+    bm.free()
+    return tuple(np.concatenate(each) for each in (here, there, further, ratio))
+
+
+def continuity(painted, samples, covered):
+    """How much colours change across the seams against within the islands, per distance.
+
+    Returns ``{distance: (all edges, uneven edges)}``: the mean colour
+    difference between the two sides of a seam, over the mean difference
+    between two points as far apart within one island. Uneven edges are
+    more than twice as long on one side as on the other. Only points
+    whose filtered reads are all on real texels count.
+    """
+    ratios = {}
+    for distance, (here, there, further, ratio) in samples.items():
+        kept = on_texels(covered, here, there, further)
+        colour = [bilinear(painted[..., :3], points[kept, 0], points[kept, 1]) for points in (here, there, further)]
+        across = np.abs(colour[0] - colour[1]).mean(axis=1)
+        within = np.abs(colour[0] - colour[2]).mean(axis=1)
+        uneven = (ratio[kept] < 0.5) | (ratio[kept] > 2.0)
+        ratios[distance] = (across.mean() / within.mean(), across[uneven].mean() / within[uneven].mean())
+    return ratios
+
+
+def on_texels(covered, *points):
+    """Whether all four texels a filtered read of each of *points* takes are real, in every set."""
+    kept = np.ones(len(points[0]), bool)
+    for each in points:
+        for dx, dy in ((-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)):
+            x = np.clip(np.floor(each[:, 0] + dx).astype(int), 0, covered.shape[1] - 1)
+            y = np.clip(np.floor(each[:, 1] + dy).astype(int), 0, covered.shape[0] - 1)
+            kept &= covered[y, x] >= 1.0
+    return kept
+
+
+def ratios_text(ratios):
+    return ", ".join(f"{all_edges:.2f} and {uneven:.2f} at {distance:g}"
+                     for distance, (all_edges, uneven) in ratios.items())
 
 
 def stamps_at(x, y, angle, colors, owners=None):
@@ -166,16 +311,20 @@ def pair_mesh(name, tree, side):
     return obj
 
 
+def index_of(snap):
+    """The `seams.Index` of *snap*, with every unit run."""
+    steps = seams.index_of(snap, None)
+    while True:
+        try:
+            next(steps)
+        except StopIteration as done:
+            return done.value
+
+
 def island_texels(obj, tree, side):
     """The island map a build of *side* draws for *obj*, as a ``(side, side)`` array."""
     snap = seams.snapshot(obj, "UVMap", tree, bpy.context.evaluated_depsgraph_get())
-    index = seams.index_of(snap, None)
-    while True:
-        try:
-            next(index)
-        except StopIteration as done:
-            index = done.value
-            break
+    index = index_of(snap)
     target = gpu.types.GPUTexture((side, side), format='R32F')
     for _unit in real_draw_islands(target, snap.uv, snap.tri_corners,
                                    seams.triangle_islands(snap, index), None):
@@ -290,15 +439,17 @@ if available():
               f"({np.round(got[16, 16], 3).tolist()})")
 
         section("a stamp keeps to its island")
-        # Island 1 on the left, island 2 on the right, and no island in
-        # the rows above. The stamp covers part of all three.
+        # Island 1 on the left with its margin, island 2 on the right, and
+        # no island in the rows above. The stamp covers part of all four.
         islands = np.zeros((32, 32), dtype=np.float32)
-        islands[:20, :16] = 1.0
+        islands[:20, :14] = 1.0
+        islands[:20, 14:16] = -1.0
         islands[:20, 16:] = 2.0
         square = np.zeros((32, 32), dtype=bool)
         square[8:24, 8:24] = True
         for owner, paints, says in (
-                (1, (1.0, 0.0), "a stamp paints its own island and texels of none, not the island beside it"),
+                (1, (1.0, -1.0, 0.0),
+                 "a stamp paints its own island, its margin and texels of none, not the island beside it"),
                 (2, (2.0, 0.0), "whichever island it is on"),
                 (0, (0.0,), "and one centred on no island paints only texels of none")):
             target, framebuffer = canvas(32)
@@ -307,6 +458,147 @@ if available():
             want = square & np.isin(islands, paints)
             check(worst(got[want], 1.0) < HALF_TOL and float(got[~want].max()) == 0.0,
                   f"{says} ({int((got > 0.5).sum())} texels painted, {int(want.sum())} expected)")
+
+        section("a stamp paints each texel once")
+        # Island 1 everywhere, so the stamp's quad and two pieces carried
+        # onto its own island, as across a seam of an island with itself,
+        # all paint the same texels. The pieces read the brush's middle,
+        # and carry a part of the stamp that is off the image.
+        everywhere = np.ones((32, 32), dtype=np.float32)
+        unit = np.array([0, 1, 1 + 1j, 1j])
+        points = np.zeros((2, seams.CORNERS), complex)
+        points[:, :4] = [4 + 4j + 16 * unit, 12 + 12j + 16 * unit]
+        middle = np.where(np.arange(seams.CORNERS) < 4, 5 + 5j, 0) * np.ones((2, 1))
+        away = np.full((2, seams.CORNERS), -64 - 64j)
+        overlapping = seams.Pieces(stamp=np.array([0, 0]), points=points, coords=middle, sources=away,
+                                   count=np.array([4, 4]), island=np.array([1, 1], np.int32))
+        union = np.zeros((32, 32), dtype=bool)
+        for low, high in ((8, 24), (4, 20), (12, 28)):
+            union[low:high, low:high] = True
+        half = (0.5, 0.5, 0.5, 0.5)
+        target, framebuffer = canvas(32)
+        got = draw(framebuffer, 32, [solid], stamps_at([16], [16], [0.0], [half], [1]), 16, 16, everywhere,
+                   pieces=overlapping)[..., 3]
+        check(worst(got[union], 0.5) < HALF_TOL and float(got[~union].max()) == 0.0,
+              f"a stamp's quad and its pieces over it paint each texel once ({got.max():.4f} at most)")
+        target, framebuffer = canvas(32, depth=False)
+        got = draw(framebuffer, 32, [solid], stamps_at([16], [16], [0.0], [half], [1]), 16, 16, everywhere,
+                   pieces=overlapping)[..., 3]
+        check(float(got.max()) > 0.7,
+              f"which takes the depth slots: without them, a texel under all three is painted three times "
+              f"({got.max():.3f})")
+        twice = seams.Pieces(stamp=np.array([0, 0, 1, 1]), points=np.concatenate([points, points]),
+                             coords=np.concatenate([middle, middle]), sources=np.concatenate([away, away]),
+                             count=np.full(4, 4), island=np.ones(4, np.int32))
+        target, framebuffer = canvas(32)
+        got = draw(framebuffer, 32, [solid], stamps_at([16, 16], [16, 16], [0.0, 0.0], [half, half], [1, 1]),
+                   16, 16, everywhere, pieces=twice)[..., 3]
+        check(worst(got[union], 0.75) < HALF_TOL,
+              f"and the next stamp paints over it once more ({got[union].min():.4f} to {got[union].max():.4f})")
+        # The brush's right half is empty, and a piece over the whole
+        # quad reads its solid left half.
+        left = np.zeros((16, 16), dtype=np.float32)
+        left[:, :8] = 1.0
+        points = np.zeros((1, seams.CORNERS), complex)
+        points[0, :4] = 8 + 8j + 16 * unit
+        covering = seams.Pieces(stamp=np.array([0]), points=points, coords=middle[:1] - 2, sources=away[:1],
+                                count=np.array([4]), island=np.array([1], np.int32))
+        target, framebuffer = canvas(32)
+        got = draw(framebuffer, 32, [left], stamps_at([16], [16], [0.0], [half], [1]), 16, 16, everywhere,
+                   pieces=covering)[..., 3]
+        check(worst(got[8:24, 8:24], 0.5) < HALF_TOL,
+              f"a texel the brush leaves empty is left for the stamp's other parts to paint "
+              f"({got[8:24, 16:24].min():.4f} to {got[8:24, 16:24].max():.4f} there)")
+        # Island 1 on the left, then its margin, then island 2 between two
+        # margins of its own, then texels of none. A stamp of island 1 on
+        # the left, and a piece of it over island 2 that carries the part
+        # twelve texels to its left.
+        islands = np.zeros((32, 32), dtype=np.float32)
+        islands[:, :12] = 1.0
+        islands[:, 12:16] = -1.0
+        islands[:, 16:18] = -2.0
+        islands[:, 18:28] = 2.0
+        islands[:, 28:30] = -2.0
+        points = np.zeros((1, seams.CORNERS), complex)
+        points[0, :4] = 16 + 8j + np.array([0, 16, 16 + 16j, 16j])
+        sources = np.where(np.arange(seams.CORNERS) < 4, points - 12, 0)
+        across = seams.Pieces(stamp=np.array([0]), points=points, coords=middle[:1], sources=sources,
+                              count=np.array([4]), island=np.array([2], np.int32))
+        target, framebuffer = canvas(32)
+        got = draw(framebuffer, 32, [solid], stamps_at([8], [16], [0.0], [(1.0, 1.0, 1.0, 1.0)], [1]), 16, 16,
+                   islands, pieces=across)[..., 3]
+        painted = np.zeros((32, 32), dtype=bool)
+        painted[8:24, :18] = painted[8:24, 24:30] = True
+        check(worst(got[painted], 1.0) < HALF_TOL and float(got[~painted].max()) == 0.0,
+              f"a piece paints the far island's margin, not texels of none, and the island itself only where "
+              f"the part it carries is off the stamp's own island, which the stamp's quad paints "
+              f"({int((got > 0.5).sum())} texels painted, {int(painted.sum())} expected)")
+        # The depth slots keep a stamp's parts apart only within one draw,
+        # so a build cuts its stamps into draws between stamps, here of at
+        # most four crossings each.
+        chunk = painter_build.PLAN_CHUNK
+        painter_build.PLAN_CHUNK = 4
+        try:
+            blocks = list(painter_build._blocks(6, np.repeat(np.arange(6), [0, 3, 9, 1, 0, 2])))
+            # A stamp ends exactly at the chunk, and the next one past it.
+            edge = list(painter_build._blocks(3, np.repeat(np.arange(3), [2, 3, 1])))
+            alone = list(painter_build._blocks(5, np.zeros(0, np.int64)))
+        finally:
+            painter_build.PLAN_CHUNK = chunk
+        check(blocks == [(0, 2, 0, 3), (2, 3, 3, 12), (3, 6, 12, 15)]
+              and edge == [(0, 1, 0, 2), (1, 3, 2, 6)],
+              f"draws hold whole stamps and at most the chunk of crossings, unless one stamp alone has more "
+              f"({blocks}, {edge})")
+        check(alone == [(0, 5, 0, 0)], f"and stamps that cross no seam are one draw ({alone})")
+
+        section("a stamp carried across a seam")
+        # The brush has a bar along its bottom and one down its right side,
+        # so the part of it that crosses the seam shows which way it came
+        # out and how far it reaches into B. A's shared edge is at x = 128.
+        side, size = 512, 48
+        shape = np.zeros((size, size), dtype=np.float32)
+        shape[:10, :] = 1.0
+        shape[:, 40:43] = 1.0
+        image, origins = drawing.atlas([shape], size, 1, 1)
+        corner = (122 - size // 2) + 1j * (76 - size // 2)
+        y, x = np.mgrid[0:side, 0:side] + 0.5
+        pair_tree = bpy.data.node_groups.new("Painter Seam", 'PaintSystemNodeTree')
+        pair_tree.initialize()
+        for name, (turn, flip, offset) in {"turned a quarter": (1j, 0, 0.8 + 0.2j),
+                                           "mirrored": (0, -1, 1.0 + 0.5j),
+                                           "twice as large": (2, 0, -0.05 + 0.4j)}.items():
+            obj = seam_pair(f"Painter Seam {name}", pair_tree, turn, flip, offset)
+            snap = seams.snapshot(obj, "UVMap", pair_tree, bpy.context.evaluated_depsgraph_get())
+            crossings = seams.crossings(snap, index_of(snap), side, side)
+            ids = island_texels(obj, pair_tree, side)
+            target, framebuffer = canvas(side)
+            got = draw(framebuffer, side, [shape], stamps_at([122], [76], [0.0], [(1.0, 1.0, 1.0, 1.0)], [1]),
+                       size, size, ids, crossings=crossings)[..., 3]
+            # Every texel of B and of its margin, carried back to where it
+            # lies in A's texels when the mesh is unfolded, reads the brush
+            # there.
+            carried = (x + 1j * y) / side - offset
+            unfolded = (np.conj(turn) * carried - flip * np.conj(carried)) / (abs(turn) ** 2 - abs(flip) ** 2)
+            local = unfolded * side - corner
+            # B's edge, and the side of it B is on.
+            start, end, inner = (side * (offset + turn * uv + flip * np.conj(uv))
+                                 for uv in (0.25 + 0.05j, 0.25 + 0.25j, 0.35 + 0.15j))
+            normal = 1j * (end - start) / abs(end - start)
+            normal *= np.sign((np.conj(normal) * (inner - start)).real)
+            band = (np.conj(normal) * (x + 1j * y - start)).real >= -seams.BAND
+            within = (local.real >= 0) & (local.real <= size) & (local.imag >= 0) & (local.imag <= size)
+            b_texels = np.abs(ids) == 2
+            results = {}
+            for label, brush in (("", image), ("upside down", image[::-1])):
+                want = np.where(band & within, bilinear(brush, local.real + origins[0, 0],
+                                                        local.imag + origins[0, 1]), 0.0)
+                inked, wanted = b_texels & (got > 0.5), b_texels & (want > 0.5)
+                results[label] = ((inked & wanted).sum() / max(1, (inked | wanted).sum()),
+                                  worst(got[b_texels], want[b_texels]))
+            overlap, error = results[""]
+            check(overlap > 0.95 and error < 0.05 and results["upside down"][0] < 0.5,
+                  f"B {name}: the stamp runs on into B as the unfolded mesh shows it (overlap {overlap:.3f}, "
+                  f"off by {error:.3f} at most, and {results['upside down'][0]:.2f} with the brush upside down)")
 
         section("a Painterly layer")
         tree = bpy.data.node_groups.new("Painter", 'PaintSystemNodeTree')
@@ -393,10 +685,11 @@ if available():
         section("a GPU out of memory")
         # Failing one format at a time reaches the painter's own textures:
         # the stamp centres it gathers at (RGBA32F), the brush atlas
-        # (R16F) and the island map (R32F). Each failure has to come back
-        # as the Refused the operators report, not as a bare RuntimeError.
+        # (R16F), the island map (R32F) and the stamps' depth slots
+        # (DEPTH_COMPONENT32F). Each failure has to come back as the
+        # Refused the operators report, not as a bare RuntimeError.
         real_texture = gpu.types.GPUTexture
-        for failing in ('RGBA32F', 'R16F', 'R32F'):
+        for failing in ('RGBA32F', 'R16F', 'R32F', 'DEPTH_COMPONENT32F'):
             def allocate(size, *args, failing=failing, **kwargs):
                 if kwargs.get('format') == failing:
                     raise RuntimeError("GPUTexture: texture creation failed")
@@ -433,7 +726,7 @@ if available():
         smoothing = node.painter.smoothing
         node.surface_name = pair.name
         node.painter.smoothing = 0.0
-        ids = island_texels(pair, tree, SIZE).astype(int)
+        ids = np.abs(island_texels(pair, tree, SIZE)).astype(int)
         colours = np.array([(0.5, 0.5, 0.5, 1.0), (0.9, 0.1, 0.1, 1.0), (0.1, 0.1, 0.9, 1.0)],
                            dtype=np.float32)[ids]
         source.pixels.foreach_set(colours.ravel())
@@ -458,6 +751,19 @@ if available():
             texel_map.draw_islands = real_draw_islands
         check(foreign(unkept) > 0,
               f"kept to no island, strokes paint {foreign(unkept)} texels across the gap")
+        # The margins painted yellow: only a stroke centred in a margin
+        # takes that colour, and it is that island's stroke, so it paints
+        # the island's edge.
+        signed = island_texels(pair, tree, SIZE)
+        edged = np.where((signed < 0)[..., None], np.array([0.9, 0.9, 0.1, 1.0], np.float32), colours)
+        source.pixels.foreach_set(edged.ravel())
+        source.update()
+        core.flush_now()
+        yellow = int(((signed > 0) & (build_pixels(tree, node)[..., 1] > 0.6)).sum())
+        source.pixels.foreach_set(colours.ravel())
+        source.update()
+        core.flush_now()
+        check(yellow > 0, f"a stroke centred in an island's margin paints the island ({yellow} texels)")
 
         section("a mesh that enters Edit Mode while its layer builds")
         # The build copied the mesh when it started, so it paints what it
@@ -501,6 +807,104 @@ if available():
         pair.data.uv_layers.remove(folded)
         layer.uv_map = ""
         core.flush_now()
+
+        section("strokes run on across seams")
+        # Suzanne's head, ears and eyes are five islands. The seams run
+        # round the back of the head and where the ears join it, and the
+        # eyes join nothing. A picture that changes smoothly over the mesh
+        # should change as little across a seam, once painted, as it does
+        # within an island. The points either side come from bmesh.
+        bpy.ops.mesh.primitive_monkey_add()
+        monkey = bpy.context.active_object
+        use_tree(monkey, tree)
+        seam_source = create_managed_image("Painter Seams", SEAM_SIZE, SEAM_SIZE)
+        layer.image = seam_source
+        node.surface_name = monkey.name
+        node.resolution = str(SEAM_SIZE)
+        node.painter.smoothing = smoothing
+        found = read_texel_map(texel_map.get_texel_map(monkey, "UVMap", (SEAM_SIZE, SEAM_SIZE)))
+        world, covered = found[..., :3], found[..., 3].copy()
+        smooth = np.ones((SEAM_SIZE, SEAM_SIZE, 4), dtype=np.float32)
+        for channel in range(3):
+            smooth[..., channel] = 0.5 + 0.45 * np.sin(5.0 * world[..., channel] + 0.3 + channel)
+        found = world = None
+        samples = {distance: seam_samples(monkey.data, "UVMap", SEAM_SIZE, distance) for distance in (1.5, 6.0, 12.0)}
+        real_pieces = seams.pieces
+
+        def painted_over(picture, carried=True):
+            """The layer built over *picture*, with or without the pieces carried across seams."""
+            seam_source.pixels.foreach_set(picture.ravel())
+            seam_source.update()
+            core.flush_now()
+            if not carried:
+                seams.pieces = (lambda crossings, corners, coords, stamp, crossing:
+                                real_pieces(crossings, corners, coords, stamp[:0], crossing[:0]))
+            try:
+                return build_pixels(tree, node)
+            finally:
+                seams.pieces = real_pieces
+
+        painted = painted_over(smooth)
+        chunk = painter_build.PLAN_CHUNK
+        painter_build.PLAN_CHUNK = 64
+        try:
+            cut = build_pixels(tree, node)
+        finally:
+            painter_build.PLAN_CHUNK = chunk
+        check(bool(np.array_equal(cut, painted)),
+              "a build cut into draws of far fewer crossings paints the same pixels")
+        cut = None
+        ratios = continuity(painted, samples, covered)
+        apart = continuity(painted_over(smooth, carried=False), samples, covered)
+        check(all(0.6 <= each <= 1.6 for each, _ in ratios.values())
+              and all(0.6 <= each <= 1.7 for _, each in ratios.values()),
+              f"the painting changes about as much across the seams as within an island, over all edges "
+              f"and the uneven ones ({ratios_text(ratios)}; the picture itself "
+              f"{ratios_text(continuity(smooth, samples, covered))})")
+        check(apart[1.5][0] > 3.0,
+              f"kept to their islands without carrying across, strokes change {apart[1.5][0]:.2f} times as "
+              f"much right at the seams")
+        real = covered >= 1.0
+        moved = float(np.abs(painted[..., :3] - smooth[..., :3]).mean(axis=2)[real].mean())
+        check(moved > 0.01, f"and the painting is not the picture below itself (off by {moved:.3f} on average)")
+
+        # Each kind of island painted a pure colour of its own, into its
+        # margin, and painted with no smoothing, so each stroke takes its
+        # own island's colour: the head red, the ears green, the eyes blue.
+        node.painter.smoothing = 0.0
+        index = index_of(seams.snapshot(monkey, "UVMap", tree, bpy.context.evaluated_depsgraph_get()))
+        faces = np.bincount(index.face_island)
+        palette = np.zeros((len(faces), 4), dtype=np.float32)
+        palette[:, 3] = 1.0
+        for island, count in enumerate(faces[1:], 1):
+            palette[island, {318: 0, 59: 1, 32: 2}[int(count)]] = 1.0
+        colours = palette[np.abs(island_texels(monkey, tree, SEAM_SIZE)).astype(int)]
+        here, there = samples[1.5][:2]
+        between = on_texels(covered, here, there)
+        own, other = (bilinear(colours[..., :3], each[:, 0], each[:, 1]) for each in (here, there))
+        between &= np.abs(own - other).max(axis=1) > 0.5
+        for carried in (True, False):
+            flat = painted_over(colours, carried)
+            painted_here, painted_there = (bilinear(flat[..., :3], each[between, 0], each[between, 1])
+                                           for each in (here, there))
+            crossed = ((np.abs(painted_here - other[between]).sum(axis=1)
+                        < np.abs(painted_here - own[between]).sum(axis=1))
+                       | (np.abs(painted_there - own[between]).sum(axis=1)
+                          < np.abs(painted_there - other[between]).sum(axis=1)))
+            if carried:
+                eyes = real & (colours[..., 2] == 1.0)
+                bled = int((eyes & (flat[..., :2].max(axis=2) > BYTE_TOL)).sum())
+                check(crossed.mean() >= 0.2 and bled == 0,
+                      f"strokes carry their island's colour across: at {crossed.mean():.0%} of the points "
+                      f"along the seams between the head and the ears, one 1.5 texels in on either side "
+                      f"shows the other side's colour, and none of the {int(eyes.sum())} texels of the eyes, "
+                      f"which join nothing, shows the head's or the ears' ({bled} do)")
+            else:
+                check(crossed.mean() < 0.05,
+                      f"which they do not when kept to their islands ({crossed.mean():.0%})")
+        painted = flat = colours = smooth = covered = real = None
+        layer.image = source
+        node.resolution = str(SIZE)
         node.surface_name = plane.name
         node.painter.smoothing = smoothing
 

@@ -312,13 +312,55 @@ checked the mesh (`filters/painter/seams.py`). Two faces are in one
 island when they share an edge whose two uses agree in UV to within
 `SEAM_TOLERANCE`, and only faces whose material shows the tree count,
 by the evaluated object's materials, since a modifier can add some.
-The islands are cached by a digest of the topology, the exact UVs and
-those faces, so a rebuild of an unchanged mesh skips the walk. Rounded
-UVs would not do as a key: two UVs within the tolerance can round
-apart and two beyond it can round together. The GPU
-then draws an island id per texel, margins included, and each stamp
-reads the island under its centre and paints only that island and the
-texels outside every island.
+The islands are cached by a digest of the topology, the exact UVs,
+those faces and the triangles (each crossing's third corners come from
+them), so a rebuild of an unchanged mesh skips the walk. Rounded UVs
+would not do as a key: two UVs within the tolerance can round apart and
+two beyond it can round together. The GPU then draws an island id per
+texel, margins included, where a margin texel holds minus its island's
+id. Each stamp reads the island under its centre, a margin counting as
+its island, and paints only that island, its margin, and the texels
+outside every island.
+
+Strokes run on across the seams (2026-09-27). Each shared edge whose two
+uses disagree in UV is a crossing in each direction. Across it, one
+real-linear map of the image, `turn * z + flip * conj(z)`, takes the
+near edge onto the far edge, and a step straight out of the near
+triangle onto the same step into the far triangle, both as long as the
+edge is in the world. The map is solved from the world shape of the two
+triangles, so a stroke keeps its size and direction on the mesh whatever
+the two sides' texel densities, and the flip term carries a mirrored
+seam. It is exact over the two triangles and drifts further along the
+seam where the surface bends; carrying each texel by its 3D position
+would remove that drift, at the cost of a world-position texture as
+large as the image. The maps come from each build's positions (the
+island cache leaves positions out), so a posed mesh paints with the
+pose it had when the build started. A crossing is dropped when a
+triangle along it has no area in the world, or when its map would
+stretch or shrink a stroke by more than `SCALE_LIMIT` (16).
+
+A stamp is carried across a crossing of its own island when its centre
+is on the near side of the edge's line, or at most `texel_map.MARGIN`
+texels past it, and its quad reaches the part of the near face that
+lands within `texel_map.MARGIN` texels past the far edge. That band
+reaches further into the near face where the far side has fewer texels
+to the length, so each crossing keeps its own reach. The stamp is
+carried across whole, then cut to that band. At an end where the next
+crossing continues the seam and the build uses it, the piece is also
+cut to the line halving the angle between the two far edges, so
+neighbouring crossings do not paint over each other. A piece paints
+only the island on the far side and its margin. On the island's own
+texels it paints only where the part of the stamp it carries is off the
+stamp's own island, since the quad paints that part where it is. So a
+stamp by the tip of a slit or the end of a hole, whose quad runs on past
+the crossing's end onto its own island, is not painted a second time
+there. The part in the stamp's own margin is carried, because the far
+side continues it, and the far margin takes the part from just inside
+the near face, which filtering reads past the far edge. A piece reads
+the brush through the same map, so a mirrored seam mirrors the brush. A
+stamp's quad and its pieces share one depth slot: the first of them to
+paint a texel keeps it, and the next stamp, one slot nearer, paints
+over. A piece is not carried on across a second seam.
 
 ### Slices
 
@@ -328,7 +370,8 @@ texels outside every island.
    the duplicates, a refusal by name when the layer has no mesh to read.
    Built in parts: the refusal (done 2026-09-27); strokes kept to the
    island under their centre (done 2026-09-27); strokes carried across
-   each seam onto the island on the other side; tuning for heavy meshes.
+   each seam onto the island on the other side (done 2026-09-27); tuning
+   for heavy meshes.
 3. Custom brushes as Blender images.
 4. A UV or mesh edit on the seam object marks the layer out of date.
 
@@ -366,3 +409,6 @@ name rather than painting without seams.
 - Seam duplication produces continuous strokes across a UV seam on the
   factory monkey. This one is load-bearing: a painter that stops at a
   seam is not shippable, however good it looks inside a shell.
+  `tests/test_filter_painter.py` measures it on Suzanne at 2048: the
+  painting changes about as much across the seams as within an island,
+  where strokes kept to their islands change about six times as much.

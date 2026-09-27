@@ -94,7 +94,8 @@ void main()
 _ISLAND_VERTEX = _GROWN_SOURCE + """
 void main()
 {
-  v_island = island;
+  /* A margin texel reads minus its island. */
+  v_island = margin > 0.0 ? -island : island;
   gl_Position = vec4(ps_grown(uv, uv_centroid, texel_size, margin) * 2.0 - 1.0, 0.0, 1.0);
 }
 """
@@ -170,9 +171,11 @@ def draw_islands(target: gpu.types.GPUTexture, uv: np.ndarray, tri_corners: np.n
     image covers UV 0 to 1, like a layer image without tiles.
 
     Every island gets a margin of *margin* texels, grown as the texel
-    map's is, and the real triangles are drawn over every margin. Where
-    two islands overlap, the one with the smaller number wins, because
-    each draw goes from the largest number to the smallest and nothing is
+    map's is, and the real triangles are drawn over every margin. A
+    margin texel reads minus its island's number, so a pass can tell the
+    island's own texels from the texels it runs on into. Where two
+    islands overlap, the one with the smaller number wins, because each
+    draw goes from the largest number to the smallest and nothing is
     blended. Numbers are exact up to 2**24 in ``R32F``.
 
     This is a generator. It yields *progress* between draws of

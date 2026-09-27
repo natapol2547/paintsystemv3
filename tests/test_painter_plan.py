@@ -35,6 +35,7 @@ plan = import_from("filters.painter.plan")
 resizing = import_from("filters.painter.resizing")
 color_jitter = import_from("filters.painter.color_jitter")
 drawing = import_from("filters.painter.drawing")
+seams = import_from("filters.painter.seams")
 brushes = import_from("filters.painter.brushes")
 layer_specs = import_from("filters.layer_specs")
 filters_core = import_from("filters.core")
@@ -133,6 +134,13 @@ def v2_brushes(folder):
 
 def same(a, b):
     return a.shape == b.shape and bool(np.array_equal(a, b))
+
+
+def no_pieces():
+    """`seams.Pieces` with none in it, for stamps that cross no seam."""
+    return seams.Pieces(stamp=np.zeros(0, np.int64), points=np.zeros((0, seams.CORNERS), complex),
+                        coords=np.zeros((0, seams.CORNERS), complex), sources=np.zeros((0, seams.CORNERS), complex),
+                        count=np.zeros(0, np.int64), island=np.zeros(0, np.int32))
 
 
 def planned(settings, step, drawn, colors, gradients, peak=None):
@@ -436,33 +444,68 @@ try:
                              angle=np.array([0.0]),
                              color=np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32),
                              owner=np.array([3], dtype=np.int32))
-        positions, coords, colours, islands, indices = drawing.quads(
-            single, size, np.array([[1.0, 1.0]]), 5)
-        low = (10 - size // 2, 20 - size // 2)
-        check(same(positions, np.array([low, (low[0] + size, low[1]),
-                                        (low[0] + size, low[1] + size),
-                                        (low[0], low[1] + size)], dtype=np.float32)),
+        corners, coords = drawing.quads(single, size, np.array([[1.0, 1.0]]), 5)
+        low = complex(10 - size // 2, 20 - size // 2)
+        check(same(corners, np.array([[low, low + size, low + size + size * 1j, low + size * 1j]])),
               f"unturned, a stamp of {size} covers v2's square, corners on texel edges")
-        check(same(coords, np.array([(1, 1), (6, 1), (6, 6), (1, 6)], dtype=np.float32)),
+        check(same(coords, np.array([[1 + 1j, 6 + 1j, 6 + 6j, 1 + 6j]])),
               "and maps its brush's whole cell onto it")
-    check(same(indices, np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32))
-          and colours.shape == (4, 4) and same(islands, np.full(4, 3.0, dtype=np.float32)),
-          "two triangles, and a colour and the stamp's island per corner")
+    positions, uvs, colours, islands, sources, triangles = drawing.geometry(
+        corners, coords, single.color, single.owner, no_pieces())
+    check(same(triangles, np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)) and colours.shape == (4, 4)
+          and same(uvs, np.array([(1, 1), (6, 1), (6, 6), (1, 6)], dtype=np.float32)),
+          "two triangles, and a colour and a point in the atlas per corner")
+    check(same(islands, np.tile(np.array([3.0, 0.0], np.float32), (4, 1)))
+          and same(positions[:, 2], np.zeros(4, np.float32)) and same(sources, positions[:, :2]),
+          "a quad carries its stamp's island and leaves none, its source is where it is, and the one "
+          "stamp of a draw sits halfway in depth")
     quarter = replace(single, angle=np.array([pi / 2]))
-    positions = drawing.quads(quarter, 8, np.array([[1.0, 1.0]]), 5)[0]
-    check(np.abs(positions[0] - (14.0, 16.0)).max() < 1e-5,
-          f"a quarter turn is counter-clockwise: the lower-left corner goes to the lower right "
-          f"({positions[0].tolist()})")
+    corner = drawing.quads(quarter, 8, np.array([[1.0, 1.0]]), 5)[0][0, 0]
+    check(abs(corner - (14 + 16j)) < 1e-9,
+          f"a quarter turn is counter-clockwise: the lower-left corner goes to the lower right ({corner})")
     pair = plan.Stamps(x=np.array([0, 5]), y=np.array([0, 5]), brush=np.array([1, 0]),
-                       angle=np.zeros(2), color=np.ones((2, 4), dtype=np.float32),
+                       angle=np.zeros(2), color=np.array([[1.0] * 4, [0.5] * 4], dtype=np.float32),
                        owner=np.array([0, 16777215], dtype=np.int32))
-    positions, coords, colours, islands, indices = drawing.quads(
-        pair, 4, np.array([[1.0, 1.0], [7.0, 1.0]]), 4)
-    check(same(indices[2:], np.array([[4, 5, 6], [4, 6, 7]], dtype=np.int32))
-          and same(coords[0], np.array([7.0, 1.0], dtype=np.float32)),
+    corners, coords = drawing.quads(pair, 4, np.array([[1.0, 1.0], [7.0, 1.0]]), 4)
+    positions, uvs, colours, islands, sources, triangles = drawing.geometry(
+        corners, coords, pair.color, pair.owner, no_pieces())
+    check(same(triangles[2:], np.array([[4, 5, 6], [4, 6, 7]], dtype=np.int32))
+          and same(uvs[0], np.array([7.0, 1.0], dtype=np.float32)),
           "each stamp gets its own four corners and its own brush's cell")
-    check(same(islands, np.array([0.0] * 4 + [16777215.0] * 4, dtype=np.float32)),
+    check(same(islands[:, 0], np.array([0.0] * 4 + [16777215.0] * 4, dtype=np.float32)),
           "and its own island on every corner, exact up to the largest number the map holds")
+    check(same(positions[:, 2], np.repeat(np.array([1 / 3, -1 / 3], np.float32), 4)),
+          "and a later stamp is nearer, so it paints over an earlier one where the depth test passes")
+
+    section("the pieces carried across seams")
+    # Stamp 0 carries a triangle and a pentagon across, and stamp 1 a quad.
+    count = np.array([3, 5, 4])
+    points = np.zeros((3, seams.CORNERS), complex)
+    atlas_points = np.zeros((3, seams.CORNERS), complex)
+    source_points = np.zeros((3, seams.CORNERS), complex)
+    for row, corners_used in enumerate(count):
+        points[row, :corners_used] = 100 * (row + 1) + np.arange(corners_used)
+        atlas_points[row, :corners_used] = 1j * (row + 1) + np.arange(corners_used)
+        source_points[row, :corners_used] = 10j * (row + 1) + np.arange(corners_used)
+    carried = seams.Pieces(stamp=np.array([0, 0, 1]), points=points, coords=atlas_points, sources=source_points,
+                           count=count, island=np.array([5, 6, 7], np.int32))
+    positions, uvs, colours, islands, sources, triangles = drawing.geometry(
+        corners, coords, pair.color, pair.owner, carried)
+    check(len(positions) == 8 + 12 and same(positions[8:, 0], points.real[np.arange(seams.CORNERS) < count[:, None]]
+                                             .astype(np.float32)),
+          "a piece adds only the corners it uses, after every quad")
+    check(same(triangles, np.array([[0, 1, 2], [0, 2, 3], [8, 9, 10], [11, 12, 13], [11, 13, 14],
+                                    [11, 14, 15], [4, 5, 6], [4, 6, 7], [16, 17, 18], [16, 18, 19]],
+                                   dtype=np.int32)),
+          "each stamp's quad is drawn before its pieces, as a fan each, and before the next stamp")
+    check(same(islands[8:], np.repeat(np.array([(5.0, 0.0), (6.0, 0.0), (7.0, 16777215.0)], np.float32),
+                                      count, axis=0))
+          and same(positions[8:, 2], np.repeat(np.array([1 / 3, 1 / 3, -1 / 3], np.float32), count)),
+          "a piece carries the island it paints and the one its stamp is on, at its stamp's depth")
+    check(same(colours[8:], np.repeat(pair.color[[0, 0, 1]], count, axis=0))
+          and same(uvs[16:], np.array([(k, 3) for k in range(4)], dtype=np.float32))
+          and same(sources[16:], np.array([(k, 30) for k in range(4)], dtype=np.float32)),
+          "with its stamp's colour, and its own points in the atlas and before it was carried")
 
     section("the layer's settings")
     tree = bpy.data.node_groups.new("Painter Plan", 'PaintSystemNodeTree')

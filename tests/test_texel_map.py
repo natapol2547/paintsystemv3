@@ -273,13 +273,13 @@ def test_island_map():
     reach = inside(corners, SIZE, -(texel_map.MARGIN + 1.0)) & drawn[:, None, None]
     near = reach.any(axis=0)
     outside = ~inside(corners, SIZE, -1.0)[drawn].any(axis=0)
-    margin = outside & (got > 0)
-    check(margin.any() and not (got[~near] > 0).any(),
+    margin = outside & (got != 0)
+    check(margin.any() and not (got[~near] != 0).any(),
           f"the margin covers {int(margin.sum())} texels outside every triangle, "
           f"and none further than {texel_map.MARGIN} texels from one")
     nearby = np.where(reach, tri_island[:, None, None], 0)
-    check(all(got[y, x] in nearby[:, y, x] for y, x in zip(*np.nonzero(margin))),
-          "and each margin texel holds the island of a triangle it is next to")
+    check(all(-got[y, x] in nearby[:, y, x] for y, x in zip(*np.nonzero(margin))),
+          "and each margin texel holds minus the island of a triangle it is next to")
     stacked = inside(corners[2:4], SIZE, 0.01).any(axis=0)
     check(stacked.any() and bool((got[stacked] > 0).all()),
           "a triangle of island 0 is not drawn, not even over another island")

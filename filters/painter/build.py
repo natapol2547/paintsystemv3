@@ -5,8 +5,8 @@
 instead of a list of passes, with what `read_inputs` read when the build
 started. The steps are:
 
-1. Find the UV islands of the mesh (`seams`), or take them from the
-   cache.
+1. Find the UV islands of the mesh and the ways across its seams
+   (`seams`), or take them from the cache.
 2. Encode the stack below to sRGB. v2 painted stored byte values, and
    its look depends on that: the blur, the luma the gradient is taken
    on, and the edge of every "over" blend.
@@ -20,16 +20,21 @@ started. The steps are:
 6. `plan.stamps` decides which stamps land and how. Each step's stamps
    are drawn as rotated quads (`drawing.quads`) into a premultiplied
    copy of the picture, from one atlas of that step's brushes. A stamp
-   paints only its own island and texels of no island.
+   paints only its own island and texels of no island. The part of it
+   that runs over a seam is carried across as pieces
+   (`seams.candidates` and `seams.pieces`), which paint the island on
+   the other side and its margin. On the island's own texels they paint
+   only where what they carry is off the stamp's island. A depth slot
+   per stamp keeps its quad and pieces from painting one texel twice.
 7. Un-premultiply the canvas and decode it back to scene linear, because
    the layer build encodes whatever a kind returns.
 
-The full-size textures come from the pool, except the island map, which
-has a format of its own. It and the small ones (positions, gathered
-values, the reduction) are made here and are freed when the generator
-ends. The atlases are kept after it: each brush keeps the ones its last
-build drew with, because a rebuild after a stroke below asks for exactly
-those again.
+The full-size textures come from the pool, except the island map and
+the depth texture, which have formats of their own. They and the small
+ones (positions, gathered values, the reduction) are made here and are
+freed when the generator ends. The atlases are kept after it: each brush
+keeps the ones its last build drew with, because a rebuild after a stroke
+below asks for exactly those again.
 """
 from __future__ import annotations
 
@@ -59,6 +64,10 @@ GATHER_SIDE = 512
 # one-texel read after it keeps the driver's queue short, like the bands
 # of `run_pass`.
 DRAW_CHUNK = 32768
+# Most crossings one draw carries stamps over. Cutting them costs about
+# 5 microseconds each, so a draw's planning stays near 40 ms. A stamp
+# with more crossings than this gets a draw of its own.
+PLAN_CHUNK = 8192
 # Side of the texel square that one reduction pass reduces to one texel.
 PEAK_BLOCK = 8
 
@@ -162,7 +171,9 @@ void main()
   v_coord = coord;
   v_color = color;
   v_island = island;
-  gl_Position = vec4(position / target_size * 2.0 - 1.0, 0.0, 1.0);
+  v_source = source;
+  /* z is the stamp's depth slot (`drawing.geometry`). */
+  gl_Position = vec4(position.xy / target_size * 2.0 - 1.0, position.z, 1.0);
 }
 """
 
@@ -178,11 +189,25 @@ float ps_brush_at(ivec2 texel, ivec2 last)
    gutter. */
 void main()
 {
-  /* A stamp paints its own island and texels of no island. The island
-     next to it in the image sits somewhere else on the mesh, so a stroke
-     running into it would paint where it does not belong. */
+  /* `v_island` is the island a part paints, then the island a piece
+     carried across a seam leaves, or 0 for a stamp's quad. A quad paints
+     its island and texels of no island. The island next to it in the
+     image sits somewhere else on the mesh, so a stroke running into it
+     would paint where it does not belong. A piece paints only the island
+     on the other side. On that island's own texels it paints only where
+     the part of the stamp it carries is off the stamp's own island,
+     because the quad paints that part where it is. Its margin takes the
+     part from just inside the stamp's island, which filtering reads past
+     the far edge. A margin texel reads minus its island. */
   float here = texelFetch(islands, ivec2(gl_FragCoord.xy), 0).r;
-  if (here != v_island && here != 0.0) {
+  bool kept = abs(here) == v_island.x || (v_island.y == 0.0 && here == 0.0);
+  if (kept && v_island.y > 0.0 && here > 0.0) {
+    ivec2 source = ivec2(floor(v_source));
+    if (all(greaterThanEqual(source, ivec2(0))) && all(lessThan(source, textureSize(islands, 0)))) {
+      kept = texelFetch(islands, source, 0).r != v_island.y;
+    }
+  }
+  if (!kept) {
     discard;
   }
   ivec2 last = textureSize(atlas, 0) - ivec2(1);
@@ -193,6 +218,11 @@ void main()
   float high = mix(ps_brush_at(base + ivec2(0, 1), last),
                    ps_brush_at(base + ivec2(1, 1), last), f.x);
   out_color = v_color * mix(low, high, f.y);
+  /* A texel the brush leaves empty must not take the stamp's depth slot,
+     or another part of the stamp could not paint it. */
+  if (out_color.a == 0.0) {
+    discard;
+  }
 }
 """
 
@@ -277,12 +307,17 @@ def build(inputs, texture, pool):
         got = _gather((colors, field, islands), x[start:start + chunk], y[start:start + chunk])
         sampled.append(got[0])
         gradients.append(got[1])
-        owners.append(got[2][:, 0].astype(np.int32))
+        # A stamp centred in an island's margin is that island's.
+        owners.append(np.abs(got[2][:, 0]).astype(np.int32))
     sampled, gradients, owners = np.concatenate(sampled), np.concatenate(gradients), np.concatenate(owners)
     pool.release(colors)
     pool.release(field)
 
-    framebuffer = gpu.types.GPUFrameBuffer(color_slots=(canvas,))
+    # Neither a framebuffer nor a bound sampler keeps a texture alive, so
+    # this frame holds the depth texture and the island map while drawing.
+    depth = new_texture((width, height), 'DEPTH_COMPONENT32F')
+    framebuffer = gpu.types.GPUFrameBuffer(color_slots=(canvas,), depth_slot=depth)
+    crossings = seams.crossings(snapshot, index, width, height)
     limit = gpu.capabilities.max_texture_size_get()
     largest = max(mask.shape[0] for mask in masks)
     previous, used = _atlases.get(settings.brush, {}), {}
@@ -302,12 +337,22 @@ def build(inputs, texture, pool):
                 entry = (_upload(image), origins)
             used[key] = entry
             atlas, origins = entry
+            label = f"painting, step {step.index + 1} of {len(steps)}"
             for start in range(0, len(stamps), DRAW_CHUNK):
-                yield (f"painting, step {step.index + 1} of {len(steps)}",
-                       0.2 + 0.75 * (done + start) / total)
-                geometry = drawing.quads(stamps.part(start, start + DRAW_CHUNK),
-                                         step.size, origins, cell)
-                _draw_stamps(framebuffer, (width, height), atlas, islands, geometry)
+                yield label, 0.2 + 0.75 * (done + start) / total
+                part = stamps.part(start, start + DRAW_CHUNK)
+                corners, coords = drawing.quads(part, step.size, origins, cell)
+                stamp, crossing = seams.candidates(crossings, corners.mean(axis=1), part.owner,
+                                                   step.size)
+                for number, (first, last, low, high) in enumerate(_blocks(len(part), stamp)):
+                    if number:
+                        yield label, 0.2 + 0.75 * (done + start + first) / total
+                    carried = seams.pieces(crossings, corners[first:last], coords[first:last],
+                                           stamp[low:high] - first, crossing[low:high])
+                    geometry = drawing.geometry(corners[first:last], coords[first:last],
+                                                part.color[first:last], part.owner[first:last],
+                                                carried)
+                    _draw_stamps(framebuffer, (width, height), atlas, islands, geometry)
         done += step.count
     # Replace rather than merge, so only the atlases of one build are kept.
     # A build abandoned before this line leaves the previous build's.
@@ -385,6 +430,24 @@ def _gather(textures, x: np.ndarray, y: np.ndarray) -> list[np.ndarray]:
     return results
 
 
+def _blocks(count: int, stamp: np.ndarray):
+    """Cut *count* stamps into draws of at most `PLAN_CHUNK` crossings each.
+
+    *stamp* is the stamp of every crossing from `seams.candidates`, in
+    order. Yields ``(first, last, low, high)``: the stamps from *first* up
+    to *last*, and their crossings from *low* up to *high*. A draw always
+    holds whole stamps, because a stamp's depth slot only keeps its parts
+    apart within one draw.
+    """
+    ends = np.searchsorted(stamp, np.arange(1, count + 1))
+    first = low = 0
+    while first < count:
+        last = max(first + 1, int(np.searchsorted(ends, low + PLAN_CHUNK, side='right')))
+        high = int(ends[last - 1])
+        yield first, last, low, high
+        first, low = last, high
+
+
 def _upload(image: np.ndarray):
     height, width = image.shape
     return new_texture((width, height), 'R16F',
@@ -397,15 +460,17 @@ def _stamp_program():
         interface = gpu.types.GPUStageInterfaceInfo("ps_painter_stamp_iface")
         interface.smooth('VEC2', "v_coord")
         interface.smooth('VEC4', "v_color")
-        interface.flat('FLOAT', "v_island")
+        interface.smooth('VEC2', "v_source")
+        interface.flat('VEC2', "v_island")
         info = gpu.types.GPUShaderCreateInfo()
         info.push_constant('VEC2', "target_size")
         info.sampler(0, 'FLOAT_2D', "atlas")
         info.sampler(1, 'FLOAT_2D', "islands")
-        info.vertex_in(0, 'VEC2', "position")
+        info.vertex_in(0, 'VEC3', "position")
         info.vertex_in(1, 'VEC2', "coord")
         info.vertex_in(2, 'VEC4', "color")
-        info.vertex_in(3, 'FLOAT', "island")
+        info.vertex_in(3, 'VEC2', "island")
+        info.vertex_in(4, 'VEC2', "source")
         info.vertex_out(interface)
         info.fragment_out(0, 'VEC4', "out_color")
         info.vertex_source(_STAMP_VERTEX)
@@ -415,20 +480,25 @@ def _stamp_program():
 
 
 def _draw_stamps(framebuffer, size, atlas, islands, geometry) -> None:
-    """Draw one chunk of stamp quads over the canvas with premultiplied "over".
+    """Draw one chunk of stamps from `drawing.geometry` over the canvas with premultiplied "over".
 
     *islands* is the island map the stamps keep to, the size of the
-    canvas. The GPU blends triangles in the order they are submitted,
-    which is the order they were planned in. So a later stamp covers an
-    earlier one, exactly as in v2's loop.
+    canvas, and *framebuffer* has a depth texture for the stamps' depth
+    slots. The GPU blends triangles in the order they are submitted,
+    which is the order they were planned in. The depth is cleared first,
+    because the slots start again with every draw.
     """
-    positions, coords, colors, owners, indices = geometry
+    positions, coords, colors, part_islands, sources, indices = geometry
     shader = _stamp_program()
     batch = batch_for_shader(shader, 'TRIS', {
-        "position": positions, "coord": coords, "color": colors, "island": owners,
+        "position": positions, "coord": coords, "color": colors, "island": part_islands, "source": sources,
     }, indices=indices)
     sync = gpu.types.Buffer('FLOAT', 4)
     with offscreen_state('ALPHA_PREMULT'), framebuffer.bind():
+        # `offscreen_state` turns the depth test off, so it is set here.
+        gpu.state.depth_test_set('LESS')
+        gpu.state.depth_mask_set(True)
+        framebuffer.clear(depth=1.0)
         shader.uniform_float("target_size", (float(size[0]), float(size[1])))
         shader.uniform_sampler("atlas", atlas)
         shader.uniform_sampler("islands", islands)

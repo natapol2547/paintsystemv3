@@ -5,7 +5,7 @@ Everything here is numpy and works per stamp, so it runs without a GPU
 and tests can check it against v2's arithmetic directly. `painter.build`
 does the per-texel work around it. It blurs the picture, takes its
 gradient, reads both at the centres `draws` picked, passes them to
-`stamps`, and draws what `drawing.quads` returns. How a brush is
+`stamps`, and draws what `drawing.geometry` returns. How a brush is
 resized and what it covers is in `resizing`, and the colour shift is in
 `color_jitter`.
 
@@ -27,7 +27,9 @@ Three things differ from v2 on purpose. The reasons are in
 - The stroke follows the gradient on every edge. v2 mirrored it on
   diagonal edges.
 - A stamp paints only the UV island its centre is on, and texels of no
-  island (`seams`). The island is read at the centre with the colour.
+  island. The part of it that runs over a seam is carried across onto
+  the island on the other side (`seams`). The island is read at the
+  centre with the colour.
 
 Rows run bottom-up, as in `Image.pixels`, so y points up and a positive
 angle turns counter-clockwise on screen. v2 stored its arrays top-down.
