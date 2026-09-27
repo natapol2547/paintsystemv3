@@ -65,7 +65,7 @@ GATHER_SIDE = 512
 # of `run_pass`.
 DRAW_CHUNK = 32768
 # Most crossings one draw carries stamps over. Cutting them costs about
-# 5 microseconds each, so a draw's planning stays near 40 ms. A stamp
+# 2.5 microseconds each, so a draw's planning stays near 20 ms. A stamp
 # with more crossings than this gets a draw of its own.
 PLAN_CHUNK = 8192
 # Side of the texel square that one reduction pass reduces to one texel.

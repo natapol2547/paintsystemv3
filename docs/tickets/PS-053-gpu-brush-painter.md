@@ -362,6 +362,20 @@ stamp's quad and its pieces share one depth slot: the first of them to
 paint a texel keeps it, and the next stamp, one slot nearer, paints
 over. A piece is not carried on across a second seam.
 
+Measured on heavy meshes (2026-09-28, Blender 5.2, RTX 2060). Suzanne
+with Subsurf 5 and Smart UV Project, 503,808 faces and about 29,000
+crossings, paints at 4K with the default settings in about 3.3 s. With
+Subsurf 4 and its own layout, 1,536 crossings, it takes 1.9 s. The seam
+index, cached per mesh content, costs about half a second the first
+time, in units of 100-140 ms. Each build then finds about 144,000
+stamp-crossing pairs and cuts about 106,000 pieces, at about 2.5 µs a
+crossing, so `PLAN_CHUNK` keeps a draw's cutting near 20 ms. No draw
+took more than 24 ms on the GPU, so draws are limited by their stamps
+and crossings only, not by the texels they fill. The longest unit of the
+build takes 150-190 ms, a little more than a pass over the whole image
+(100-150 ms).
+`PS_HEAVY=1` adds this build to `tests/test_filter_painter.py`.
+
 ### Slices
 
 1. Painterly as a filter layer kind, without seams: the hook, the
@@ -371,7 +385,7 @@ over. A piece is not carried on across a second seam.
    Built in parts: the refusal (done 2026-09-27); strokes kept to the
    island under their centre (done 2026-09-27); strokes carried across
    each seam onto the island on the other side (done 2026-09-27); tuning
-   for heavy meshes.
+   for heavy meshes (done 2026-09-28).
 3. Custom brushes as Blender images.
 4. A UV or mesh edit on the seam object marks the layer out of date.
 

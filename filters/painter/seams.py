@@ -251,6 +251,7 @@ def index_of(snap: Snapshot, progress):
         return cached
     yield progress
     face_of, corners = _shared_edges(snap)
+    yield progress
     agree = _agree(snap.uv, corners)
     face_island = yield from _islands(len(snap.face_offset), face_of[corners[0][agree]],
                                       face_of[corners[2][agree]], snap.shown, progress)
@@ -374,12 +375,16 @@ def candidates(crossings: Crossings, centres: np.ndarray, owners: np.ndarray,
                            & (np.minimum(start.imag, end.imag) <= height + reach))
     if len(stamps) == 0 or len(edges) == 0:
         return np.zeros(0, np.int64), np.zeros(0, np.int64)
-    # A grid of cells twice the least reach wide. Points are put along
-    # every near edge at most that reach apart, so a centre within the
-    # least reach of an edge is within one and a half of one of its
-    # points, which is in the centre's cell or in one next to it. A point
-    # of an edge that reaches further is filed in as many more cells
-    # around its own as the extra reach needs.
+    # A grid of cells twice the least reach wide. A stamp looks in its own
+    # cell and the eight around it, which hold the square of spots up to a
+    # cell away from its centre along each axis. Points are put along every
+    # near edge at most half a cell apart, and its two ends are points too.
+    # Where an edge passes within a cell of a centre, its line crosses
+    # that square for at least 0.8 cells. So either the edge runs across
+    # the whole of that stretch, and one of its points is on it, or the
+    # edge ends inside the square, and its end is a point. A point of an
+    # edge that reaches further is filed in as many more cells around its
+    # own as that takes.
     least = half + BAND
     cell = 2.0 * least
     columns, rows = int(width // cell) + 3, int(height // cell) + 3
@@ -389,7 +394,7 @@ def candidates(crossings: Crossings, centres: np.ndarray, owners: np.ndarray,
     step = np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)
     along = step / np.repeat(np.maximum(count - 1, 1), count)
     points = start[edge] + along * (end[edge] - start[edge])
-    spread = np.ceil((reach[edge] - least) / cell).astype(np.int64)
+    spread = np.ceil(reach[edge] / cell).astype(np.int64) - 1
     side = 2 * spread + 1
     block = side * side
     which = np.repeat(np.arange(len(points)), block)
@@ -628,8 +633,9 @@ def _crossings(snap: Snapshot, face_of: np.ndarray, corners: list[np.ndarray],
     side. That edge then carries nothing, as a border would.
     """
     near_start, near_end, far_start, far_end = corners
-    six = np.stack([near_start, near_end, _third_corners(snap, near_start, near_end),
-                    far_start, far_end, _third_corners(snap, far_start, far_end)], axis=1)
+    near_third, far_third = np.split(_third_corners(snap, np.concatenate([near_start, far_start]),
+                                                    np.concatenate([near_end, far_end])), 2)
+    six = np.stack([near_start, near_end, near_third, far_start, far_end, far_third], axis=1)
     uv = snap.uv.astype(np.float64)[six]
     p0, p1, p2, q0, q1, q2 = uv.transpose(1, 0, 2)
     near_side, far_side = _side(p0, p1, p2), _side(q0, q1, q2)

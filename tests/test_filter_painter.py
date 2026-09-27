@@ -28,7 +28,9 @@ come from the UV map the layers below use. Suzanne checks the seams:
 painted, a smooth picture changes about as much across them as within
 an island, which it does not when strokes are only kept to their
 islands, and each island's colour is carried across onto the islands it
-joins and onto no other.
+joins and onto no other. With ``PS_HEAVY=1``, a 4K build for Suzanne
+subdivided to a million triangles, with about 29,000 crossings along
+its seams, must also stay inside the ten seconds, in short units.
 
 These need a GPU context, as `tests/test_filter_build.py` explains.
 """
@@ -76,6 +78,10 @@ SEAM_SIZE = 2048
 # The ticket's budget for a 4K build at the default settings, scaled as
 # `tests/test_perf.py` scales its own.
 BUDGET_4K = 10.0
+# The longest one unit of a build may take on the heavy mesh, so the
+# layer can still be cancelled and the viewport still redraws. 150-190 ms
+# was measured, a little more than a pass over the whole image.
+UNIT_LIMIT = 0.5
 
 
 def perf_scale():
@@ -918,6 +924,43 @@ if available():
         took = time.perf_counter() - start
         limit = BUDGET_4K * perf_scale()
         check(took < limit, f"the default settings paint in {took:.2f} s (limit {limit:.0f} s)")
+
+        section("at 4K on a heavy mesh")
+        if not os.environ.get("PS_HEAVY"):
+            skip("set PS_HEAVY=1 to paint for Suzanne subdivided to a million triangles")
+        else:
+            # Smart UV Project cuts the subdivided head into 68 islands
+            # with about 29,000 crossings along their seams, far more than
+            # a hand-made layout has.
+            bpy.ops.mesh.primitive_monkey_add()
+            heavy = bpy.context.active_object
+            subsurf = heavy.modifiers.new("Subsurf", 'SUBSURF')
+            subsurf.levels = 5
+            bpy.ops.object.modifier_apply(modifier=subsurf.name)
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.uv.smart_project(island_margin=0.001)
+            bpy.ops.object.mode_set(mode='OBJECT')
+            use_tree(heavy, tree)
+            node.surface_name = heavy.name
+            core.flush_now()
+            longest = 0.0
+            run = layer_build.steps(bpy.context, tree, node)
+            start = time.perf_counter()
+            while True:
+                unit = time.perf_counter()
+                try:
+                    next(run)
+                except StopIteration:
+                    break
+                finally:
+                    longest = max(longest, time.perf_counter() - unit)
+            took = time.perf_counter() - start
+            check(took < limit, f"the default settings paint for {len(heavy.data.polygons)} faces "
+                                f"in {took:.2f} s (limit {limit:.0f} s)")
+            unit_limit = UNIT_LIMIT * perf_scale()
+            check(longest < unit_limit, f"and no unit of the build takes longer than {longest * 1000:.0f} ms "
+                                        f"(limit {unit_limit * 1000:.0f} ms)")
 
     except Exception:
         traceback.print_exc()

@@ -23,7 +23,8 @@ could quietly undo:
 - a stamp crosses an edge only from its own side, and from as far off
   as the band past the far edge reaches;
 - the cuts, the stamps' candidate crossings and the third corners agree
-  with a brute-force reference.
+  with a brute-force reference, including for stamps along long edges
+  with wide bands, and for the edge the search grid finds hardest.
 
 `tests/test_filter_painter.py` checks that strokes stay on their island
 and run on across seams without a break.
@@ -242,11 +243,14 @@ try:
           "islands are numbered in the order of their first face")
     # Face 0 joins 2, 2 joins 3 and 3 joins 1. The first round hooks 3
     # onto 1 and 2 onto 0, so a second round is needed to join the two.
+    # The same strip listed in order is joined in one round.
     faces, uvs = strip([0, 3, 1, 2])
     seams.release()
     index, units = run(snap_of(faces, uvs))
-    check(index.face_island.tolist() == [1, 1, 1, 1] and units > 2,
-          f"islands that need more than one round come out whole ({units} units)")
+    seams.release()
+    _, in_order = run(snap_of(*strip([0, 1, 2, 3])))
+    check(index.face_island.tolist() == [1, 1, 1, 1] and units > in_order,
+          f"islands that need more than one round come out whole ({units} units, {in_order} in order)")
     order = np.random.default_rng(7).permutation(300).tolist()
     faces, uvs = strip(order)
     check(islands_of(snap_of(faces, uvs)) == [1] * 300, "so does a long strip listed in a random order")
@@ -674,28 +678,73 @@ try:
     centres = rng.uniform(0, 512, 20000) + 1j * rng.uniform(0, 512, 20000)
     owners = rng.integers(0, 6, 20000)
     size = 24
-    stamp, crossing = seams.candidates(found, centres, owners, size)
-    reach = size * sqrt(2) / 2 + found.band
     along = found.near_end - found.near_start
     # All 98 are used, so the crossings are the index's, in order.
     third = suzanne.uv.astype(np.float64)[index.crossing_corners[:, 2]] @ np.array([512, 512j])
     normal = 1j * along / np.abs(along)
     normal = np.where((np.conj(normal) * (third - found.near_start)).real > 0, normal, -normal)
-    expected, distances = set(), {}
-    for k in np.flatnonzero(owners > 0):
-        t = np.clip(((np.conj(along) * (centres[k] - found.near_start)).real / np.abs(along) ** 2), 0, 1)
-        distance = np.abs(centres[k] - (found.near_start + t * along))
-        inward = (np.conj(normal) * (centres[k] - found.near_start)).real
-        for each in np.flatnonzero((distance <= reach) & (inward >= -seams.BAND) & (found.near_island == owners[k])):
-            expected.add((int(k), int(each)))
-            distances[int(k), int(each)] = distance[each]
+
+    def within_reach(crossings, centres, owners):
+        """Each stamp and crossing of its island within reach from its side, to the distance between them."""
+        start, along = crossings.near_start, crossings.near_end - crossings.near_start
+        reach = size * sqrt(2) / 2 + crossings.band
+        distances = {}
+        for k in np.flatnonzero(owners > 0):
+            t = np.clip(((np.conj(along) * (centres[k] - start)).real / np.abs(along) ** 2), 0, 1)
+            distance = np.abs(centres[k] - (start + t * along))
+            inward = (np.conj(normal) * (centres[k] - start)).real
+            for each in np.flatnonzero((distance <= reach) & (inward >= -seams.BAND)
+                                       & (crossings.near_island == owners[k])):
+                distances[int(k), int(each)] = distance[each]
+        return distances
+
+    stamp, crossing = seams.candidates(found, centres, owners, size)
+    distances = within_reach(found, centres, owners)
     pairs = list(zip(stamp.tolist(), crossing.tolist()))
     ordered = all(a[0] < b[0] or (a[0] == b[0] and distances[a] <= distances[b] + 1e-9)
                   for a, b in zip(pairs, pairs[1:]) if a in distances and b in distances)
     wide = int((found.band > seams.BAND).sum())
-    check(set(pairs) == expected and len(pairs) == len(expected) and ordered and len(pairs) > 100 and wide > 0,
+    check(set(pairs) == set(distances) and len(pairs) == len(distances) and ordered and len(pairs) > 100
+          and wide > 0,
           f"a stamp may cross every crossing of its island within reach from its side, nearest first "
           f"({len(pairs)} pairs, {wide} crossings reaching further)")
+    # At 4096 Suzanne's edges are many grid points long. A far side with
+    # up to 16 times fewer texels across gives a band up to 16 times as
+    # wide, which the grid files in more cells. Stamps anywhere within
+    # reach of an edge, most of them between its points, still find it.
+    _, large = crossings_of(suzanne, 4096, 4096)
+    large = replace(large, band=rng.uniform(seams.BAND, 16 * seams.BAND, len(large.band)))
+    edge = np.repeat(np.arange(len(large.near_start)), 200)
+    reach = size * sqrt(2) / 2 + large.band[edge]
+    near = (large.near_start[edge] + rng.uniform(0, 1, len(edge)) * (large.near_end[edge] - large.near_start[edge])
+            + rng.uniform(0, reach) * normal[edge])
+    # A stamp's centre is always on the image.
+    on_image = (near.real >= 0) & (near.real < 4096) & (near.imag >= 0) & (near.imag < 4096)
+    near, edge = near[on_image], edge[on_image]
+    stamp, crossing = seams.candidates(large, near, large.near_island[edge], size)
+    distances = within_reach(large, near, large.near_island[edge])
+    check(set(zip(stamp.tolist(), crossing.tolist())) == set(distances) and len(stamp) == len(distances),
+          f"and so may it at 4096, where the bands reach up to {16 * seams.BAND:g} texels into the near face "
+          f"({len(distances)} pairs)")
+    # The hardest edge for the grid to find: a stamp of 16 centred at the
+    # far corner of its cell, with a reach just under a cell, and an edge
+    # at 45 degrees just within that reach. Its line cuts only the corner
+    # of the cells the stamp looks in, for 0.83 cells, and the edge ends
+    # just outside them on both sides. Only a point between its ends can
+    # be found, which there is while points are under 0.84 cells apart.
+    cell = 2 * (8 * sqrt(2) + seams.BAND)
+    centre = (cell - 0.01) * (1 + 1j)
+    foot = centre + (cell - 0.02) * (1 + 1j) / sqrt(2)
+    along = (1 - 1j) / sqrt(2)
+    beyond = (2 * cell - foot.real) * sqrt(2) + 0.1
+    corner = seams.Crossings(
+        size=(512, 512), near_start=np.array([foot - beyond * along]), near_end=np.array([foot + beyond * along]),
+        near_island=np.array([1]), far_island=np.array([2]), far_start=np.zeros(1, complex),
+        near_normal=np.array([-(1 + 1j) / sqrt(2)]), band=np.array([cell - 0.01 - 8 * sqrt(2)]),
+        turn=np.ones(1, complex), flip=np.zeros(1, complex), normals=np.zeros((1, 3), complex),
+        offsets=np.ones((1, 3)))
+    check(seams.candidates(corner, np.array([centre]), np.array([1]), 16)[1].tolist() == [0],
+          "a stamp finds an edge whose ends are both outside the cells it looks in")
 
     tri = suzanne.tri_corners.astype(np.int64)
     first, second, third = (np.roll(tri, -shift, axis=1).ravel() for shift in range(3))

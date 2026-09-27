@@ -20,6 +20,9 @@
 # PS_PERF_SCALE=<factor>
 #          multiply the test_perf.py budgets, for a machine slower or busier
 #          than the one they were measured on (default: 5 under CI, else 1)
+# PS_HEAVY=1
+#          also build a Painterly layer for a million-triangle mesh in
+#          test_filter_painter.py, which takes about 5 s more
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
