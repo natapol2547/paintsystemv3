@@ -2,7 +2,8 @@
 """The arrays the stamps are drawn from (PS-053).
 
 `atlas` lays a step's brushes out in one image, and `quads` turns the
-stamps `plan.stamps` kept into vertices that read from it.
+stamps `plan.stamps` kept into vertices that read from it and carry the
+island each stamp keeps to.
 `painter.build` uploads and draws both. This is plain numpy, so tests
 check the geometry without a GPU.
 """
@@ -48,12 +49,14 @@ def atlas(masks, cell: int, columns: int, rows: int) -> tuple[np.ndarray, np.nda
 
 
 def quads(stamps: Stamps, size: int, origins: np.ndarray, cell: int):
-    """Vertex positions, atlas coordinates, colours and indices for *stamps*.
+    """Vertex positions, atlas coordinates, colours, islands and indices for *stamps*.
 
     A stamp of *size* covers the same square v2 wrote it into, starting
     at ``x - size // 2`` and *size* texels wide, rotated about its centre.
     At angle zero its corners sit on texel edges and the atlas cell maps
-    onto it texel for texel, so the stamp reproduces its brush.
+    onto it texel for texel, so the stamp reproduces its brush. Every
+    corner carries the stamp's island as a float, which is exact for any
+    island number the island map can hold.
     """
     count = len(stamps)
     half = size / 2.0
@@ -69,7 +72,8 @@ def quads(stamps: Stamps, size: int, origins: np.ndarray, cell: int):
     coords = (origins[stamps.brush][:, None, :] + unit[None, :, :]).astype(np.float32)
 
     colors = np.repeat(stamps.color[:, None, :], 4, axis=1)
+    islands = np.repeat(stamps.owner.astype(np.float32), 4)
     base = (np.arange(count, dtype=np.int32) * 4)[:, None]
     indices = np.concatenate([base + (0, 1, 2), base + (0, 2, 3)], axis=1)
-    return (positions.reshape(-1, 2), coords.reshape(-1, 2), colors.reshape(-1, 4),
+    return (positions.reshape(-1, 2), coords.reshape(-1, 2), colors.reshape(-1, 4), islands,
             indices.reshape(-1, 3).astype(np.int32))

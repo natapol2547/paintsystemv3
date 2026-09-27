@@ -849,6 +849,7 @@ layer_job.cancel_all()
 import_from("filters.composite").release()
 import_from("filters.blend_glsl").release()
 import_from("filters.painter.build").release()
+import_from("gpu_passes.texel_map").release()
 filters_core.release()
 
 finish("FILTER AUTO REFRESH TEST")

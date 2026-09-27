@@ -139,31 +139,49 @@ def _read_custom(attribute) -> np.ndarray:
     return np.concatenate([np.frombuffer(attribute.domain.encode(), np.uint8), values.view(np.uint8)])
 
 
-def _read(mesh: bpy.types.Mesh, uv_map: str) -> dict[str, np.ndarray] | None:
-    """The arrays a key is made from, or None when *uv_map* is not a corner UV map of *mesh*.
+def read_corners(mesh: bpy.types.Mesh, uv_map: str) -> dict[str, np.ndarray] | None:
+    """The corners of *mesh*, or None when *uv_map* is not a corner UV map of *mesh*.
 
-    Also None for a mesh without the topology attributes, such as an edit
-    mesh wrapper, whose layers are those of its BMesh.
+    Holds `corner_vert`, the vertex of every corner, `face_offset`, the
+    first corner of every face, and `uv`, two floats per corner. Also None
+    for a mesh without the topology attributes, such as an edit mesh
+    wrapper, whose layers are those of its BMesh.
     """
     attributes = mesh.attributes
     uv = attributes.get(uv_map)
     if uv is None or uv.domain != 'CORNER' or uv.data_type != 'FLOAT2':
         return None
-    required = ['position', '.corner_vert']
-    if attributes.get('sharp_edge') is not None:
-        required.append('.edge_verts')
-    if any(attributes.get(name) is None for name in required):
+    corner_vert = attributes.get('.corner_vert')
+    if corner_vert is None:
         return None
     arrays = {
-        'position': np.empty(len(mesh.vertices) * 3, np.float32),
         'corner_vert': np.empty(len(mesh.loops), np.int32),
         'face_offset': np.empty(len(mesh.polygons), np.int32),
         'uv': np.empty(len(mesh.loops) * 2, np.float32),
     }
-    attributes['position'].data.foreach_get('vector', arrays['position'])
-    attributes['.corner_vert'].data.foreach_get('value', arrays['corner_vert'])
+    corner_vert.data.foreach_get('value', arrays['corner_vert'])
     mesh.polygons.foreach_get('loop_start', arrays['face_offset'])
     uv.data.foreach_get('vector', arrays['uv'])
+    return arrays
+
+
+def _read(mesh: bpy.types.Mesh, uv_map: str) -> dict[str, np.ndarray] | None:
+    """The arrays a key is made from, or None when *uv_map* is not a corner UV map of *mesh*.
+
+    These are `read_corners` and the rest of what shapes the surface. Also
+    None for a mesh without the topology attributes (see `read_corners`).
+    """
+    attributes = mesh.attributes
+    required = ['position']
+    if attributes.get('sharp_edge') is not None:
+        required.append('.edge_verts')
+    if any(attributes.get(name) is None for name in required):
+        return None
+    arrays = read_corners(mesh, uv_map)
+    if arrays is None:
+        return None
+    arrays['position'] = np.empty(len(mesh.vertices) * 3, np.float32)
+    attributes['position'].data.foreach_get('vector', arrays['position'])
     custom = attributes.get('custom_normal')
     if custom is not None:
         arrays['custom_normal'] = _read_custom(custom)

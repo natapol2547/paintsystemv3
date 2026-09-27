@@ -136,7 +136,10 @@ def same(a, b):
 
 
 def planned(settings, step, drawn, colors, gradients, peak=None):
-    return plan.stamps(settings, step, drawn, colors, gradients, peak)
+    # Every centre on an island of its own, so a check can tell which
+    # stamp's island went where.
+    owners = np.arange(1, len(colors) + 1, dtype=np.int32)
+    return plan.stamps(settings, step, drawn, colors, gradients, peak, owners)
 
 
 try:
@@ -328,6 +331,9 @@ try:
     check(same(some.x, everything.x[kept]) and same(some.y, everything.y[kept])
           and same(some.brush, everything.brush[kept]) and same(some.angle, everything.angle[kept]),
           "and dropping those changes nothing about the rest")
+    check(same(everything.owner, np.arange(1, count + 1, dtype=np.int32))
+          and same(some.owner, everything.owner[kept]),
+          "each stamp keeps the island under its own centre")
 
     magnitudes = np.array([0.1, 0.5, 1.0, 0.49], dtype=np.float32)
     few = plan.Step(index=0, size=8, opacity=1.0, count=4)
@@ -336,7 +342,7 @@ try:
     few_gradients = np.stack([magnitudes, np.zeros(4, np.float32), magnitudes], axis=1)
     edgy = replace(settings, threshold=0.5)
     got = planned(edgy, few, few_drawn, few_colors, few_gradients, peak=1.0)
-    check(same(got.x, few_drawn.x[[1, 2]]),
+    check(same(got.x, few_drawn.x[[1, 2]]) and same(got.owner, np.array([2, 3], dtype=np.int32)),
           "a threshold keeps the stamps on edges at least that strong, relative to the strongest")
     got = planned(edgy, few, few_drawn, few_colors, few_gradients * 2.0, peak=2.0)
     check(same(got.x, few_drawn.x[[1, 2]]), "relative, so the scale of the gradient does not matter")
@@ -428,8 +434,10 @@ try:
     for size in (8, 7):
         single = plan.Stamps(x=np.array([10]), y=np.array([20]), brush=np.array([0]),
                              angle=np.array([0.0]),
-                             color=np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32))
-        positions, coords, colours, indices = drawing.quads(single, size, np.array([[1.0, 1.0]]), 5)
+                             color=np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32),
+                             owner=np.array([3], dtype=np.int32))
+        positions, coords, colours, islands, indices = drawing.quads(
+            single, size, np.array([[1.0, 1.0]]), 5)
         low = (10 - size // 2, 20 - size // 2)
         check(same(positions, np.array([low, (low[0] + size, low[1]),
                                         (low[0] + size, low[1] + size),
@@ -438,18 +446,23 @@ try:
         check(same(coords, np.array([(1, 1), (6, 1), (6, 6), (1, 6)], dtype=np.float32)),
               "and maps its brush's whole cell onto it")
     check(same(indices, np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32))
-          and colours.shape == (4, 4), "two triangles and a colour per corner")
+          and colours.shape == (4, 4) and same(islands, np.full(4, 3.0, dtype=np.float32)),
+          "two triangles, and a colour and the stamp's island per corner")
     quarter = replace(single, angle=np.array([pi / 2]))
     positions = drawing.quads(quarter, 8, np.array([[1.0, 1.0]]), 5)[0]
     check(np.abs(positions[0] - (14.0, 16.0)).max() < 1e-5,
           f"a quarter turn is counter-clockwise: the lower-left corner goes to the lower right "
           f"({positions[0].tolist()})")
     pair = plan.Stamps(x=np.array([0, 5]), y=np.array([0, 5]), brush=np.array([1, 0]),
-                       angle=np.zeros(2), color=np.ones((2, 4), dtype=np.float32))
-    positions, coords, colours, indices = drawing.quads(pair, 4, np.array([[1.0, 1.0], [7.0, 1.0]]), 4)
+                       angle=np.zeros(2), color=np.ones((2, 4), dtype=np.float32),
+                       owner=np.array([0, 16777215], dtype=np.int32))
+    positions, coords, colours, islands, indices = drawing.quads(
+        pair, 4, np.array([[1.0, 1.0], [7.0, 1.0]]), 4)
     check(same(indices[2:], np.array([[4, 5, 6], [4, 6, 7]], dtype=np.int32))
           and same(coords[0], np.array([7.0, 1.0], dtype=np.float32)),
           "each stamp gets its own four corners and its own brush's cell")
+    check(same(islands, np.array([0.0] * 4 + [16777215.0] * 4, dtype=np.float32)),
+          "and its own island on every corner, exact up to the largest number the map holds")
 
     section("the layer's settings")
     tree = bpy.data.node_groups.new("Painter Plan", 'PaintSystemNodeTree')

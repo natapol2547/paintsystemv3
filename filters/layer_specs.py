@@ -63,11 +63,12 @@ class LayerFilterSpec:
     # alpha, and both belong to the pool. None for a kind whose passes
     # are the whole build.
     build: Callable | None = None
-    # Reads what `build` gets as *settings* from the node. Called when
+    # ``settings_of(node, plan)`` reads what `build` gets as *settings*
+    # from the node and its `filters.layer_plan.InputPlan`. Called when
     # the build starts, together with the fingerprint, not later by the
     # hook. Otherwise a setting changed in between could reach pixels
     # stamped as built without it.
-    settings_of: Callable[[Any], Any] | None = None
+    settings_of: Callable[[Any, Any], Any] | None = None
     # What a build fingerprint records for this kind, as JSON-compatible
     # data. None records the passes, which is right for any kind that has
     # them.
@@ -170,7 +171,7 @@ PAINTERLY = LayerFilterSpec(
         'seed',
     ),
     build=painter_build.build,
-    settings_of=Settings.of,
+    settings_of=painter_build.read_inputs,
     fingerprint_of=_painterly_fingerprint,
     needs_surface=True,
 )

@@ -109,7 +109,9 @@ def steps(context, tree, node, *, plan=None):
     # stamp and the pixels agree on them. `plan` already holds the stack
     # below as values.
     read = inputs_of(tree, node, plan)
-    settings = kind.settings_of(node) if kind.build is not None else kind.passes_of(node)
+    # The painter also copies the mesh here, in the same tick as the
+    # resolve that checked it, so nothing later in the build reads it.
+    settings = kind.settings_of(node, plan) if kind.build is not None else kind.passes_of(node)
     with freshness.reading(node.uuid):
         yield f"{kind.label}: compositing the layers below", 0.0
 

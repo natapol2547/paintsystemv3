@@ -18,7 +18,7 @@ A build follows v2's order:
   from the canvas being painted. So a later stamp never samples an
   earlier one.
 
-Two things differ from v2 on purpose. The reasons are in
+Three things differ from v2 on purpose. The reasons are in
 `docs/tickets/PS-053-gpu-brush-painter.md`.
 
 - Random numbers come from the layer's own seed. They are drawn per
@@ -26,6 +26,8 @@ Two things differ from v2 on purpose. The reasons are in
   painting below moves no stamp.
 - The stroke follows the gradient on every edge. v2 mirrored it on
   diagonal edges.
+- A stamp paints only the UV island its centre is on, and texels of no
+  island (`seams`). The island is read at the centre with the colour.
 
 Rows run bottom-up, as in `Image.pixels`, so y points up and a positive
 angle turns counter-clockwise on screen. v2 stored its arrays top-down.
@@ -168,6 +170,9 @@ class Stamps:
     # ``(count, 4)``: the stamp's colour premultiplied by its own alpha
     # and the step's opacity, ready for a premultiplied "over".
     color: np.ndarray
+    # The UV island under the centre, the only one the stamp paints, or
+    # 0 for a centre on no island (`seams`).
+    owner: np.ndarray
 
     def __len__(self) -> int:
         return len(self.x)
@@ -175,7 +180,7 @@ class Stamps:
     def part(self, start: int, stop: int) -> "Stamps":
         return Stamps(x=self.x[start:stop], y=self.y[start:stop],
                       brush=self.brush[start:stop], angle=self.angle[start:stop],
-                      color=self.color[start:stop])
+                      color=self.color[start:stop], owner=self.owner[start:stop])
 
 
 # -- the schedule -------------------------------------------------------------
@@ -241,14 +246,15 @@ def draws(settings: Settings, step: Step, width: int, height: int, brushes: int)
 
 
 def stamps(settings: Settings, step: Step, drawn: Draws, colors: np.ndarray,
-           gradients: np.ndarray, peak: float | None) -> Stamps:
+           gradients: np.ndarray, peak: float | None, owners: np.ndarray) -> Stamps:
     """The stamps of *step* that land, with their angle and colour.
 
     *colors* is the blurred picture at each drawn centre, in straight
     sRGB. *gradients* is ``(gx, gy, magnitude)`` at the same centres,
     with y up. *peak* is the strongest magnitude anywhere in the picture,
     and the threshold is relative to it. It is None when the threshold is
-    zero, because then it is not measured.
+    zero, because then it is not measured. *owners* is the UV island at
+    each centre (`Stamps.owner`).
 
     A stamp is dropped where the picture is transparent or the edge is
     weaker than the threshold. Dropping one does not affect the others,
@@ -271,4 +277,4 @@ def stamps(settings: Settings, step: Step, drawn: Draws, colors: np.ndarray,
     weight = (alpha * step.opacity)[:, None]
     color = np.concatenate([colors[:, :3] * weight, weight], axis=1)
     return Stamps(x=drawn.x[keep], y=drawn.y[keep], brush=drawn.brush[keep],
-                  angle=angle[keep], color=color[keep].astype(np.float32))
+                  angle=angle[keep], color=color[keep].astype(np.float32), owner=owners[keep])

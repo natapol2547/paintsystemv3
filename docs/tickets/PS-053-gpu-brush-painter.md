@@ -302,8 +302,23 @@ surface_of` picks the mesh by the same rules the painter will need
 one, never a search of the file). The seams slice reuses it: a
 Painterly layer always needs a mesh, so it resolves through
 `surface_of` even when the UV names alone would not ask for one, and
-refuses by name without one. Whether several meshes sharing one
-material need their seams merged is left for that slice.
+refuses by name without one. Only the stored object's seams are read: a
+second mesh sharing the material gets the same pixels, painted along
+the first mesh's islands.
+
+The build copies the evaluated mesh's corners, UVs, triangles and
+material slots when it starts, in the same tick as the resolve that
+checked the mesh (`filters/painter/seams.py`). Two faces are in one
+island when they share an edge whose two uses agree in UV to within
+`SEAM_TOLERANCE`, and only faces whose material shows the tree count,
+by the evaluated object's materials, since a modifier can add some.
+The islands are cached by a digest of the topology, the exact UVs and
+those faces, so a rebuild of an unchanged mesh skips the walk. Rounded
+UVs would not do as a key: two UVs within the tolerance can round
+apart and two beyond it can round together. The GPU
+then draws an island id per texel, margins included, and each stamp
+reads the island under its centre and paints only that island and the
+texels outside every island.
 
 ### Slices
 
@@ -311,6 +326,9 @@ material need their seams merged is left for that slice.
    passes, the planning, the presets.
 2. Seams: the seam index from the surface arrays of the stored object,
    the duplicates, a refusal by name when the layer has no mesh to read.
+   Built in parts: the refusal (done 2026-09-27); strokes kept to the
+   island under their centre (done 2026-09-27); strokes carried across
+   each seam onto the island on the other side; tuning for heavy meshes.
 3. Custom brushes as Blender images.
 4. A UV or mesh edit on the seam object marks the layer out of date.
 

@@ -121,20 +121,27 @@ def material_input(context, tree, name: str) -> bpy.types.NodeSocket | None:
     return socket if socket is not None and not socket.is_linked else None
 
 
-def uses_tree(obj, tree) -> bool:
-    """True when one of *obj*'s materials shows *tree*.
+def tree_slots(obj, tree) -> list[bool]:
+    """Whether each of *obj*'s material slots shows *tree*, in slot order.
 
     A material shows the tree its ``paint_system.tree`` points at, and
     every tree nested in that one through group layers, because each
-    nested tree compiles into the outer tree's group.
+    nested tree compiles into the outer tree's group. An empty slot shows
+    nothing.
+
+    *obj* may be an evaluated object. Its slots then also list the
+    materials its modifiers add, as copies, so each material is compared
+    through the original it was copied from.
     """
     if obj is None or tree is None:
-        return False
-    for slot in obj.material_slots:
-        material = slot.material
-        if material is not None and tree_references(material.paint_system.tree, tree):
-            return True
-    return False
+        return []
+    return [slot.material is not None and tree_references(slot.material.original.paint_system.tree, tree)
+            for slot in obj.material_slots]
+
+
+def uses_tree(obj, tree) -> bool:
+    """True when one of *obj*'s materials shows *tree* (see `tree_slots`)."""
+    return any(tree_slots(obj, tree))
 
 
 def node_editor_tree(context) -> bpy.types.NodeTree | None:

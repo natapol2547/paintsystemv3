@@ -159,8 +159,8 @@ class PaintSystemFilterLayerNode(PaintSystemLayerNode, Node):
     # into the scene, and deleting the mesh would keep it in the file.
     surface_name: StringProperty(
         name="Object", search=_surface_search, update=mark_tree_dirty,
-        description="The mesh this layer reads UV maps from when it needs one. Filled in "
-                    "from the active mesh, then used whatever is selected")
+        description="The mesh this layer reads UV maps and UV seams from when it needs them. "
+                    "Filled in from the active mesh, then used whatever is selected")
     auto_refresh: BoolProperty(
         name="Auto Refresh", default=True, update=_auto_refresh_changed,
         description="Rebuild this layer shortly after the layers below it change")

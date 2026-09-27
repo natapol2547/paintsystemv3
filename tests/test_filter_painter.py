@@ -7,14 +7,19 @@ written out here: the luma, the Sobel gradient with its edges clamped and
 its y pointing up, the reduction to the strongest edge, and the gather
 that reads both at every stamp centre. Then stamps are drawn one or two
 at a time, which is where a turned quad or a blend order is easy to get
-backwards and still look like paint.
+backwards and still look like paint, and over an island map that a
+stamp must keep to.
 
 Last, whole layers are built on a plane whose UV map covers the image,
 so there are no seams to cross. They are held to what has to be true of
 any painting rather than to one: a flat picture paints to itself, a
 transparent one stays transparent, the same settings paint the same
-pixels twice, and the 4K build with the default settings stays inside
-the ticket's ten seconds.
+pixels twice, keeping strokes to the plane's one island changes nothing,
+and the 4K build with the default settings stays inside the ticket's ten
+seconds. Two quads apart in UV check that no stroke paints one quad's
+texels from the other, that a build whose mesh enters Edit Mode
+halfway paints what it would have painted anyway, and that the islands
+come from the UV map the layers below use.
 
 These need a GPU context, as `tests/test_filter_build.py` explains.
 """
@@ -24,23 +29,28 @@ import time
 import traceback
 from math import pi
 
+import bmesh
 import bpy
 import gpu
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (bake_plane, check, finish, import_from,  # noqa: E402
-                     register_addon, section, skip, use_tree)
+                     read_texel_map, register_addon, section, skip, use_tree)
 
 register_addon()
 gpu_core = import_from("gpu_passes.core")
 core = import_from("compiler.core")
 filters_core = import_from("filters.core")
 layer_build = import_from("filters.layer_build")
+layer_plan = import_from("filters.layer_plan")
 painter_build = import_from("filters.painter.build")
 plan = import_from("filters.painter.plan")
 drawing = import_from("filters.painter.drawing")
+seams = import_from("filters.painter.seams")
+texel_map = import_from("gpu_passes.texel_map")
 create_managed_image = import_from("compiler.bake").create_managed_image
+real_draw_islands = texel_map.draw_islands
 
 IMAGE = 'PaintSystemImageLayerNode'
 FILTER = 'PaintSystemFilterLayerNode'
@@ -106,19 +116,72 @@ def canvas(side):
     return texture, gpu.types.GPUFrameBuffer(color_slots=(texture,))
 
 
-def draw(framebuffer, side, masks, stamps, size, cell):
+def draw(framebuffer, side, masks, stamps, size, cell, islands=None):
+    """*stamps* drawn over *framebuffer*, keeping to *islands*, a ``(side, side)`` array.
+
+    Without *islands*, no texel is on an island, so a stamp paints
+    wherever it lands.
+    """
     image, origins = drawing.atlas(masks, cell, *drawing.atlas_layout(len(masks), cell, 16384)[:2])
     atlas = painter_build._upload(image)
-    painter_build._draw_stamps(framebuffer, (side, side), atlas,
+    island_map = upload(np.zeros((side, side)) if islands is None else islands, 'R32F')
+    painter_build._draw_stamps(framebuffer, (side, side), atlas, island_map,
                                drawing.quads(stamps, size, origins, cell))
     return gpu_core.read_color(framebuffer, side, side)
 
 
-def stamps_at(x, y, angle, colors):
+def stamps_at(x, y, angle, colors, owners=None):
     count = len(x)
     return plan.Stamps(x=np.asarray(x), y=np.asarray(y), brush=np.zeros(count, dtype=np.int64),
                        angle=np.asarray(angle, dtype=np.float64),
-                       color=np.asarray(colors, dtype=np.float32))
+                       color=np.asarray(colors, dtype=np.float32),
+                       owner=np.zeros(count, dtype=np.int32) if owners is None else np.asarray(owners))
+
+
+def build_pixels(tree, node):
+    return pixels(layer_build.build_layer(bpy.context, tree, node)).copy()
+
+
+def without_islands(target, uv, tri_corners, tri_island, progress, margin=texel_map.MARGIN):
+    """`texel_map.draw_islands` with every triangle left out, so no stamp is kept to an island."""
+    return real_draw_islands(target, uv, tri_corners, np.zeros_like(tri_island), progress, margin)
+
+
+def pair_mesh(name, tree, side):
+    """Two separate quads, three texels apart in UV at *side*, as a mesh that uses *tree*.
+
+    The left quad's texels end at column 460 and the right quad's start
+    at column 464.
+    """
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
+                      (2, 0, 0), (3, 0, 0), (3, 1, 0), (2, 1, 0)], [], [(0, 1, 2, 3), (4, 5, 6, 7)])
+    low, high, left, right = 0.05, 0.95, 461 / side, 464 / side
+    uvs = [(low, low), (left, low), (left, high), (low, high),
+           (right, low), (high, low), (high, high), (right, high)]
+    mesh.uv_layers.new(name="UVMap").data.foreach_set('uv', np.array(uvs, np.float32).ravel())
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    use_tree(obj, tree)
+    return obj
+
+
+def island_texels(obj, tree, side):
+    """The island map a build of *side* draws for *obj*, as a ``(side, side)`` array."""
+    snap = seams.snapshot(obj, "UVMap", tree, bpy.context.evaluated_depsgraph_get())
+    index = seams.index_of(snap, None)
+    while True:
+        try:
+            next(index)
+        except StopIteration as done:
+            index = done.value
+            break
+    target = gpu.types.GPUTexture((side, side), format='R32F')
+    for _unit in real_draw_islands(target, snap.uv, snap.tri_corners,
+                                   seams.triangle_islands(snap, index), None):
+        pass
+    framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
+    return gpu_core.read_color(framebuffer, side, side, channels=1)[..., 0]
 
 
 def pixels(image):
@@ -226,6 +289,25 @@ if available():
               "a later stamp goes over an earlier one, premultiplied "
               f"({np.round(got[16, 16], 3).tolist()})")
 
+        section("a stamp keeps to its island")
+        # Island 1 on the left, island 2 on the right, and no island in
+        # the rows above. The stamp covers part of all three.
+        islands = np.zeros((32, 32), dtype=np.float32)
+        islands[:20, :16] = 1.0
+        islands[:20, 16:] = 2.0
+        square = np.zeros((32, 32), dtype=bool)
+        square[8:24, 8:24] = True
+        for owner, paints, says in (
+                (1, (1.0, 0.0), "a stamp paints its own island and texels of none, not the island beside it"),
+                (2, (2.0, 0.0), "whichever island it is on"),
+                (0, (0.0,), "and one centred on no island paints only texels of none")):
+            target, framebuffer = canvas(32)
+            got = draw(framebuffer, 32, [solid],
+                       stamps_at([16], [16], [0.0], [(1.0, 1.0, 1.0, 1.0)], [owner]), 16, 16, islands)[..., 3]
+            want = square & np.isin(islands, paints)
+            check(worst(got[want], 1.0) < HALF_TOL and float(got[~want].max()) == 0.0,
+                  f"{says} ({int((got > 0.5).sum())} texels painted, {int(want.sum())} expected)")
+
         section("a Painterly layer")
         tree = bpy.data.node_groups.new("Painter", 'PaintSystemNodeTree')
         tree.initialize()
@@ -260,9 +342,9 @@ if available():
               and 0.0 <= fractions[0] and fractions[-1] <= 1.0,
               f"the progress only moves forward ({len(labels)} units)")
         names = {label for label, _fraction in labels}
-        check({"Painterly: planning the strokes", "Painterly: reading the picture",
-               "Painterly: painting, step 1 of 4", "Painterly: painting, step 4 of 4",
-               "Painterly: finishing"} <= names,
+        check({"Painterly: planning the strokes", "Painterly: reading the UV seams",
+               "Painterly: reading the picture", "Painterly: painting, step 1 of 4",
+               "Painterly: painting, step 4 of 4", "Painterly: finishing"} <= names,
               "and says which step of the painting it is on")
         check(worst(pixels(built), flat) <= BYTE_TOL,
               "a flat picture paints to itself: every stroke picks up the colour it lands on")
@@ -281,6 +363,13 @@ if available():
         moved = np.abs(first - detailed).max(axis=2) > BYTE_TOL
         check(float(moved.mean()) > 0.05,
               f"and they are painted: {moved.mean():.0%} of the texels moved off the picture")
+        texel_map.draw_islands = without_islands
+        try:
+            unkept = build_pixels(tree, node)
+        finally:
+            texel_map.draw_islands = real_draw_islands
+        check(bool(np.array_equal(unkept, first)),
+              "the plane is one island covering the image, so keeping strokes to it changes no texel")
 
         node.painter.seed = 7
         core.flush_now()
@@ -303,11 +392,11 @@ if available():
 
         section("a GPU out of memory")
         # Failing one format at a time reaches the painter's own textures:
-        # the stamp centres it gathers at (RGBA32F) and the brush atlas
-        # (R16F). Either failure has to come back as the Refused the
-        # operators report, not as a bare RuntimeError.
+        # the stamp centres it gathers at (RGBA32F), the brush atlas
+        # (R16F) and the island map (R32F). Each failure has to come back
+        # as the Refused the operators report, not as a bare RuntimeError.
         real_texture = gpu.types.GPUTexture
-        for failing in ('RGBA32F', 'R16F'):
+        for failing in ('RGBA32F', 'R16F', 'R32F'):
             def allocate(size, *args, failing=failing, **kwargs):
                 if kwargs.get('format') == failing:
                     raise RuntimeError("GPUTexture: texture creation failed")
@@ -334,6 +423,87 @@ if available():
         check(float(empty[..., 3].max()) == 0.0,
               "a transparent stack stays transparent: no stroke is placed where there is nothing")
 
+        section("strokes keep to their own UV island")
+        # Each island is painted a flat colour of its own, into its
+        # margin, as a baked texture is. With no smoothing each stroke
+        # takes the colour under its centre, which is its island's. So a
+        # texel of one island that shows another colour was painted from
+        # across the gap.
+        pair = pair_mesh("Painter Pair", tree, SIZE)
+        smoothing = node.painter.smoothing
+        node.surface_name = pair.name
+        node.painter.smoothing = 0.0
+        ids = island_texels(pair, tree, SIZE).astype(int)
+        colours = np.array([(0.5, 0.5, 0.5, 1.0), (0.9, 0.1, 0.1, 1.0), (0.1, 0.1, 0.9, 1.0)],
+                           dtype=np.float32)[ids]
+        source.pixels.foreach_set(colours.ravel())
+        source.update()
+        core.flush_now()
+        real = read_texel_map(texel_map.get_texel_map(pair, "UVMap", (SIZE, SIZE)))[..., 3] > 0.75
+        check(set(np.unique(ids[real]).tolist()) == {1, 2} and float(real.mean()) > 0.5,
+              f"the two quads are two islands ({float(real.mean()):.0%} of the texels)")
+
+        def foreign(painted):
+            return int((real & (np.abs(painted - colours).max(axis=2) > BYTE_TOL)).sum())
+
+        kept = build_pixels(tree, node)
+        past = int(((ids == 0) & (np.abs(kept - colours).max(axis=2) > BYTE_TOL)).sum())
+        check(foreign(kept) == 0 and past > 0,
+              f"no texel of either island takes the other's colour ({foreign(kept)} do), "
+              f"while strokes still reach past their island onto {past} texels of none")
+        texel_map.draw_islands = without_islands
+        try:
+            unkept = build_pixels(tree, node)
+        finally:
+            texel_map.draw_islands = real_draw_islands
+        check(foreign(unkept) > 0,
+              f"kept to no island, strokes paint {foreign(unkept)} texels across the gap")
+
+        section("a mesh that enters Edit Mode while its layer builds")
+        # The build copied the mesh when it started, so it paints what it
+        # copied, whatever happens to the mesh after that.
+        run = layer_build.steps(bpy.context, tree, node)
+        next(run)
+        bpy.context.view_layer.objects.active = pair
+        bpy.ops.object.mode_set(mode='EDIT')
+        try:
+            edited = bmesh.from_edit_mesh(pair.data)
+            uv_layer = edited.loops.layers.uv["UVMap"]
+            for face in edited.faces:
+                for loop in face.loops:
+                    loop[uv_layer].uv = loop[uv_layer].uv * 0.5
+            bmesh.update_edit_mesh(pair.data)
+            try:
+                while True:
+                    next(run)
+            except StopIteration as done:
+                during, message = pixels(done.value).copy(), ""
+            except filters_core.Refused as error:
+                during, message = None, str(error)
+        finally:
+            bpy.ops.object.mode_set(mode='OBJECT')
+        check(during is not None and bool(np.array_equal(during, kept)),
+              f"the build finishes with the pixels it would have painted anyway {message!r}")
+
+        section("the UV map the islands come from")
+        # The layer below names its map, and the mesh renders with another
+        # one, which folds the right quad onto the left.
+        layer.uv_map = "UVMap"
+        folded = pair.data.uv_layers.new(name="Folded")
+        folded.active_render = True
+        named = np.empty(len(pair.data.loops) * 2, np.float32)
+        pair.data.uv_layers["UVMap"].data.foreach_get('uv', named)
+        folded.data.foreach_set('uv', np.concatenate([named[:8], named[:8]]))
+        core.flush_now()
+        inputs = painter_build.read_inputs(node, layer_plan.resolve_input(bpy.context, tree, node))
+        check(bool(np.array_equal(inputs.snapshot.uv.ravel(), named)),
+              "the islands are those of the map the layers below use, not the one the mesh renders with")
+        pair.data.uv_layers.remove(folded)
+        layer.uv_map = ""
+        core.flush_now()
+        node.surface_name = plane.name
+        node.painter.smoothing = smoothing
+
         section("at 4K")
         source.pixels.foreach_set(picture(SIZE).ravel())
         source.update()
@@ -357,5 +527,6 @@ import_from("filters.composite").release()
 import_from("filters.blend_glsl").release()
 filters_core.release()
 painter_build.release()
+texel_map.release()
 
 finish("FILTER PAINTER TEST")

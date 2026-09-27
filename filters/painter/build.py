@@ -2,48 +2,58 @@
 """The painter's build: GPU passes around the numpy planning (PS-053).
 
 `build` is the Painterly kind's build hook. `filters.layer_build` runs it
-instead of a list of passes. The steps are:
+instead of a list of passes, with what `read_inputs` read when the build
+started. The steps are:
 
-1. Encode the stack below to sRGB. v2 painted stored byte values, and
+1. Find the UV islands of the mesh (`seams`), or take them from the
+   cache.
+2. Encode the stack below to sRGB. v2 painted stored byte values, and
    its look depends on that: the blur, the luma the gradient is taken
    on, and the edge of every "over" blend.
-2. Blur the colour the stamps pick up, with v2's kernel. A Sobel pass
+3. Blur the colour the stamps pick up, with v2's kernel. A Sobel pass
    over the blurred luma gives the gradient field. Its peak is found by
    a reduction, only when the edge threshold needs it.
-3. Read both at every stamp centre `plan.draws` picked, in one small
-   pass. This is the only readback before the result.
-4. `plan.stamps` decides which stamps land and how. Each step's stamps
+4. Draw the island of every texel (`texel_map.draw_islands`).
+5. Read the colour, the gradient and the island at every stamp centre
+   `plan.draws` picked, in one small pass each. This is the only
+   readback before the result.
+6. `plan.stamps` decides which stamps land and how. Each step's stamps
    are drawn as rotated quads (`drawing.quads`) into a premultiplied
-   copy of the picture, from one atlas of that step's brushes.
-5. Un-premultiply the canvas and decode it back to scene linear, because
+   copy of the picture, from one atlas of that step's brushes. A stamp
+   paints only its own island and texels of no island.
+7. Un-premultiply the canvas and decode it back to scene linear, because
    the layer build encodes whatever a kind returns.
 
-The full-size textures come from the pool. The small ones (positions,
-gathered values, the reduction) are made here and are freed when the
-generator ends. The atlases are kept after it: each brush keeps the ones
-its last build drew with, because a rebuild after a stroke below asks
-for exactly those again.
+The full-size textures come from the pool, except the island map, which
+has a format of its own. It and the small ones (positions, gathered
+values, the reduction) are made here and are freed when the generator
+ends. The atlases are kept after it: each brush keeps the ones its last
+build drew with, because a rebuild after a stroke below asks for exactly
+those again.
 """
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from math import ceil, sqrt
 
+import bpy
 import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
+from ...gpu_passes import texel_map
 from ...gpu_passes.core import offscreen_state, read_color
 from .. import registry
 from ..core import FilterSpec, new_texture, run_pass
-from . import brushes, drawing, plan
+from . import brushes, drawing, plan, seams
 
 log = logging.getLogger(__name__)
 
 # Largest side of one gather target. One chunk gathers up to
-# `GATHER_SIDE` squared stamps, which is two readbacks (colour and
-# gradient) of 4 MB each. The default settings at 4096 need only one
-# chunk, of a few thousand stamps.
+# `GATHER_SIDE` squared stamps, which is three readbacks (colour,
+# gradient and island) of 4 MB each. The default settings at 4096 need
+# only one chunk, of a few thousand stamps.
 GATHER_SIDE = 512
 # Stamps per draw call. Each draw is one unit of the build, and the
 # one-texel read after it keeps the driver's queue short, like the bands
@@ -151,6 +161,7 @@ void main()
 {
   v_coord = coord;
   v_color = color;
+  v_island = island;
   gl_Position = vec4(position / target_size * 2.0 - 1.0, 0.0, 1.0);
 }
 """
@@ -167,6 +178,13 @@ float ps_brush_at(ivec2 texel, ivec2 last)
    gutter. */
 void main()
 {
+  /* A stamp paints its own island and texels of no island. The island
+     next to it in the image sits somewhere else on the mesh, so a stroke
+     running into it would paint where it does not belong. */
+  float here = texelFetch(islands, ivec2(gl_FragCoord.xy), 0).r;
+  if (here != v_island && here != 0.0) {
+    discard;
+  }
   ivec2 last = textureSize(atlas, 0) - ivec2(1);
   vec2 at = v_coord - 0.5;
   ivec2 base = ivec2(floor(at));
@@ -190,20 +208,45 @@ _stamp_shader = None
 _atlases: dict[str, dict[tuple, tuple]] = {}
 
 
-def build(settings, texture, pool):
-    """Paint *texture* with *settings*, a `plan.Settings`, and return the result.
+@dataclass(frozen=True)
+class Inputs:
+    """What a build paints with, read when it starts."""
+
+    settings: plan.Settings
+    snapshot: seams.Snapshot
+
+
+def read_inputs(node, resolved) -> Inputs:
+    """The layer's settings and a copy of its mesh, for `build`.
+
+    *resolved* is the layer's `filters.layer_plan.InputPlan`.
+    `filters.layer_build.steps` calls this in the same tick as the
+    resolve that checked the mesh, and nothing after it reads the mesh.
+    So the build cannot fail on a mesh that enters Edit Mode or goes away
+    while it runs.
+    """
+    obj = resolved.surface
+    snapshot = seams.snapshot(obj, texel_map.resolve_uv_map(obj, resolved.uv_map), node.id_data,
+                              bpy.context.evaluated_depsgraph_get())
+    return Inputs(settings=plan.Settings.of(node), snapshot=snapshot)
+
+
+def build(inputs, texture, pool):
+    """Paint *texture* with *inputs*, from `read_inputs`, and return the result.
 
     This is a generator that yields ``(label, fraction)`` progress for
     `filters.layer_build`. *texture* and the returned texture are both
     straight scene linear, and both belong to *pool*. *texture* is given
     back to the pool once it has been read.
     """
+    settings, snapshot = inputs.settings, inputs.snapshot
     # The composite ran in the previous unit, so planning gets its own.
     yield "planning the strokes", 0.0
     width, height = texture.width, texture.height
     masks = brushes.masks(settings.brush)
     steps = plan.schedule(settings, width, height, brushes.areas(settings.brush))
     drawn = [plan.draws(settings, step, width, height, len(masks)) for step in steps]
+    index = yield from seams.index_of(snapshot, ("reading the UV seams", 0.005))
 
     yield "reading the picture", 0.01
     encoded = _run(pool, registry.ENCODE_SRGB, texture)
@@ -217,16 +260,25 @@ def build(settings, texture, pool):
     field = _run(pool, SOBEL, luma)
     peak = _peak(field) if settings.threshold > 0.0 else None
 
+    # Drawn after the Sobel pass has given the luma back, so the most
+    # video memory the analysis holds at once does not grow.
+    yield "reading the UV seams", 0.08
+    islands = new_texture((width, height), 'R32F')
+    yield from texel_map.draw_islands(islands, snapshot.uv, snapshot.tri_corners,
+                                      seams.triangle_islands(snapshot, index),
+                                      ("reading the UV seams", 0.09))
+
     x = np.concatenate([each.x for each in drawn])
     y = np.concatenate([each.y for each in drawn])
     chunk = min(GATHER_SIDE, width, height) ** 2
-    sampled, gradients = [], []
+    sampled, gradients, owners = [], [], []
     for start in range(0, len(x), chunk):
         yield "reading the picture", 0.1 + 0.1 * start / len(x)
-        got = _gather((colors, field), x[start:start + chunk], y[start:start + chunk])
+        got = _gather((colors, field, islands), x[start:start + chunk], y[start:start + chunk])
         sampled.append(got[0])
         gradients.append(got[1])
-    sampled, gradients = np.concatenate(sampled), np.concatenate(gradients)
+        owners.append(got[2][:, 0].astype(np.int32))
+    sampled, gradients, owners = np.concatenate(sampled), np.concatenate(gradients), np.concatenate(owners)
     pool.release(colors)
     pool.release(field)
 
@@ -238,7 +290,8 @@ def build(settings, texture, pool):
     for step, numbers in zip(steps, drawn):
         rows = slice(offset, offset + step.count)
         offset += step.count
-        stamps = plan.stamps(settings, step, numbers, sampled[rows], gradients[rows], peak)
+        stamps = plan.stamps(settings, step, numbers, sampled[rows], gradients[rows], peak,
+                             owners[rows])
         if len(stamps):
             columns, atlas_rows, cell = drawing.atlas_layout(
                 len(masks), min(step.size, largest), limit)
@@ -254,7 +307,7 @@ def build(settings, texture, pool):
                        0.2 + 0.75 * (done + start) / total)
                 geometry = drawing.quads(stamps.part(start, start + DRAW_CHUNK),
                                          step.size, origins, cell)
-                _draw_stamps(framebuffer, (width, height), atlas, geometry)
+                _draw_stamps(framebuffer, (width, height), atlas, islands, geometry)
         done += step.count
     # Replace rather than merge, so only the atlases of one build are kept.
     # A build abandoned before this line leaves the previous build's.
@@ -344,12 +397,15 @@ def _stamp_program():
         interface = gpu.types.GPUStageInterfaceInfo("ps_painter_stamp_iface")
         interface.smooth('VEC2', "v_coord")
         interface.smooth('VEC4', "v_color")
+        interface.flat('FLOAT', "v_island")
         info = gpu.types.GPUShaderCreateInfo()
         info.push_constant('VEC2', "target_size")
         info.sampler(0, 'FLOAT_2D', "atlas")
+        info.sampler(1, 'FLOAT_2D', "islands")
         info.vertex_in(0, 'VEC2', "position")
         info.vertex_in(1, 'VEC2', "coord")
         info.vertex_in(2, 'VEC4', "color")
+        info.vertex_in(3, 'FLOAT', "island")
         info.vertex_out(interface)
         info.fragment_out(0, 'VEC4', "out_color")
         info.vertex_source(_STAMP_VERTEX)
@@ -358,28 +414,30 @@ def _stamp_program():
     return _stamp_shader
 
 
-def _draw_stamps(framebuffer, size, atlas, geometry) -> None:
+def _draw_stamps(framebuffer, size, atlas, islands, geometry) -> None:
     """Draw one chunk of stamp quads over the canvas with premultiplied "over".
 
-    The GPU blends triangles in the order they are submitted, which is
-    the order they were planned in. So a later stamp covers an earlier
-    one, exactly as in v2's loop.
+    *islands* is the island map the stamps keep to, the size of the
+    canvas. The GPU blends triangles in the order they are submitted,
+    which is the order they were planned in. So a later stamp covers an
+    earlier one, exactly as in v2's loop.
     """
-    positions, coords, colors, indices = geometry
+    positions, coords, colors, owners, indices = geometry
     shader = _stamp_program()
     batch = batch_for_shader(shader, 'TRIS', {
-        "position": positions, "coord": coords, "color": colors,
+        "position": positions, "coord": coords, "color": colors, "island": owners,
     }, indices=indices)
     sync = gpu.types.Buffer('FLOAT', 4)
     with offscreen_state('ALPHA_PREMULT'), framebuffer.bind():
         shader.uniform_float("target_size", (float(size[0]), float(size[1])))
         shader.uniform_sampler("atlas", atlas)
+        shader.uniform_sampler("islands", islands)
         batch.draw(shader)
         framebuffer.read_color(0, 0, 1, 1, 4, 0, 'FLOAT', data=sync)
 
 
 def release() -> None:
-    """Free the stamp shader, the atlases and the cached brushes.
+    """Free the stamp shader, the atlases, the cached brushes and the kept islands.
 
     Called before the GPU context goes away.
     """
@@ -387,3 +445,4 @@ def release() -> None:
     _stamp_shader = None
     _atlases.clear()
     brushes.release()
+    seams.release()

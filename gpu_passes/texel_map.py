@@ -56,19 +56,29 @@ so without a ceiling a few image sizes would fill a card on their own."""
 
 _MAP_BYTES_PER_TEXEL = 16 + 8  # RGBA32F position, RGBA16F normal
 
-_VERTEX_SOURCE = """
+ISLAND_CHUNK = 262144
+"""Triangles per draw of `draw_islands`. Each draw is one unit of a build."""
+
+# Shared by the texel map and the island map, so both grow a margin the
+# same way.
+_GROWN_SOURCE = """
+/* `corner` moved `grow` texels away from its triangle's `centre`. The
+   direction is measured in texels so a non-square image still gets an
+   even margin. */
+vec2 ps_grown(vec2 corner, vec2 centre, vec2 texel, float grow)
+{
+  vec2 away = (corner - centre) / texel;
+  float distance = length(away);
+  return distance > 1e-8 ? corner + (away / distance) * texel * grow : corner;
+}
+"""
+
+_VERTEX_SOURCE = _GROWN_SOURCE + """
 void main()
 {
   v_position = position;
   v_normal = normal;
-  /* Grow the triangle away from its own centre by `margin` texels. The
-     direction is measured in texels so a non-square image still gets an
-     even margin. */
-  vec2 away = (uv - uv_centroid) / texel_size;
-  float distance = length(away);
-  vec2 grown = distance > 1e-8
-      ? uv + (away / distance) * texel_size * margin
-      : uv;
+  vec2 grown = ps_grown(uv, uv_centroid, texel_size, margin);
   gl_Position = vec4((grown - tile_offset) * 2.0 - 1.0, 0.0, 1.0);
 }
 """
@@ -81,7 +91,23 @@ void main()
 }
 """
 
+_ISLAND_VERTEX = _GROWN_SOURCE + """
+void main()
+{
+  v_island = island;
+  gl_Position = vec4(ps_grown(uv, uv_centroid, texel_size, margin) * 2.0 - 1.0, 0.0, 1.0);
+}
+"""
+
+_ISLAND_FRAGMENT = """
+void main()
+{
+  out_island = vec4(v_island, 0.0, 0.0, 1.0);
+}
+"""
+
 _shader = None
+_island_shader = None
 
 
 def _texel_shader() -> gpu.types.GPUShader:
@@ -109,6 +135,77 @@ def _texel_shader() -> gpu.types.GPUShader:
     info.fragment_source(_FRAGMENT_SOURCE)
     _shader = gpu.shader.create_from_info(info)
     return _shader
+
+
+def _island_program() -> gpu.types.GPUShader:
+    """The UV-space rasteriser of `draw_islands`, built once per session."""
+    global _island_shader
+    if _island_shader is not None:
+        return _island_shader
+    interface = gpu.types.GPUStageInterfaceInfo("ps_island_map_interface")
+    interface.flat('FLOAT', "v_island")
+
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant('VEC2', "texel_size")
+    info.push_constant('FLOAT', "margin")
+    info.vertex_in(0, 'VEC2', "uv")
+    info.vertex_in(1, 'VEC2', "uv_centroid")
+    info.vertex_in(2, 'FLOAT', "island")
+    info.vertex_out(interface)
+    info.fragment_out(0, 'VEC4', "out_island")
+    info.vertex_source(_ISLAND_VERTEX)
+    info.fragment_source(_ISLAND_FRAGMENT)
+    _island_shader = gpu.shader.create_from_info(info)
+    return _island_shader
+
+
+def draw_islands(target: gpu.types.GPUTexture, uv: np.ndarray, tri_corners: np.ndarray,
+                 tri_island: np.ndarray, progress, margin: int = MARGIN):
+    """Draw the UV island of every texel into *target*, an ``R32F`` texture.
+
+    *uv* holds every corner's UV as ``(corners, 2)``, *tri_corners* the
+    corners of each triangle as ``(triangles, 3)``, and *tri_island* each
+    triangle's island, from 1. A texel reads its island's number, or 0
+    where no island is drawn. A triangle of island 0 is left out. The
+    image covers UV 0 to 1, like a layer image without tiles.
+
+    Every island gets a margin of *margin* texels, grown as the texel
+    map's is, and the real triangles are drawn over every margin. Where
+    two islands overlap, the one with the smaller number wins, because
+    each draw goes from the largest number to the smallest and nothing is
+    blended. Numbers are exact up to 2**24 in ``R32F``.
+
+    This is a generator. It yields *progress* between draws of
+    `ISLAND_CHUNK` triangles.
+    """
+    shader = _island_program()
+    framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
+    with core.offscreen_state(), framebuffer.bind():
+        framebuffer.clear(color=(0.0, 0.0, 0.0, 0.0))
+    drawn = np.flatnonzero(tri_island > 0)
+    # Stable, so triangles of one island keep the mesh's order.
+    drawn = drawn[np.argsort(-tri_island[drawn], kind='stable')]
+    chunks = [(grow, start) for grow in (float(margin), 0.0)
+              for start in range(0, len(drawn), ISLAND_CHUNK)]
+    # One component, as many as `R32F` holds (see `core.read_color`).
+    sync = gpu.types.Buffer('FLOAT', 1)
+    for index, (grow, start) in enumerate(chunks):
+        if index:
+            yield progress
+        triangles = drawn[start:start + ISLAND_CHUNK]
+        corners = uv[tri_corners[triangles]]
+        batch = batch_for_shader(shader, 'TRIS', {
+            "uv": corners.reshape(-1, 2),
+            "uv_centroid": np.repeat(corners.mean(axis=1), 3, axis=0),
+            "island": np.repeat(tri_island[triangles].astype(np.float32), 3),
+        })
+        with core.offscreen_state(), framebuffer.bind():
+            shader.uniform_float("texel_size", (1.0 / target.width, 1.0 / target.height))
+            shader.uniform_float("margin", grow)
+            batch.draw(shader)
+            # One texel read keeps the driver's queue short, as after
+            # each band of a filter pass.
+            framebuffer.read_color(0, 0, 1, 1, 1, 0, 'FLOAT', data=sync)
 
 
 def resolve_uv_map(obj: bpy.types.Object, uv_map: str) -> str | None:
@@ -402,8 +499,9 @@ def release() -> None:
     already gone by then, and freeing a texture without it crashes
     Blender with a segfault.
     """
-    global _shader
+    global _shader, _island_shader
     if bpy.app.timers.is_registered(_forget_pending_arrays):
         bpy.app.timers.unregister(_forget_pending_arrays)
     invalidate()
     _shader = None
+    _island_shader = None

@@ -208,6 +208,96 @@ def test_margin_extends_islands():
           f"{float(np.abs(filled).max()):.3f}, the cube reaches 1.0)")
 
 
+def inside(corners, size, depth):
+    """Whether each texel centre is at least *depth* texels inside each triangle.
+
+    *corners* is ``(triangles, 3, 2)`` in UV. Returns ``(triangles, size,
+    size)``. A negative *depth* reaches that far outside instead.
+    """
+    u, v = texel_centre_uvs(size)
+    points = np.stack([u, v], axis=-1) * size
+    corners = corners.astype(np.float64) * size
+    first, second, third = corners[:, 0], corners[:, 1], corners[:, 2]
+    area = ((second - first)[:, 0] * (third - first)[:, 1]
+            - (second - first)[:, 1] * (third - first)[:, 0])
+    result = np.ones((len(corners), size, size), dtype=bool)
+    for start, end in ((first, second), (second, third), (third, first)):
+        edge = end - start
+        length = np.hypot(edge[:, 0], edge[:, 1])[:, None, None]
+        across = (edge[:, 0, None, None] * (points[None, ..., 1] - start[:, 1, None, None])
+                  - edge[:, 1, None, None] * (points[None, ..., 0] - start[:, 0, None, None]))
+        result &= across * np.sign(area)[:, None, None] / length >= depth
+    return result
+
+
+def island_texels(uv, tri_corners, tri_island, size):
+    """The island map of these triangles as a ``(size, size)`` array, and the units drawing it took."""
+    target = gpu.types.GPUTexture((size, size), format='R32F')
+    units = sum(1 for _unit in texel_map.draw_islands(target, uv, tri_corners, tri_island, None))
+    framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
+    return core.read_color(framebuffer, size, size, channels=1)[..., 0], units
+
+
+def test_island_map():
+    section("the island map numbers the island under every texel")
+    if not available():
+        return
+    obj = cube()
+    arrays = texel_map.local_triangles(obj, texel_map.resolve_uv_map(obj, ""),
+                                       bpy.context.evaluated_depsgraph_get(), normals=False)
+    uv = arrays["uv"]
+    faces = len(uv) // 6
+    # Each face of the cube is an island, numbered against the mesh's
+    # order, and the last face is left out. Face 0 is drawn again as
+    # island 1 and face 1 again as island 9, so each lies on a copy of
+    # itself: the smaller number has to win whichever comes first. Face 1
+    # is also there a third time in island 0, which must not clear it.
+    tri_island = np.repeat(np.arange(faces, 0, -1), 2)
+    tri_island[-2:] = 0
+    tri_corners = np.arange(len(uv), dtype=np.int32).reshape(-1, 3)
+    tri_corners = np.concatenate([tri_corners, tri_corners[0:2], tri_corners[2:4], tri_corners[2:4]])
+    tri_island = np.concatenate([tri_island, [1, 1, 9, 9, 0, 0]])
+    got, units = island_texels(uv, tri_corners, tri_island, SIZE)
+
+    corners = uv[tri_corners]
+    drawn = tri_island > 0
+    deep = inside(corners, SIZE, 0.01)
+    under = np.where(deep & drawn[:, None, None], tri_island[:, None, None], np.inf).min(axis=0)
+    real = np.isfinite(under)
+    check(real.any() and bool(np.array_equal(got[real], under[real])),
+          "a texel inside a triangle holds the smallest island drawn there, "
+          f"not a margin drawn over it ({int((got[real] != under[real]).sum())} of {int(real.sum())} differ)")
+    check(set(np.unique(got[real]).tolist()) == {1.0, 2.0, 3.0, 4.0, 5.0},
+          f"so the stacked copies read 1 and 5 ({sorted(set(np.unique(got[real]).tolist()))})")
+
+    reach = inside(corners, SIZE, -(texel_map.MARGIN + 1.0)) & drawn[:, None, None]
+    near = reach.any(axis=0)
+    outside = ~inside(corners, SIZE, -1.0)[drawn].any(axis=0)
+    margin = outside & (got > 0)
+    check(margin.any() and not (got[~near] > 0).any(),
+          f"the margin covers {int(margin.sum())} texels outside every triangle, "
+          f"and none further than {texel_map.MARGIN} texels from one")
+    nearby = np.where(reach, tri_island[:, None, None], 0)
+    check(all(got[y, x] in nearby[:, y, x] for y, x in zip(*np.nonzero(margin))),
+          "and each margin texel holds the island of a triangle it is next to")
+    stacked = inside(corners[2:4], SIZE, 0.01).any(axis=0)
+    check(stacked.any() and bool((got[stacked] > 0).all()),
+          "a triangle of island 0 is not drawn, not even over another island")
+
+    chunk = texel_map.ISLAND_CHUNK
+    texel_map.ISLAND_CHUNK = 3
+    try:
+        chunked, chunked_units = island_texels(uv, tri_corners, tri_island, SIZE)
+    finally:
+        texel_map.ISLAND_CHUNK = chunk
+    count = int(drawn.sum())
+    check(units == 1 and chunked_units == 2 * -(-count // 3) - 1 and bool(np.array_equal(chunked, got)),
+          f"drawn in chunks, one unit each, the map is the same ({units} and {chunked_units} units)")
+
+    empty, units = island_texels(uv, tri_corners, np.zeros_like(tri_island), SIZE)
+    check(units == 0 and float(np.abs(empty).max()) == 0.0, "with no island at all, every texel reads 0")
+
+
 def test_transform_is_applied():
     section("the map follows the object transform")
     if not available():
@@ -454,6 +544,7 @@ def gpu_renderer():
 for test in (test_availability,
              test_texels_match_the_surface,
              test_margin_extends_islands,
+             test_island_map,
              test_transform_is_applied,
              test_cache,
              test_cache_follows_surface_content,
